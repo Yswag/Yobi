@@ -25,7 +25,6 @@ import {
   seekTo,
   selectSubtitle,
   setPlaybackRate,
-  setTemporaryBoost2x,
   skipActiveSponsorSegment,
   startPiP,
   toggleDanmaku,
@@ -107,8 +106,6 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
   const lastTapAtRef = useRef<number | null>(null)
   const hideTimerRef = useRef<number | null>(null)
   const hintTimerRef = useRef<number | null>(null)
-  const scrubTargetRef = useRef<number | null>(null)
-  const draggingHorizontallyRef = useRef<boolean>(false)
   const statusRef = useRef<string>(store.status)
   statusRef.current = store.status
 
@@ -120,7 +117,8 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
   }, [])
 
   const duration: number = progress.duration || 0
-  const edgeInset: number = store.isFullscreen ? 24 : 12
+  const sideSafeInset: number = Math.max(Device.safeAreaInsets?.leading ?? 0, Device.safeAreaInsets?.trailing ?? 0)
+  const edgeInset: number = store.isFullscreen ? Math.max(24, sideSafeInset) : 12
   const trackWidth: number = Math.max(1, props.width - edgeInset * 2)
 
   function clearAutoHide(): void {
@@ -167,7 +165,7 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
         void seekBy(10)
         showTapHint("right")
       } else {
-        void togglePlayPause()
+        toggleControls()
       }
       return
     }
@@ -179,40 +177,11 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
     }, DOUBLE_TAP_MS)
   }
 
-  function scrubSpan(): number {
-    return Math.min(180, Math.max(60, duration * 0.5))
-  }
-
-  function handleDragChanged(d: DragGestureDetails): void {
-    const dx: number = d.translation.width
-    const dy: number = d.translation.height
-    if (Math.abs(dx) <= Math.abs(dy) * 1.3) return
-    if (!draggingHorizontallyRef.current) {
-      if (Math.abs(dx) < 16) return
-      draggingHorizontallyRef.current = true
-    }
-    const span: number = scrubSpan()
-    const upperBound: number = duration > 0 ? duration : span
-    const moved: number = (dx / Math.max(1, props.width)) * span
-    const target: number = Math.min(upperBound, Math.max(0, progress.position + moved))
-    scrubTargetRef.current = target
-    setScrubPreviewSec(target)
-    setIsScrubbing(true)
-  }
-
   function handleDragEnded(d: DragGestureDetails): void {
-    if (!draggingHorizontallyRef.current) {
-      const dy: number = d.translation.height
-      if (!store.isFullscreen && dy > MINIMIZE_DRAG_DISTANCE && dy > Math.abs(d.translation.width)) {
-        minimizeToMiniPlayer()
-      }
-      return
+    const dy: number = d.translation.height
+    if (!store.isFullscreen && dy > MINIMIZE_DRAG_DISTANCE && dy > Math.abs(d.translation.width)) {
+      minimizeToMiniPlayer()
     }
-    const target: number | null = scrubTargetRef.current
-    draggingHorizontallyRef.current = false
-    scrubTargetRef.current = null
-    setIsScrubbing(false)
-    if (target !== null) void seekTo(target)
   }
 
   function handleBack(): void {
@@ -330,7 +299,7 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
                 </Text>
               </Button>
               <Button action={() => void startPiP()} buttonStyle="plain">
-                <Image systemName="pip.enter" font={17} foregroundStyle={palette.onMedia} frame={{ width: 30, height: 30 }} />
+                <Image systemName="pip.enter" font={17} foregroundStyle={palette.onMedia} frame={{ width: 30, height: 30 }} contentShape="rect" />
               </Button>
             </HStack>
           </HStack>
@@ -352,42 +321,20 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
           <Spacer />
 
           <VStack spacing={2} padding={{ horizontal: edgeInset, bottom: store.isFullscreen ? 16 : 6 }}>
-            <HStack spacing={6} frame={{ width: trackWidth }}>
-              <Text font={type.caption} fontWeight="semibold" monospacedDigit foregroundStyle={palette.onMedia}>
-                {formatDuration(isScrubbing ? scrubPreviewSec : progress.position)}
-              </Text>
-              {progress.activeChapter ? (
-                <Text font={type.caption} foregroundStyle={palette.onMediaDim} lineLimit={1}>
-                  {`· ${progress.activeChapter.title}`}
-                </Text>
-              ) : null}
-              <Spacer />
-              <Text font={type.caption} fontWeight="semibold" monospacedDigit foregroundStyle={palette.onMediaDim}>
-                {formatDuration(progress.duration)}
-              </Text>
-            </HStack>
-            <ZStack alignment="leading" frame={{ width: trackWidth, height: 22 }}>
-              <Slider
-                min={0}
-                max={sliderMax}
-                step={0.5}
-                value={sliderValue}
-                tint={palette.brand}
-                onChanged={handleSliderChanged}
-                onEditingChanged={(editing: boolean) => {
-                  if (!editing) setIsScrubbing(false)
-                }}
-              />
-              <ZStack
-                alignment="leading"
-                frame={{ width: trackWidth, height: 3 }}
-                offset={{ x: 0, y: 14 }}
-                allowsHitTesting={false}
-              >
-                {renderSponsorBlocks(trackWidth, 3)}
-              </ZStack>
-            </ZStack>
             <HStack spacing={16} frame={{ width: trackWidth }}>
+              <HStack spacing={4}>
+                <Text font={type.caption} fontWeight="semibold" monospacedDigit foregroundStyle={palette.onMedia}>
+                  {formatDuration(isScrubbing ? scrubPreviewSec : progress.position)}
+                </Text>
+                <Text font={type.caption} fontWeight="semibold" monospacedDigit foregroundStyle={palette.onMediaDim}>
+                  {`/ ${formatDuration(progress.duration)}`}
+                </Text>
+                {progress.activeChapter ? (
+                  <Text font={type.caption} foregroundStyle={palette.onMediaDim} lineLimit={1}>
+                    {`· ${progress.activeChapter.title}`}
+                  </Text>
+                ) : null}
+              </HStack>
               <Spacer />
               {hasSubtitles ? (
                 <Menu
@@ -440,9 +387,31 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
                   font={16}
                   foregroundStyle={palette.onMedia}
                   frame={{ width: 28, height: 28 }}
+                  contentShape="rect"
                 />
               </Button>
             </HStack>
+            <ZStack alignment="leading" frame={{ width: trackWidth, height: 22, alignment: "leading" }}>
+              <Slider
+                min={0}
+                max={sliderMax}
+                step={0.5}
+                value={sliderValue}
+                tint={palette.brand}
+                onChanged={handleSliderChanged}
+                onEditingChanged={(editing: boolean) => {
+                  if (!editing) setIsScrubbing(false)
+                }}
+              />
+              <ZStack
+                alignment="leading"
+                frame={{ width: trackWidth, height: 3, alignment: "leading" }}
+                offset={{ x: 0, y: 14 }}
+                allowsHitTesting={false}
+              >
+                {renderSponsorBlocks(trackWidth, 3)}
+              </ZStack>
+            </ZStack>
           </VStack>
         </VStack>
       </ZStack>
@@ -470,8 +439,7 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
 
         {tapHint !== null ? (
           <ZStack
-            frame={{ width: props.width, height: props.height }}
-            alignment={tapHint === "left" ? "leading" : "trailing"}
+            frame={{ width: props.width, height: props.height, alignment: tapHint === "left" ? "leading" : "trailing" }}
           >
             <HStack spacing={0} padding={{ horizontal: 24 }}>
               <OverlayCapsule>
@@ -537,8 +505,7 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
 
         {store.skippedToast ? (
           <ZStack
-            frame={{ width: props.width, height: props.height }}
-            alignment="bottomLeading"
+            frame={{ width: props.width, height: props.height, alignment: "bottomLeading" }}
           >
             <HStack spacing={0} padding={{ leading: edgeInset, bottom: 56 }}>
               <OverlayCapsule>
@@ -551,8 +518,7 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
 
         {prompt !== null ? (
           <ZStack
-            frame={{ width: props.width, height: props.height }}
-            alignment="bottomTrailing"
+            frame={{ width: props.width, height: props.height, alignment: "bottomTrailing" }}
           >
             <HStack spacing={6} padding={{ trailing: edgeInset, bottom: 56 }}>
               <Button action={() => skipActiveSponsorSegment()} buttonStyle="plain">
@@ -591,10 +557,10 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
     if (controlsVisible || store.isFullscreen || duration <= 0) return null
     const ratio: number = Math.max(0, Math.min(1, progress.position / duration))
     return (
-      <ZStack frame={{ width: props.width, height: props.height }} alignment="bottom">
+      <ZStack frame={{ width: props.width, height: props.height, alignment: "bottom" }} allowsHitTesting={false}>
         <ZStack
           alignment="leading"
-          frame={{ width: props.width, height: 2.5 }}
+          frame={{ width: props.width, height: 2.5, alignment: "leading" }}
           background="rgba(255,255,255,0.2)"
         >
           <Rectangle fill={palette.brand} frame={{ width: props.width * ratio, height: 2.5 }} />
@@ -610,15 +576,9 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
         fill="rgba(0,0,0,0.001)"
         frame={{ width: props.width, height: props.height }}
         onTapGesture={{ count: 1, coordinateSpace: "local", perform: handleTap }}
-        onLongPressGesture={{
-          minDuration: 400,
-          perform: () => {},
-          onPressingChanged: (pressing: boolean) => setTemporaryBoost2x(pressing),
-        }}
         onDragGesture={{
           minDistance: 16,
           coordinateSpace: "local",
-          onChanged: handleDragChanged,
           onEnded: handleDragEnded,
         }}
       />

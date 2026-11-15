@@ -148,7 +148,10 @@ export function PlayerHost(props: {
   return (
     <ZStack
       alignment="topLeading"
-      frame={{ width: screenWidth, height: screenHeight, alignment: "topLeading" }}
+      // In landscape the root is shorter than the screen, so a fixed-size frame would be centered and leave a gap.
+      frame={fullscreen
+        ? { maxWidth: "infinity", maxHeight: "infinity", alignment: "topLeading" }
+        : { width: screenWidth, height: screenHeight, alignment: "topLeading" }}
       ignoresSafeArea
     >
       <ZStack
