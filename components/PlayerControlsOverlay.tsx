@@ -54,6 +54,7 @@ const DOUBLE_TAP_MS: number = 230
 const TAP_HINT_MS: number = 650
 const PLAYBACK_RATES: number[] = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2]
 const EDGE_SCRIM_HEIGHT: number = 96
+const MINIMIZE_DRAG_DISTANCE: number = 70
 
 function GlassCircle(props: { icon: string; size: number; iconSize: number; onTap: () => void }): VirtualNode {
   return (
@@ -199,8 +200,14 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
     setIsScrubbing(true)
   }
 
-  function handleDragEnded(): void {
-    if (!draggingHorizontallyRef.current) return
+  function handleDragEnded(d: DragGestureDetails): void {
+    if (!draggingHorizontallyRef.current) {
+      const dy: number = d.translation.height
+      if (!store.isFullscreen && dy > MINIMIZE_DRAG_DISTANCE && dy > Math.abs(d.translation.width)) {
+        minimizeToMiniPlayer()
+      }
+      return
+    }
     const target: number | null = scrubTargetRef.current
     draggingHorizontallyRef.current = false
     scrubTargetRef.current = null
@@ -612,7 +619,7 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
           minDistance: 16,
           coordinateSpace: "local",
           onChanged: handleDragChanged,
-          onEnded: () => handleDragEnded(),
+          onEnded: handleDragEnded,
         }}
       />
       {controlsVisible ? renderControlsLayer() : null}

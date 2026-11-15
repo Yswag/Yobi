@@ -7,17 +7,13 @@ import {
   Rectangle,
   ScrollView,
   Text,
-  VideoPlaybackView,
   VStack,
-  ZStack,
   useEffect,
   useState,
 } from "scripting"
 import type { VirtualNode } from "scripting"
 import type { Provider, UnifiedVideoItem, VideoChapter, VideoPagePart } from "../types"
 import { CommentsSheet } from "../components/CommentsSheet"
-import { DanmakuSheet, QualitySheet } from "../components/PlaybackSheets"
-import { PlayerControlsOverlay } from "../components/PlayerControlsOverlay"
 import { addToPlaylistFlow, VideoCard } from "../components/VideoCard"
 import {
   downloadVideo,
@@ -35,7 +31,6 @@ import {
   providerFullName,
 } from "../utils/format"
 import {
-  getPlayerController,
   openVideo,
   reloadComments,
   seekTo,
@@ -46,9 +41,11 @@ import {
 import { Avatar, EmptyState, SectionHeader } from "../ui/primitives"
 import { palette, providerColor, radius, space, type } from "../ui/theme"
 
+// Everything below the video; PlayerHost owns the video surface and the sheets it opens.
 export interface WatchViewProps {
   onOpenChannel?: (provider: Provider, authorId: string, authorName: string, avatarUrl?: string) => void
-  zoom?: { sourceID: string; namespace: NamespaceID }
+  onOpenQualitySheet: () => void
+  onOpenDanmakuSheet: () => void
 }
 
 type InfoTab = "related" | "comments"
@@ -113,8 +110,6 @@ export function WatchView(props: WatchViewProps): VirtualNode {
   const progress = usePlayerProgress()
 
   const [showDescription, setShowDescription] = useState(false)
-  const [showQualitySheet, setShowQualitySheet] = useState(false)
-  const [showDanmakuSheet, setShowDanmakuSheet] = useState(false)
   const [tab, setTab] = useState<InfoTab>("related")
   const [watchLaterOn, setWatchLaterOn] = useState(false)
   const [subscribed, setSubscribed] = useState(false)
@@ -134,22 +129,11 @@ export function WatchView(props: WatchViewProps): VirtualNode {
     setSubscribed(isSubscribed(`${item.provider}:${channelRawId}`))
     setOfflineSaved(findDownload(item.id, store.activeCid) !== null)
     setShowDescription(false)
-    setShowQualitySheet(false)
-    setShowDanmakuSheet(false)
   }, [item?.id, store.activeCid])
 
-  // Keyed on the item, not the presentation mode: the page stays drawn while its pop animation runs.
   if (!item) {
     return <EmptyView />
   }
-
-  const screenWidth: number = Device.screen.width
-  const screenHeight: number = Device.screen.height
-  const portraitWidth: number = Math.min(screenWidth, screenHeight)
-  const playerWidth: number = store.isFullscreen ? Math.max(screenWidth, screenHeight) : portraitWidth
-  const playerHeight: number = store.isFullscreen
-    ? Math.min(screenWidth, screenHeight)
-    : Math.round(portraitWidth * 9 / 16)
 
   const related: UnifiedVideoItem[] = detail?.relatedVideos ?? []
   const tags: string[] = detail?.tags ?? []
@@ -338,13 +322,13 @@ export function WatchView(props: WatchViewProps): VirtualNode {
           active={offlineSaved}
           onTap={handleDownload}
         />
-        <ActionChip icon="slider.horizontal.3" label={store.selectedQualityLabel || "畫質"} onTap={() => setShowQualitySheet(true)} />
+        <ActionChip icon="slider.horizontal.3" label={store.selectedQualityLabel || "畫質"} onTap={props.onOpenQualitySheet} />
         {item.provider === "bili" ? (
           <ActionChip
             icon={store.danmakuEnabled ? "text.bubble.fill" : "text.bubble"}
             label="彈幕"
             active={store.danmakuEnabled}
-            onTap={() => setShowDanmakuSheet(true)}
+            onTap={props.onOpenDanmakuSheet}
           />
         ) : null}
         <ActionChip icon="square.and.arrow.up" label="分享" onTap={handleShare} />
@@ -423,20 +407,10 @@ export function WatchView(props: WatchViewProps): VirtualNode {
     )
 
   return (
-    <VStack
-      spacing={0}
-      frame={{ maxWidth: "infinity", maxHeight: "infinity", alignment: "top" }}
-      background={<Rectangle fill={store.isFullscreen ? "black" : "systemBackground"} ignoresSafeArea />}
-      navigationTransition={props.zoom ? { type: "zoom", sourceID: props.zoom.sourceID, namespace: props.zoom.namespace } : "automatic"}
-      toolbarVisibility={{
-        visibility: "hidden",
-        bars: store.isFullscreen ? ["tabBar", "navigationBar", "statusBar"] : ["tabBar", "navigationBar"],
-      }}
-      sheet={{
-        isPresented: showQualitySheet,
-        onChanged: setShowQualitySheet,
-        content: <QualitySheet onDone={() => setShowQualitySheet(false)} />,
-      }}
+    <ScrollView
+      axes="vertical"
+      scrollIndicator="hidden"
+      frame={{ maxWidth: "infinity", maxHeight: "infinity" }}
       toast={{
         message: toast ?? "",
         position: "bottom",
@@ -446,52 +420,25 @@ export function WatchView(props: WatchViewProps): VirtualNode {
         },
       }}
     >
-      <ZStack
-        frame={{ width: playerWidth, height: playerHeight }}
-        background="black"
-        sheet={{
-          isPresented: showDanmakuSheet,
-          onChanged: setShowDanmakuSheet,
-          content: <DanmakuSheet onDone={() => setShowDanmakuSheet(false)} />,
-        }}
-      >
-        <VideoPlaybackView
-          controller={getPlayerController()}
-          gestures={false}
-          videoGravity="resizeAspect"
-          frame={{ width: playerWidth, height: playerHeight }}
-        />
-        <PlayerControlsOverlay
-          width={playerWidth}
-          height={playerHeight}
-          onOpenQualitySheet={() => setShowQualitySheet(true)}
-          onOpenDanmakuSheet={() => setShowDanmakuSheet(true)}
-        />
-      </ZStack>
-
-      {store.isFullscreen ? null : (
-        <ScrollView axes="vertical" scrollIndicator="hidden" frame={{ maxWidth: "infinity", maxHeight: "infinity" }}>
-          <VStack spacing={20} frame={{ maxWidth: "infinity" }} padding={{ bottom: 24 }}>
-            {infoBlock}
-            {actionBar}
-            {pagesSection}
-            {chaptersSection}
-            <VStack spacing={8} frame={{ maxWidth: "infinity" }}>
-              <Picker
-                title="內容"
-                value={tab}
-                onChanged={(next: string) => setTab(next as InfoTab)}
-                pickerStyle="segmented"
-                padding={{ horizontal: space.page }}
-              >
-                <Text tag="related">{related.length > 0 ? `相關影片 ${related.length}` : "相關影片"}</Text>
-                <Text tag="comments">{store.comments.length > 0 ? `留言 ${store.comments.length}` : "留言"}</Text>
-              </Picker>
-              {tabContent}
-            </VStack>
-          </VStack>
-        </ScrollView>
-      )}
-    </VStack>
+      <VStack spacing={20} frame={{ maxWidth: "infinity" }} padding={{ bottom: 24 }}>
+        {infoBlock}
+        {actionBar}
+        {pagesSection}
+        {chaptersSection}
+        <VStack spacing={8} frame={{ maxWidth: "infinity" }}>
+          <Picker
+            title="內容"
+            value={tab}
+            onChanged={(next: string) => setTab(next as InfoTab)}
+            pickerStyle="segmented"
+            padding={{ horizontal: space.page }}
+          >
+            <Text tag="related">{related.length > 0 ? `相關影片 ${related.length}` : "相關影片"}</Text>
+            <Text tag="comments">{store.comments.length > 0 ? `留言 ${store.comments.length}` : "留言"}</Text>
+          </Picker>
+          {tabContent}
+        </VStack>
+      </VStack>
+    </ScrollView>
   )
 }

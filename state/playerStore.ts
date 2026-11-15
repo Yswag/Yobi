@@ -84,6 +84,8 @@ let dismissedSegmentUuid: string = ""
 let toastTimer: number | null = null
 let savedRateBeforeBoost: number = 1
 let savedOrientations: typeof Device.supportedInterfaceOrientations | null = null
+let reopenSource: (() => Promise<void>) | null = null
+let reopenAttempts: number = 0
 
 const storeListeners: Set<() => void> = new Set()
 const progressListeners: Set<() => void> = new Set()
@@ -276,6 +278,15 @@ export function getPlayerController(): VideoPlaybackController {
     storeState.status = "error"
     storeState.errorText = err.message || "播放器發生錯誤"
     emitStore()
+    // 管線中途失效（例如 Input/output error）時自動重開一次。
+    if (reopenSource && reopenAttempts < 1 && storeState.currentItem) {
+      reopenAttempts++
+      void reopenAfterFailure()
+    }
+  })
+
+  ctrl.on("pictureInPictureRestoreRequested", () => {
+    expandFromMiniPlayer()
   })
 
   ctrl.on("pictureInPicture", (pip: VideoPictureInPictureState) => {
@@ -379,6 +390,46 @@ async function loadBiliDanmakuForCid(cid: number): Promise<void> {
   } catch {
     // Danmaku failure should not interrupt video playback
   }
+}
+
+/** 記住目前來源的重開方式，管線失效時可以救回來。 */
+function rememberSource(reopen: () => Promise<void>): void {
+  reopenSource = reopen
+  reopenAttempts = 0
+}
+
+/** 停掉再重開同一個來源，並跳回原本的秒數。 */
+async function reopenAfterFailure(): Promise<void> {
+  const reopen: (() => Promise<void>) | null = reopenSource
+  if (!reopen) return
+  const ctrl: VideoPlaybackController = getPlayerController()
+  const position: number = progressState.position
+  const wasPlaying: boolean = storeState.status !== "paused"
+  const cid: number | undefined = storeState.activeCid
+  const isBili: boolean = storeState.currentItem?.provider === "bili"
+  try {
+    await ctrl.stop()
+  } catch {
+    // 已經失敗了，stop 失敗不影響重開
+  }
+  try {
+    await reopen()
+    if (position > 1) {
+      try {
+        await ctrl.seek(position)
+      } catch {
+        // seek 不了就從頭播
+      }
+    }
+    if (wasPlaying) await ctrl.play()
+    storeState.status = wasPlaying ? "playing" : "paused"
+    storeState.errorText = null
+  } catch (error) {
+    storeState.status = "error"
+    storeState.errorText = error instanceof Error ? error.message : "播放器發生錯誤"
+  }
+  emitStore()
+  if (isBili && cid) void loadBiliDanmakuForCid(cid)
 }
 
 export async function openVideo(item: UnifiedVideoItem, options: OpenVideoOptions = {}): Promise<void> {
@@ -544,12 +595,24 @@ export async function openVideo(item: UnifiedVideoItem, options: OpenVideoOption
       await ctrl.open(cachedSource)
       if (requestId !== openRequestSeq) return
       await cachedSource.dispose()
+      if (offline) {
+        const cached: OfflineDownload = offline
+        rememberSource(async () => {
+          const again = await resolveOfflineSource(cached)
+          if (!again) return
+          await ctrl.open(again)
+          await again.dispose()
+        })
+      }
     } else if (manifest) {
-      await ctrl.open(manifest.primaryUrl, {
-        backend: manifest.backend,
-        headers: manifest.headers,
-      })
+      const url: string = manifest.primaryUrl
+      const backend = manifest.backend
+      const headers = manifest.headers
+      await ctrl.open(url, { backend, headers })
       if (requestId !== openRequestSeq) return
+      rememberSource(async () => {
+        await ctrl.open(url, { backend, headers })
+      })
     }
 
     if (options.startSeconds !== undefined && options.startSeconds > 0) {
@@ -675,9 +738,12 @@ export async function selectQuality(qualityId: string): Promise<void> {
           headers: track?.headers ?? manifest.headers,
         }
 
-    await ctrl.open(resolved.url, {
-      backend: resolved.backend,
-      headers: resolved.headers ?? manifest.headers,
+    const url: string = resolved.url
+    const backend = resolved.backend
+    const headers = resolved.headers ?? manifest.headers
+    await ctrl.open(url, { backend, headers })
+    rememberSource(async () => {
+      await ctrl.open(url, { backend, headers })
     })
     if (currentPos > 0.5) {
       try {
@@ -720,9 +786,12 @@ export async function selectYoutubeStreamMode(mode: YoutubeStreamPreference): Pr
     storeState.selectedQualityLabel = picked.label
     emitStore()
 
-    await ctrl.open(manifest.primaryUrl, {
-      backend: manifest.backend,
-      headers: manifest.headers,
+    const url: string = manifest.primaryUrl
+    const backend = manifest.backend
+    const headers = manifest.headers
+    await ctrl.open(url, { backend, headers })
+    rememberSource(async () => {
+      await ctrl.open(url, { backend, headers })
     })
     if (currentPos > 0.5) {
       try {
@@ -803,9 +872,12 @@ export async function selectPage(pagePart: VideoPagePart): Promise<void> {
     }
     emitStore()
 
-    await ctrl.open(manifest.primaryUrl, {
-      backend: manifest.backend,
-      headers: manifest.headers,
+    const url: string = manifest.primaryUrl
+    const backend = manifest.backend
+    const headers = manifest.headers
+    await ctrl.open(url, { backend, headers })
+    rememberSource(async () => {
+      await ctrl.open(url, { backend, headers })
     })
     void loadBiliDanmakuForCid(pagePart.cid)
     await ctrl.play()
