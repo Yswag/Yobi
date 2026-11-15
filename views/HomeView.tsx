@@ -33,7 +33,6 @@ import {
   Thumbnail,
 } from "../ui/primitives"
 import { radius, space, type } from "../ui/theme"
-import { markZoomSource } from "../ui/zoom"
 
 export interface HomeViewProps {
   onOpenChannel?: (provider: Provider, authorId: string, authorName: string, avatarUrl?: string) => void
@@ -49,7 +48,6 @@ function ContinueCard(props: { entry: WatchHistoryEntry; onSelect: () => void })
   const total: number = entry.duration || entry.item.duration || 0
   const ratio: number = total > 0 ? entry.position / total : 0
   const remaining: number = Math.max(0, total - entry.position)
-  const zoomID: string = `continue:${entry.item.id}-${entry.cid ?? entry.page ?? 0}`
 
   return (
     <VStack
@@ -57,14 +55,10 @@ function ContinueCard(props: { entry: WatchHistoryEntry; onSelect: () => void })
       spacing={8}
       frame={{ width: CONTINUE_CARD_WIDTH }}
       contentShape="rect"
-      onTapGesture={() => {
-        markZoomSource(zoomID)
-        props.onSelect()
-      }}
+      onTapGesture={props.onSelect}
     >
       <Thumbnail
         url={entry.item.thumbnailUrl}
-        zoomID={zoomID}
         width={CONTINUE_CARD_WIDTH}
         cornerRadius={radius.md}
         provider={entry.item.provider}

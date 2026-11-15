@@ -1,9 +1,8 @@
-import { Group, NamespaceReader, NavigationDestination, NavigationStack } from "scripting"
+import { Group, NavigationDestination, NavigationStack } from "scripting"
 import type { VirtualNode } from "scripting"
 import type { Provider } from "../types"
 import { ChannelView } from "../views/ChannelView"
 import { SettingsView } from "../views/SettingsView"
-import { ZoomContext } from "../ui/zoom"
 
 export type OpenChannel = (provider: Provider, authorId: string, authorName: string, avatarUrl?: string) => void
 
@@ -55,32 +54,23 @@ export function TabStack(props: {
 
   return (
     <NavigationStack path={props.path}>
-      <NamespaceReader>
-        {(namespace: NamespaceID) => (
-          // Each page is hosted separately, so the stack's own safe area never reaches it; pad every page root.
-          <Group
-            toolbarVisibility={props.showsNavigationBar ? "automatic" : "hidden"}
-            safeAreaPadding={bottomPadding}
-            navigationDestination={
-              <NavigationDestination>
-                {(route: string) => (
-                  // Pushed pages render outside the content subtree, so they need their own provider.
-                  <ZoomContext.Provider value={{ namespace }}>
-                    {/* Settings is a native Form and uses the system navigation bar; other pages draw their own header. */}
-                    <Group toolbarVisibility={route === SETTINGS_ROUTE ? "automatic" : "hidden"} safeAreaPadding={bottomPadding}>
-                      {renderRoute(route)}
-                    </Group>
-                  </ZoomContext.Provider>
-                )}
-              </NavigationDestination>
-            }
-          >
-            <ZoomContext.Provider value={{ namespace }}>
-              {props.children}
-            </ZoomContext.Provider>
-          </Group>
-        )}
-      </NamespaceReader>
+      {/* Each page is hosted separately, so the stack's own safe area never reaches it; pad every page root. */}
+      <Group
+        toolbarVisibility={props.showsNavigationBar ? "automatic" : "hidden"}
+        safeAreaPadding={bottomPadding}
+        navigationDestination={
+          <NavigationDestination>
+            {(route: string) => (
+              // Settings is a native Form and uses the system navigation bar; other pages draw their own header.
+              <Group toolbarVisibility={route === SETTINGS_ROUTE ? "automatic" : "hidden"} safeAreaPadding={bottomPadding}>
+                {renderRoute(route)}
+              </Group>
+            )}
+          </NavigationDestination>
+        }
+      >
+        {props.children}
+      </Group>
     </NavigationStack>
   )
 }

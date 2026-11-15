@@ -18,7 +18,6 @@ import { LibraryView } from "./views/LibraryView"
 import { SearchView } from "./views/SearchView"
 import { SubscriptionsView } from "./views/SubscriptionsView"
 import { palette } from "./ui/theme"
-import { ZoomContext } from "./ui/zoom"
 
 const TAB = { home: 0, subscriptions: 1, library: 2, downloads: 3, search: 4 }
 
@@ -69,39 +68,37 @@ function YobiRootView(): VirtualNode {
   )
 
   return (
-    <ZoomContext.Provider value={{ namespace: null }}>
-      <ZStack alignment="topLeading" statusBarHidden={store.isFullscreen}>
-        <TabView
-          selection={selection}
-          tint={palette.brand}
-          // The mini player is placed against the full-size tab bar.
-          tabBarMinimizeBehavior="never"
-          tabViewSearchActivation="searchTabSelection"
-        >
-          <Tab title="首頁" systemImage="house.fill" value={TAB.home}>
-            {stack(TAB.home, <HomeView onOpenChannel={handleOpenChannel} onOpenSettings={openSettings} />)}
-          </Tab>
-          <Tab title="訂閱" systemImage="play.square.stack.fill" value={TAB.subscriptions}>
-            {stack(TAB.subscriptions, (
-              <SubscriptionsView
-                onOpenChannel={handleOpenChannel}
-                onOpenSearch={() => selection.setValue(TAB.search)}
-              />
-            ))}
-          </Tab>
-          <Tab title="媒體庫" systemImage="books.vertical.fill" value={TAB.library}>
-            {stack(TAB.library, <LibraryView onOpenChannel={handleOpenChannel} onOpenSettings={openSettings} />)}
-          </Tab>
-          <Tab title="下載" systemImage="arrow.down.circle.fill" value={TAB.downloads}>
-            {stack(TAB.downloads, <DownloadsView onOpenSettings={openSettings} />)}
-          </Tab>
-          <Tab title="搜尋" systemImage="magnifyingglass" value={TAB.search} role="search">
-            {stack(TAB.search, <SearchView onOpenChannel={handleOpenChannel} />)}
-          </Tab>
-        </TabView>
-        <PlayerHost onOpenChannel={handleOpenChannel} />
-      </ZStack>
-    </ZoomContext.Provider>
+    <ZStack alignment="topLeading" statusBarHidden={store.isFullscreen}>
+      <TabView
+        selection={selection}
+        tint={palette.brand}
+        // The mini player is placed against the full-size tab bar.
+        tabBarMinimizeBehavior="never"
+        tabViewSearchActivation="searchTabSelection"
+      >
+        <Tab title="首頁" systemImage="house.fill" value={TAB.home}>
+          {stack(TAB.home, <HomeView onOpenChannel={handleOpenChannel} onOpenSettings={openSettings} />)}
+        </Tab>
+        <Tab title="訂閱" systemImage="play.square.stack.fill" value={TAB.subscriptions}>
+          {stack(TAB.subscriptions, (
+            <SubscriptionsView
+              onOpenChannel={handleOpenChannel}
+              onOpenSearch={() => selection.setValue(TAB.search)}
+            />
+          ))}
+        </Tab>
+        <Tab title="媒體庫" systemImage="books.vertical.fill" value={TAB.library}>
+          {stack(TAB.library, <LibraryView onOpenChannel={handleOpenChannel} onOpenSettings={openSettings} />)}
+        </Tab>
+        <Tab title="下載" systemImage="arrow.down.circle.fill" value={TAB.downloads}>
+          {stack(TAB.downloads, <DownloadsView onOpenSettings={openSettings} />)}
+        </Tab>
+        <Tab title="搜尋" systemImage="magnifyingglass" value={TAB.search} role="search">
+          {stack(TAB.search, <SearchView onOpenChannel={handleOpenChannel} />)}
+        </Tab>
+      </TabView>
+      <PlayerHost onOpenChannel={handleOpenChannel} />
+    </ZStack>
   )
 }
 

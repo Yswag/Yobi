@@ -356,7 +356,6 @@ export function LibraryView(props: LibraryViewProps): VirtualNode {
                 layout="row"
                 progressSeconds={entry.position}
                 meta={historyMeta(entry)}
-                zoomKey={`history:${entryKey(entry)}`}
                 onSelect={() => openEntry(entry, filteredHistory.map((item: WatchHistoryEntry) => item.item))}
                 onOpenChannel={props.onOpenChannel}
               />

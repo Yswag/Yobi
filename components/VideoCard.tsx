@@ -10,7 +10,6 @@ import {
 import { formatCount, getVideoShareUrl } from "../utils/format"
 import { Avatar, Skeleton, Thumbnail } from "../ui/primitives"
 import { pageContentWidth, radius, space, thumbHeight, type } from "../ui/theme"
-import { markZoomSource } from "../ui/zoom"
 
 export interface CardAction {
   label: string
@@ -25,7 +24,6 @@ export interface VideoCardProps {
   progressSeconds?: number
   meta?: string
   actions?: CardAction[]
-  zoomKey?: string
   onSelect: (item: UnifiedVideoItem) => void
   onOpenChannel?: (provider: Provider, authorId: string, authorName: string, avatarUrl?: string) => void
 }
@@ -112,12 +110,7 @@ function metaText(item: UnifiedVideoItem): string {
   return item.publishedText ? `${base} · ${item.publishedText}` : base
 }
 
-function zoomIDOf(props: VideoCardProps): string {
-  return props.zoomKey ?? `card:${props.item.id}`
-}
-
 function selectCard(props: VideoCardProps): void {
-  markZoomSource(zoomIDOf(props))
   props.onSelect(props.item)
 }
 
@@ -135,7 +128,6 @@ function RowCard(props: VideoCardProps): VirtualNode {
     >
       <Thumbnail
         url={item.thumbnailUrl}
-        zoomID={zoomIDOf(props)}
         width={ROW_THUMB_WIDTH}
         cornerRadius={radius.sm}
         provider={item.provider}
@@ -177,7 +169,6 @@ function GridCard(props: VideoCardProps): VirtualNode {
     <VStack spacing={12} padding={{ horizontal: space.page }} frame={{ maxWidth: "infinity" }}>
       <Thumbnail
         url={item.thumbnailUrl}
-        zoomID={zoomIDOf(props)}
         cornerRadius={radius.lg}
         provider={item.provider}
         duration={item.duration}

@@ -8,7 +8,6 @@ import {
   TextField,
   VStack,
   ZStack,
-  useContext,
   useEffect,
   useState,
 } from "scripting"
@@ -16,8 +15,6 @@ import type { Color, VirtualNode } from "scripting"
 import type { Provider } from "../types"
 import { formatDuration, providerBadgeLabel } from "../utils/format"
 import { palette, providerColor, radius, space, thumbHeight, type } from "./theme"
-import { ZoomContext } from "./zoom"
-import type { ZoomScope } from "./zoom"
 
 export function GlassIconButton(props: {
   icon: string
@@ -267,10 +264,8 @@ export function Thumbnail(props: {
   durationText?: string
   isLive?: boolean
   progress?: number
-  zoomID?: string
   onTap?: () => void
 }): VirtualNode {
-  const zoom: ZoomScope = useContext(ZoomContext)
   const corner: number = props.cornerRadius ?? radius.md
   const progress: number = props.progress ?? 0
   const tagText: string | null = props.isLive
@@ -326,7 +321,6 @@ export function Thumbnail(props: {
       }
       clipShape={{ type: "rect", cornerRadius: corner, style: "continuous" }}
       contentShape={{ type: "rect", cornerRadius: corner }}
-      matchedTransitionSource={zoom.namespace && props.zoomID ? { id: props.zoomID, namespace: zoom.namespace } : undefined}
       onTapGesture={props.onTap}
     />
   )
