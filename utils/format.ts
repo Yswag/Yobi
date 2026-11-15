@@ -1,0 +1,80 @@
+import type { Color } from "scripting"
+import type { Provider, SponsorCategory, UnifiedVideoItem } from "../types"
+
+export function formatDuration(seconds?: number | null): string {
+  if (seconds === undefined || seconds === null || !Number.isFinite(seconds) || seconds <= 0) {
+    return "00:00"
+  }
+  const total: number = Math.max(0, Math.floor(seconds))
+  const hours: number = Math.floor(total / 3600)
+  const minutes: number = Math.floor((total % 3600) / 60)
+  const secs: number = total % 60
+  const mm: string = String(minutes).padStart(2, "0")
+  const ss: string = String(secs).padStart(2, "0")
+  if (hours > 0) {
+    return `${hours}:${mm}:${ss}`
+  }
+  return `${mm}:${ss}`
+}
+
+export function formatCount(count?: number | null): string {
+  if (count === undefined || count === null || !Number.isFinite(count) || count < 0) {
+    return "0"
+  }
+  if (count >= 100_000_000) {
+    return `${(count / 100_000_000).toFixed(1).replace(/\.0$/, "")}億`
+  }
+  if (count >= 10_000) {
+    return `${(count / 10_000).toFixed(1).replace(/\.0$/, "")}萬`
+  }
+  return Math.floor(count).toLocaleString("en-US")
+}
+
+export function providerBadgeLabel(provider: Provider): string {
+  return provider === "bili" ? "BILI" : "YT"
+}
+
+export function providerFullName(provider: Provider): string {
+  return provider === "bili" ? "BiliBili" : "YouTube"
+}
+
+export function providerAccentColor(provider: Provider): Color {
+  return provider === "bili" ? "rgba(251,114,153,1)" : "rgba(255,46,77,1)"
+}
+
+export function providerSoftBgColor(provider: Provider): Color {
+  return provider === "bili" ? "rgba(251,114,153,0.16)" : "rgba(255,46,77,0.16)"
+}
+
+export const SPONSOR_CATEGORY_LABELS: Record<SponsorCategory, string> = {
+  sponsor: "業配廣告",
+  selfpromo: "自我宣傳",
+  interaction: "互動提醒",
+  intro: "片頭動畫",
+  outro: "片尾畫面",
+  preview: "預告回顧",
+  music_offtopic: "非音樂片段",
+  poi_highlight: "精彩時刻",
+}
+
+export const SPONSOR_CATEGORY_COLORS: Record<SponsorCategory, Color> = {
+  sponsor: "rgba(0,212,0,0.85)",
+  selfpromo: "rgba(255,255,0,0.85)",
+  interaction: "rgba(204,0,255,0.85)",
+  intro: "rgba(0,255,255,0.85)",
+  outro: "rgba(2,2,237,0.85)",
+  preview: "rgba(0,143,214,0.85)",
+  music_offtopic: "rgba(255,153,0,0.85)",
+  poi_highlight: "rgba(255,22,132,0.85)",
+}
+
+export function getVideoShareUrl(item: Pick<UnifiedVideoItem, "provider" | "rawId" | "cid">): string {
+  if (item.provider === "bili") {
+    const raw: string = item.rawId
+    if (/^av\d+$/i.test(raw)) {
+      return `https://www.bilibili.com/video/${raw}`
+    }
+    return `https://www.bilibili.com/video/${raw}`
+  }
+  return `https://www.youtube.com/watch?v=${encodeURIComponent(item.rawId)}`
+}

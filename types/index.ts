@@ -206,3 +206,35 @@ export interface ProviderAuthState {
   cookies: Record<string, string>
   updatedAt: number
 }
+
+export type OfflineCacheMode = "hls" | "dash" | "http"
+
+/** 離線下載項目：記錄足以重建 `VideoPlaybackCache` 查詢的來源資訊。 */
+export interface OfflineDownload {
+  id: string
+  item: UnifiedVideoItem
+  cid?: number
+  page?: number
+  qualityId: string
+  qualityLabel: string
+  delivery: StreamManifest["delivery"]
+  cacheMode: OfflineCacheMode
+  /** 下載時使用的來源網址（`prepare*` 與 `resolve*` 必須一致） */
+  url: string
+  headers?: Record<string, string>
+  maximumBitRate?: number
+  bytes: number
+  duration: number
+  downloadedAt: number
+}
+
+export interface DownloadTaskState {
+  id: string
+  title: string
+  qualityLabel: string
+  progress: number
+  downloadedSegments: number
+  totalSegments: number
+  startedAt: number
+  error: string | null
+}

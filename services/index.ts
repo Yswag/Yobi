@@ -40,6 +40,7 @@ export * from "./storage"
 export * from "./auth"
 export * from "./sponsorblock"
 export * from "./localProxy"
+export * from "./downloads"
 
 export type FeedFilter = "all" | Provider
 
