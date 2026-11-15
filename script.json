@@ -1,0 +1,46 @@
+{
+  "permissions" : null,
+  "intentInputTypes" : [
+
+  ],
+  "entry" : "index.tsx",
+  "version" : "1.0.0",
+  "localizedNames" : {
+    "ja" : "",
+    "fr" : "",
+    "es" : "",
+    "pt" : "",
+    "de" : "",
+    "ru" : "",
+    "zh" : "",
+    "it" : "",
+    "en" : ""
+  },
+  "color" : "rgba(124, 76, 179,1)",
+  "runInApp" : false,
+  "author" : {
+    "email" : null,
+    "homepage" : null,
+    "name" : "ykusu"
+  },
+  "localizedDescriptions" : {
+    "ja" : "",
+    "fr" : "",
+    "es" : "",
+    "pt" : "",
+    "de" : "",
+    "ru" : "",
+    "zh" : "",
+    "it" : "",
+    "en" : ""
+  },
+  "icon" : "square.2.layers.3d.fill",
+  "name" : "Yobi",
+  "contributors" : [
+
+  ],
+  "description" : null,
+  "remoteResource" : null,
+  "iconImage" : null,
+  "remoteDefinitionId" : null
+}
