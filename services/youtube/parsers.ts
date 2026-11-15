@@ -262,20 +262,20 @@ function fromVideoRenderer(renderer: JsonObject): UnifiedVideoItem | null {
   )
 }
 
-function collectStrings(node: unknown, out: string[], depth: number = 0): void {
-  if (!node || depth > 6) return
+function collectStrings(node: unknown, out: string[], depth: number = 0, maxDepth: number = 6): void {
+  if (!node || depth > maxDepth) return
   if (typeof node === "string") {
     if (node.length > 0) out.push(node)
     return
   }
   if (Array.isArray(node)) {
-    for (const entry of node) collectStrings(entry, out, depth + 1)
+    for (const entry of node) collectStrings(entry, out, depth + 1, maxDepth)
     return
   }
   const object: JsonObject | null = asObject(node)
   if (!object) return
   for (const key of Object.keys(object)) {
-    collectStrings(object[key], out, depth + 1)
+    collectStrings(object[key], out, depth + 1, maxDepth)
   }
 }
 
@@ -289,31 +289,40 @@ function fromLockupViewModel(renderer: JsonObject): UnifiedVideoItem | null {
   const title: string = readText(metadata?.["title"])
   const rows: unknown[] = asArray(asObject(asObject(metadata?.["metadata"])?.["contentMetadataViewModel"])?.["metadataRows"])
 
-  const rowTexts: string[] = []
+  // Each row joins several facts ("8.5K views · 2 weeks ago"), so classify part by part.
+  const parts: string[] = []
   for (const row of rows) {
-    const parts: unknown[] = asArray(asObject(row)?.["metadataParts"])
-    const text: string = parts.map((part: unknown): string => readText(asObject(part)?.["text"])).join(" · ")
-    if (text) rowTexts.push(text)
+    for (const part of asArray(asObject(row)?.["metadataParts"])) {
+      const text: string = readText(asObject(part)?.["text"]).trim()
+      if (text) parts.push(text)
+    }
   }
 
-  const allTexts: string[] = []
-  collectStrings(renderer["contentImage"], allTexts, 0)
-  const badgeTexts: string[] = allTexts.filter((text: string): boolean => /^\d+:\d{2}(?::\d{2})?$/.test(text.trim()))
-  const duration: number = parseDurationText(badgeTexts[0] ?? "")
+  // Duration badges sit ~8 levels deep inside thumbnail overlays.
+  const imageTexts: string[] = []
+  collectStrings(renderer["contentImage"], imageTexts, 0, 14)
+  const durationText: string = imageTexts.find((text: string): boolean => /^\d+:\d{2}(?::\d{2})?$/.test(text.trim())) ?? ""
+  const duration: number = parseDurationText(durationText)
+  const liveBadge: boolean = imageTexts.some((text: string): boolean => /^(live|直播(中)?)$/i.test(text.trim()))
 
   let viewCount: number | undefined
   let publishedText: string = ""
   let authorName: string = ""
-  for (const text of rowTexts) {
-    if (viewCount === undefined && /view|觀看|观看|次/i.test(text) && /\d/.test(text)) {
-      viewCount = parseViewCountText(text)
+  let watching: boolean = false
+  for (const text of parts) {
+    if (/watching|正在觀看|正在观看|人觀看中/i.test(text)) {
+      watching = true
+      continue
     }
-    if (!publishedText && /(ago|前)/i.test(text)) {
-      publishedText = text
+    if (/view|觀看|观看|次/i.test(text) && /\d/.test(text)) {
+      if (viewCount === undefined) viewCount = parseViewCountText(text)
+      continue
     }
-    if (!authorName && !/view|觀看|观看|ago|前/i.test(text) && text !== title) {
-      authorName = text.split(" · ")[0]
+    if (/(ago|前)/i.test(text)) {
+      if (!publishedText) publishedText = text
+      continue
     }
+    if (!authorName && text !== title) authorName = text
   }
 
   return baseItem(
@@ -327,7 +336,7 @@ function fromLockupViewModel(renderer: JsonObject): UnifiedVideoItem | null {
     authorName,
     "",
     publishedText,
-    /live|直播/i.test(rowTexts.join(" ")) || duration === 0,
+    liveBadge || watching,
   )
 }
 
