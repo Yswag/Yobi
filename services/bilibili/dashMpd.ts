@@ -1,5 +1,5 @@
 import { Path } from "scripting"
-import { registerVirtualManifest } from "../localProxy"
+import { registerBiliFileSource, registerVirtualManifest } from "../localProxy"
 
 /**
  * Minimal shape of the `dash` object returned by
@@ -63,6 +63,16 @@ function durationToIso(seconds: number): string {
   return `PT${total}S`
 }
 
+type BaseUrlResolver = (media: BiliDashMedia, mimeType: string, index: number) => string
+
+/** bilibili 不給 Initialization range，慣例是 0 到 indexRange 起點前一個位元組。 */
+function implicitInitRange(indexRange: string | undefined): string | undefined {
+  if (!indexRange) return undefined
+  const start: number = Number(indexRange.split("-")[0])
+  if (!Number.isFinite(start) || start <= 0) return undefined
+  return `0-${start - 1}`
+}
+
 function mediaUrl(media: BiliDashMedia): string {
   const direct = media.baseUrl || media.base_url
   if (direct) return direct
@@ -106,8 +116,13 @@ function mimeTypeOf(media: BiliDashMedia, fallback: string): string {
   return media.mimeType || media.mime_type || fallback
 }
 
-function representationXml(media: BiliDashMedia, mimeType: string, index: number): string {
-  const url = mediaUrl(media)
+function representationXml(
+  media: BiliDashMedia,
+  mimeType: string,
+  index: number,
+  urlFor: BaseUrlResolver,
+): string {
+  const url = urlFor(media, mimeType, index)
   const attributes: string[] = [
     `id="${escapeXml(`${media.id}-${index}`)}"`,
     `bandwidth="${Math.max(1, Math.round(Number(media.bandwidth) || 1))}"`,
@@ -127,7 +142,7 @@ function representationXml(media: BiliDashMedia, mimeType: string, index: number
   if (url) lines.push(`        <BaseURL>${escapeXml(url)}</BaseURL>`)
 
   const indexRange = indexRangeOf(media)
-  const initRange = initRangeOf(media)
+  const initRange = initRangeOf(media) ?? implicitInitRange(indexRange)
   if (indexRange || initRange) {
     if (indexRange) {
       lines.push(`        <SegmentBase indexRange="${escapeXml(indexRange)}">`)
@@ -148,6 +163,7 @@ function adaptationSetXml(
   mimeType: string,
   medias: BiliDashMedia[],
   contentType: "video" | "audio",
+  urlFor: BaseUrlResolver,
 ): string {
   const attributes = [
     `mimeType="${escapeXml(mimeType)}"`,
@@ -159,7 +175,7 @@ function adaptationSetXml(
   }
   const lines: string[] = [`    <AdaptationSet ${attributes.join(" ")}>`]
   medias.forEach((media, index) => {
-    lines.push(representationXml(media, mimeType, index))
+    lines.push(representationXml(media, mimeType, index, urlFor))
   })
   lines.push(`    </AdaptationSet>`)
   return lines.join("\n")
@@ -187,7 +203,11 @@ function collectAudios(dash: BiliDashPayload): BiliDashMedia[] {
  * manifest. When `selectedVideoId` (a Bilibili `qn`) is given, only that
  * quality is included — otherwise every available quality is emitted.
  */
-export function buildBiliDashMpdXml(dash: BiliDashPayload, selectedVideoId?: number): string {
+export function buildBiliDashMpdXml(
+  dash: BiliDashPayload,
+  selectedVideoId?: number,
+  urlFor: BaseUrlResolver = mediaUrl,
+): string {
   const allVideos = (dash.video ?? []).filter(media => !!mediaUrl(media))
   const videos =
     selectedVideoId === undefined
@@ -205,10 +225,10 @@ export function buildBiliDashMpdXml(dash: BiliDashPayload, selectedVideoId?: num
   ]
 
   if (videos.length) {
-    lines.push(adaptationSetXml("video/mp4", videos, "video"))
+    lines.push(adaptationSetXml("video/mp4", videos, "video", urlFor))
   }
   if (audios.length) {
-    lines.push(adaptationSetXml("audio/mp4", audios, "audio"))
+    lines.push(adaptationSetXml("audio/mp4", audios, "audio", urlFor))
   }
 
   lines.push(`  </Period>`)
@@ -216,10 +236,29 @@ export function buildBiliDashMpdXml(dash: BiliDashPayload, selectedVideoId?: num
   return lines.join("\n")
 }
 
+/** 舊的 MPD 沒人讀了就刪，避免 tmp 一直累積。 */
+function pruneDashFiles(keep: string): void {
+  try {
+    const entries: string[] = FileManager.readDirectorySync(FileManager.temporaryDirectory)
+    for (const name of entries) {
+      if (!name.startsWith("yobi_bili_") || !name.endsWith(".mpd")) continue
+      const path: string = Path.join(FileManager.temporaryDirectory, name)
+      if (path === keep) continue
+      try {
+        FileManager.removeSync(path)
+      } catch {
+        // 刪不掉就不用管
+      }
+    }
+  } catch {
+    // 列目錄失敗就跳過清理
+  }
+}
+
 /**
- * Serves the manifest via in-memory `localProxy` (`http://127.0.0.1:<port>/manifest/.../stream.mpd`)
- * first so no filesystem permission is required; falls back to `FileManager.temporaryDirectory`
- * if the local HTTP server cannot be started.
+ * bilibili 的片段需要 `Referer`，但播放器對本機 manifest 的片段請求不會帶 header，
+ * 因此 BaseURL 一律指向本機位元組代理；MPD 則交給 localProxy 供檔（回應必須帶
+ * `Content-Length`，DASH 解析器才讀得懂）。
  */
 export function writeBiliDashMpdFile(
   bvid: string,
@@ -227,21 +266,30 @@ export function writeBiliDashMpdFile(
   dash: BiliDashPayload,
   selectedVideoId?: number,
 ): string {
-  const qn = selectedVideoId ?? 0
-  const safeBvid = (bvid || "unknown").replace(/[^A-Za-z0-9_-]/g, "")
-  const xml = buildBiliDashMpdXml(dash, selectedVideoId)
+  const qn: number = selectedVideoId ?? 0
+  const safeBvid: string = (bvid || "unknown").replace(/[^A-Za-z0-9_-]/g, "")
+
+  const urlFor: BaseUrlResolver = (media: BiliDashMedia, mimeType: string, index: number): string => {
+    const direct: string = mediaUrl(media)
+    if (!direct) return ""
+    try {
+      const id: string = `bili_${safeBvid}_${cid}_${qn}_${media.id}_${index}`
+      return registerBiliFileSource(id, direct, mimeType)
+    } catch {
+      return direct
+    }
+  }
+
+  const xml: string = buildBiliDashMpdXml(dash, selectedVideoId, urlFor)
   try {
-    return registerVirtualManifest(
-      `bili_${safeBvid}_${cid}_${qn}`,
-      xml,
-      "application/dash+xml",
-    )
+    return registerVirtualManifest(`bili_${safeBvid}_${cid}_${qn}`, xml, "application/dash+xml")
   } catch {
-    const filePath = Path.join(
+    const filePath: string = Path.join(
       FileManager.temporaryDirectory,
       `yobi_bili_${safeBvid}_${cid}_${qn}.mpd`,
     )
     FileManager.writeAsStringSync(filePath, xml)
+    pruneDashFiles(filePath)
     return filePath
   }
 }

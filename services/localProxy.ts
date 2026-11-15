@@ -1,8 +1,11 @@
+import { fetch } from "scripting"
+
 /**
  * 本機 HttpServer 代理。
  *
  * `HttpRequest.path` 不含 query string，因此所有參數都編進路徑：
  *   /manifest/:id/:file
+ *   /bili-file/:id/:itag/file.m4s
  *   /hls-master/:sessionId/master.m3u8
  *   /hls-media/:sessionId/:itag/playlist.m3u8
  *   /sabr-init/:sessionId/:itag/init.mp4
@@ -48,6 +51,22 @@ let starting: boolean = false
 const virtualManifests: Map<string, VirtualManifest> = new Map()
 const sabrSessions: Map<string, SabrProxySessionHandler> = new Map()
 
+/** bilibili 的 m4s 需要 Referer，只能由本機代理代抓。 */
+interface BiliFileSource {
+  url: string
+  contentType: string
+}
+
+const biliFileSources: Map<string, BiliFileSource> = new Map()
+const BILI_WINDOW_BYTES: number = 4 * 1024 * 1024
+const BILI_MAX_SOURCES: number = 48
+
+const BILI_REQUEST_HEADERS: Record<string, string> = {
+  Referer: "https://www.bilibili.com/",
+  "User-Agent":
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+}
+
 const BASE_HEADERS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "*",
@@ -63,8 +82,11 @@ function ensureManifestFile(contentType: string): string {
 
 function textResponse(content: string, contentType: string): HttpResponse {
   const body: Data | null = Data.fromRawString(content, "utf-8")
+  const headers: Record<string, string> = { ...BASE_HEADERS, "Content-Type": contentType }
+  // DASH 解析器需要 Content-Length 才能讀 manifest（HLS 則不需要）。
+  if (body) headers["Content-Length"] = String(body.toArrayBuffer().byteLength)
   return HttpResponse.raw(200, "OK", {
-    headers: { ...BASE_HEADERS, "Content-Type": contentType },
+    headers,
     body: body ?? undefined,
   })
 }
@@ -89,12 +111,77 @@ function notFound(message: string): HttpResponse {
   })
 }
 
+function parseByteRange(header: string | undefined): { start: number; end: number | null } {
+  const match: RegExpMatchArray | null =
+    typeof header === "string" ? header.match(/bytes=(\d+)-(\d*)/) : null
+  if (!match) return { start: 0, end: null }
+  const start: number = Number(match[1])
+  const endText: string = match[2]
+  const end: number | null = endText ? Number(endText) : null
+  return {
+    start: Number.isFinite(start) ? start : 0,
+    end: end !== null && Number.isFinite(end) ? end : null,
+  }
+}
+
 function registerRoutes(target: HttpServer): void {
   target.registerAsyncHandler("/manifest/:id/:file", async (req: HttpRequest): Promise<HttpResponse> => {
     const manifest: VirtualManifest | undefined = virtualManifests.get(req.params["id"])
     if (!manifest) return notFound("unknown manifest")
     return textResponse(manifest.content, manifest.contentType)
   })
+
+  // 播放器抓 MPD 片段時不會帶 Referer（來源是本機檔），由這裡補上並限制單次視窗大小。
+  target.registerAsyncHandler(
+    "/bili-file/:id/file.m4s",
+    async (req: HttpRequest): Promise<HttpResponse> => {
+      const source: BiliFileSource | undefined = biliFileSources.get(req.params["id"])
+      if (!source) return notFound("unknown stream")
+
+      if (req.method === "HEAD") {
+        return HttpResponse.raw(200, "OK", {
+          headers: {
+            ...BASE_HEADERS,
+            "Content-Type": source.contentType,
+            "Accept-Ranges": "bytes",
+          },
+        })
+      }
+
+      const requested = parseByteRange(req.headers["range"] ?? req.headers["Range"])
+      const start: number = requested.start
+      const end: number = Math.min(
+        requested.end ?? start + BILI_WINDOW_BYTES - 1,
+        start + BILI_WINDOW_BYTES - 1,
+      )
+
+      try {
+        const upstream = await fetch(source.url, {
+          headers: { ...BILI_REQUEST_HEADERS, Range: `bytes=${start}-${end}` },
+        })
+        const bytes: Uint8Array = new Uint8Array(await upstream.arrayBuffer())
+        const contentRange: string | null = upstream.headers.get("content-range")
+        const headers: Record<string, string> = {
+          ...BASE_HEADERS,
+          "Content-Type": source.contentType,
+          "Accept-Ranges": "bytes",
+          "Content-Length": String(bytes.byteLength),
+        }
+        if (contentRange) headers["Content-Range"] = contentRange
+        return HttpResponse.raw(upstream.status, "OK", {
+          headers,
+          body: Data.fromUint8Array(bytes) ?? undefined,
+        })
+      } catch (error) {
+        const message: string = error instanceof Error ? error.message : "upstream failed"
+        const body: Data | null = Data.fromRawString(message, "utf-8")
+        return HttpResponse.raw(502, "Bad Gateway", {
+          headers: { ...BASE_HEADERS, "Content-Type": "text/plain; charset=utf-8" },
+          body: body ?? undefined,
+        })
+      }
+    },
+  )
 
   target.registerAsyncHandler("/hls-master/:sessionId/master.m3u8", async (req: HttpRequest): Promise<HttpResponse> => {
     const handler: SabrProxySessionHandler | undefined = sabrSessions.get(req.params["sessionId"])
@@ -185,6 +272,16 @@ export function ensureLocalProxyStarted(): number {
 }
 
 /** 註冊虛擬 manifest 內容（m3u8 / mpd），回傳可播放的本地 URL。 */
+export function registerBiliFileSource(id: string, url: string, contentType: string): string {
+  const port: number = ensureLocalProxyStarted()
+  if (!biliFileSources.has(id) && biliFileSources.size >= BILI_MAX_SOURCES) {
+    const oldest: string | undefined = biliFileSources.keys().next().value
+    if (oldest) biliFileSources.delete(oldest)
+  }
+  biliFileSources.set(id, { url, contentType })
+  return `http://127.0.0.1:${port}/bili-file/${id}/file.m4s`
+}
+
 export function registerVirtualManifest(id: string, content: string, contentType: string): string {
   const port: number = ensureLocalProxyStarted()
   const file: string = ensureManifestFile(contentType)
