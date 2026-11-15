@@ -16,20 +16,40 @@ import {
   togglePlayPause,
   usePlayerStore,
 } from "../state/playerStore"
-import { type } from "../ui/theme"
+import { ProgressTrack } from "../ui/primitives"
+import { palette, type } from "../ui/theme"
+
+/** Hit area of each trailing button; the close button's center lands on the capsule's end-cap center. */
+export const MINI_BUTTON_SIZE: number = 44
+
+function MiniButton(props: { action: () => void; children: VirtualNode }): VirtualNode {
+  return (
+    <Button action={props.action} buttonStyle="plain">
+      <ZStack frame={{ width: MINI_BUTTON_SIZE, height: MINI_BUTTON_SIZE }} contentShape="rect">
+        {props.children}
+      </ZStack>
+    </Button>
+  )
+}
 
 // The trailing part of the minimized player card; the live video sits to its left in PlayerHost.
-export function MiniPlayerBar(props: { item: UnifiedVideoItem | null; height: number }): VirtualNode {
+export function MiniPlayerBar(props: {
+  item: UnifiedVideoItem | null
+  height: number
+  progress: number
+  trailingInset: number
+}): VirtualNode {
   const store: PlayerStoreSnapshot = usePlayerStore()
   const item: UnifiedVideoItem | null = props.item
   const isLoading: boolean = store.status === "loading" || store.status === "buffering"
   const isPlaying: boolean = store.status === "playing"
 
   return (
-    <HStack spacing={4} padding={{ leading: 12, trailing: 10 }} frame={{ maxWidth: "infinity", height: props.height }}>
+    <HStack spacing={0} padding={{ leading: 12, trailing: props.trailingInset }} frame={{ maxWidth: "infinity", height: props.height }}>
       <VStack
         alignment="leading"
-        spacing={1}
+        spacing={3}
+        padding={{ trailing: 8 }}
         frame={{ maxWidth: "infinity", maxHeight: "infinity", alignment: "leading" }}
         contentShape="rect"
         onTapGesture={() => expandFromMiniPlayer()}
@@ -40,28 +60,25 @@ export function MiniPlayerBar(props: { item: UnifiedVideoItem | null; height: nu
         <Text font={type.caption} foregroundStyle="secondaryLabel" lineLimit={1}>
           {item?.authorName ?? ""}
         </Text>
+        <ProgressTrack ratio={props.progress} color={palette.brand} height={2} padding={{ top: 2 }} />
       </VStack>
 
-      <Button action={() => void togglePlayPause()} buttonStyle="plain">
-        <ZStack frame={{ width: 40, height: props.height }} contentShape="rect">
-          {isLoading ? (
-            <ProgressView controlSize="small" />
-          ) : (
-            <Image
-              systemName={isPlaying ? "pause.fill" : "play.fill"}
-              font={18}
-              foregroundStyle="label"
-              contentTransition="symbolEffectReplace"
-            />
-          )}
-        </ZStack>
-      </Button>
+      <MiniButton action={() => void togglePlayPause()}>
+        {isLoading ? (
+          <ProgressView controlSize="small" />
+        ) : (
+          <Image
+            systemName={isPlaying ? "pause.fill" : "play.fill"}
+            font={18}
+            foregroundStyle="label"
+            contentTransition="symbolEffectReplace"
+          />
+        )}
+      </MiniButton>
 
-      <Button action={() => void closePlayer()} buttonStyle="plain">
-        <ZStack frame={{ width: 36, height: props.height }} contentShape="rect">
-          <Image systemName="xmark" font={14} fontWeight="semibold" foregroundStyle="secondaryLabel" />
-        </ZStack>
-      </Button>
+      <MiniButton action={() => void closePlayer()}>
+        <Image systemName="xmark" font={16} fontWeight="semibold" foregroundStyle="label" />
+      </MiniButton>
     </HStack>
   )
 }

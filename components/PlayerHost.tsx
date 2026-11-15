@@ -17,19 +17,19 @@ import {
   usePlayerProgress,
   usePlayerStore,
 } from "../state/playerStore"
-import { MiniPlayerBar } from "./MiniPlayerBar"
+import { MINI_BUTTON_SIZE, MiniPlayerBar } from "./MiniPlayerBar"
 import { DanmakuSheet, QualitySheet } from "./PlaybackSheets"
 import { PlayerControlsOverlay } from "./PlayerControlsOverlay"
 import { WatchView } from "../views/WatchView"
-import { ProgressTrack } from "../ui/primitives"
-import { palette } from "../ui/theme"
 
 // Sized and inset to line up with the floating tab bar, like the system bottom accessory.
 const MINI_HEIGHT: number = 56
 const MINI_MARGIN: number = 21
 const MINI_RADIUS: number = MINI_HEIGHT / 2
-const MINI_VIDEO_INSET: number = 6
-const MINI_VIDEO_RADIUS: number = 12
+// A plain rounded rect, pulled in far enough that its leading corners clear the capsule's curve.
+const MINI_VIDEO_INSET_V: number = 8
+const MINI_VIDEO_INSET_LEADING: number = 10
+const MINI_VIDEO_RADIUS: number = 10
 // From the bottom safe-area edge up to the tab bar's top edge, plus the gap above it.
 const TAB_BAR_CLEARANCE: number = 31 + 8
 /** Space pages keep free above the tab bar while a video is loaded. */
@@ -116,7 +116,7 @@ export function PlayerHost(props: {
     radius: 0,
   }
   const miniY: number = screenHeight - insets.bottom - TAB_BAR_CLEARANCE - MINI_HEIGHT
-  const miniVideoHeight: number = MINI_HEIGHT - MINI_VIDEO_INSET * 2
+  const miniVideoHeight: number = MINI_HEIGHT - MINI_VIDEO_INSET_V * 2
   const mini: CardGeometry = {
     width: screenWidth - MINI_MARGIN * 2,
     height: MINI_HEIGHT,
@@ -125,7 +125,7 @@ export function PlayerHost(props: {
     rowHeight: MINI_HEIGHT,
     videoWidth: Math.round(miniVideoHeight * 16 / 9),
     videoHeight: miniVideoHeight,
-    videoInset: MINI_VIDEO_INSET,
+    videoInset: MINI_VIDEO_INSET_LEADING,
     videoRadius: MINI_VIDEO_RADIUS,
     topInset: 0,
     radius: MINI_RADIUS,
@@ -144,8 +144,6 @@ export function PlayerHost(props: {
   const duration: number = progress.duration > 0 ? progress.duration : item?.duration ?? 0
   const ratio: number = duration > 0 ? progress.position / duration : 0
   const surfaceColor = fullscreen ? "black" : "systemBackground"
-  // Spans the title area of the mini card, from just after the video to the capsule's rounded end.
-  const progressWidth: number = Math.max(0, mini.width - mini.videoInset - mini.videoWidth - 12 - MINI_RADIUS)
 
   return (
     <ZStack
@@ -227,7 +225,12 @@ export function PlayerHost(props: {
                 allowsHitTesting={isMini}
                 clipped
               >
-                <MiniPlayerBar item={item} height={MINI_HEIGHT} />
+                <MiniPlayerBar
+                  item={item}
+                  height={MINI_HEIGHT}
+                  progress={ratio}
+                  trailingInset={MINI_RADIUS - MINI_BUTTON_SIZE / 2}
+                />
               </ZStack>
             </HStack>
             {fullscreen ? null : (
@@ -243,15 +246,6 @@ export function PlayerHost(props: {
                 />
               </ZStack>
             )}
-          </VStack>
-          <VStack
-            frame={{ width: geometry.width, height: geometry.height, alignment: "bottomTrailing" }}
-            opacity={isMini ? 1 : 0}
-            allowsHitTesting={false}
-          >
-            <VStack frame={{ width: progressWidth, height: 2 }} offset={{ x: -MINI_RADIUS, y: -5 }}>
-              <ProgressTrack ratio={ratio} color={palette.brand} height={2} />
-            </VStack>
           </VStack>
         </ZStack>
       </ZStack>
