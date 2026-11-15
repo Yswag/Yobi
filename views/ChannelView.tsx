@@ -1,20 +1,20 @@
 import {
-  Button,
   HStack,
   Image,
-  ProgressView,
+  LazyVStack,
+  Rectangle,
   ScrollView,
   Spacer,
   Text,
-  TextField,
   VStack,
   ZStack,
   useEffect,
+  useRef,
   useState,
 } from "scripting"
-import type { Color, VirtualNode } from "scripting"
+import type { VirtualNode } from "scripting"
 import type { ChannelDetail, Provider, UnifiedVideoItem } from "../types"
-import { VideoCard } from "../components/VideoCard"
+import { VideoCard, VideoCardSkeleton } from "../components/VideoCard"
 import {
   getChannel,
   getSavedPosition,
@@ -22,12 +22,20 @@ import {
   subscribeStorageChanges,
   toggleSubscription,
 } from "../services"
-import {
-  providerAccentColor,
-  providerFullName,
-  providerSoftBgColor,
-} from "../utils/format"
+import { providerFullName } from "../utils/format"
 import { openVideo } from "../state/playerStore"
+import type { ChipOption } from "../ui/primitives"
+import {
+  Avatar,
+  ChipBar,
+  EmptyState,
+  GlassIconButton,
+  LayoutToggle,
+  PillButton,
+  SearchField,
+  Skeleton,
+} from "../ui/primitives"
+import { providerColor, space, type } from "../ui/theme"
 
 export interface ChannelViewProps {
   provider: Provider
@@ -41,89 +49,13 @@ export interface ChannelViewProps {
 type SortMode = "latest" | "popular"
 type LayoutMode = "row" | "grid"
 
-const LINK_BLUE: Color = "rgba(10,132,255,1)"
-const BANNER_HEIGHT: number = 110
-const AVATAR_SIZE: number = 64
+const BANNER_HEIGHT: number = 132
+const AVATAR_SIZE: number = 76
 
-function Chip(props: {
-  label: string
-  icon?: string
-  active: boolean
-  activeColor: Color
-  onTap: () => void
-}): VirtualNode {
-  return (
-    <HStack
-      spacing={4}
-      padding={{ horizontal: 11, vertical: 6 }}
-      background={props.active ? props.activeColor : "tertiarySystemFill"}
-      clipShape="capsule"
-      onTapGesture={props.onTap}
-    >
-      {props.icon
-        ? (
-          <Image
-            systemName={props.icon}
-            font={11}
-            foregroundStyle={props.active ? "white" : "secondaryLabel"}
-          />
-        )
-        : null}
-      <Text
-        font={12}
-        fontWeight={props.active ? "semibold" : "medium"}
-        foregroundStyle={props.active ? "white" : "label"}
-        lineLimit={1}
-      >
-        {props.label}
-      </Text>
-    </HStack>
-  )
-}
-
-function CircleIconButton(props: { icon: string; size: number; onTap: () => void }): VirtualNode {
-  return (
-    <VStack
-      frame={{ width: props.size, height: props.size }}
-      background="tertiarySystemFill"
-      clipShape="circle"
-      onTapGesture={props.onTap}
-    >
-      <Image systemName={props.icon} font={Math.round(props.size * 0.44)} foregroundStyle="label" />
-    </VStack>
-  )
-}
-
-function AvatarCircle(props: {
-  provider: Provider
-  name: string
-  avatarUrl?: string
-  size: number
-}): VirtualNode {
-  if (props.avatarUrl) {
-    return (
-      <Image
-        imageUrl={props.avatarUrl}
-        resizable
-        scaleToFill
-        frame={{ width: props.size, height: props.size }}
-        clipShape="circle"
-      />
-    )
-  }
-  const initial: string = (props.name.trim().charAt(0) || "?").toUpperCase()
-  return (
-    <VStack
-      frame={{ width: props.size, height: props.size }}
-      background={providerAccentColor(props.provider)}
-      clipShape="circle"
-    >
-      <Text font={Math.round(props.size * 0.42)} fontWeight="semibold" foregroundStyle="white">
-        {initial}
-      </Text>
-    </VStack>
-  )
-}
+const SORT_OPTIONS: ChipOption<SortMode>[] = [
+  { key: "latest", label: "最新" },
+  { key: "popular", label: "熱門" },
+]
 
 function sortVideos(list: UnifiedVideoItem[], mode: SortMode): UnifiedVideoItem[] {
   const next: UnifiedVideoItem[] = list.slice()
@@ -144,35 +76,34 @@ export function ChannelView(props: ChannelViewProps): VirtualNode {
   const [detail, setDetail] = useState<ChannelDetail | null>(null)
   const [loading, setLoading] = useState<boolean>(true)
   const [errorText, setErrorText] = useState<string | null>(null)
-  const [refreshSeq, setRefreshSeq] = useState<number>(0)
   const [subscribed, setSubscribed] = useState<boolean>(false)
   const [query, setQuery] = useState<string>("")
   const [sortMode, setSortMode] = useState<SortMode>("latest")
   const [layoutMode, setLayoutMode] = useState<LayoutMode>("row")
   const [descriptionExpanded, setDescriptionExpanded] = useState<boolean>(false)
+  const requestSeq = useRef<number>(0)
 
   const subscriptionId: string = `${props.provider}:${props.channelId}`
 
-  useEffect(() => {
-    let cancelled: boolean = false
+  const load = async (): Promise<void> => {
+    const seq: number = ++requestSeq.current
     setLoading(true)
     setErrorText(null)
-    getChannel(props.provider, props.channelId)
-      .then((next: ChannelDetail) => {
-        if (cancelled) return
-        setDetail(next)
-        setLoading(false)
-      })
-      .catch(() => {
-        if (cancelled) return
-        setDetail(null)
-        setErrorText("無法載入頻道資料，請確認網路連線後重試")
-        setLoading(false)
-      })
-    return () => {
-      cancelled = true
+    try {
+      const next: ChannelDetail = await getChannel(props.provider, props.channelId)
+      if (seq !== requestSeq.current) return
+      setDetail(next)
+    } catch {
+      if (seq !== requestSeq.current) return
+      setDetail(null)
+      setErrorText("無法載入頻道資料，請確認網路連線後重試")
     }
-  }, [props.provider, props.channelId, refreshSeq])
+    if (seq === requestSeq.current) setLoading(false)
+  }
+
+  useEffect(() => {
+    void load()
+  }, [props.provider, props.channelId])
 
   useEffect(() => {
     setSubscribed(isSubscribed(subscriptionId))
@@ -214,251 +145,108 @@ export function ChannelView(props: ChannelViewProps): VirtualNode {
     void openVideo(filteredVideos[0], { queue: filteredVideos })
   }
 
-  const topBar: VirtualNode = (
-    <HStack spacing={8} padding={{ horizontal: 12, vertical: 8 }} frame={{ maxWidth: "infinity" }}>
-      {props.onClose
-        ? (
-          <HStack
-            spacing={4}
-            padding={{ horizontal: 10, vertical: 6 }}
-            background="tertiarySystemFill"
-            clipShape="capsule"
-            onTapGesture={props.onClose}
-          >
-            <Image systemName="chevron.left" font={12} foregroundStyle="label" />
-            <Text font={13} fontWeight="medium" foregroundStyle="label" lineLimit={1}>返回</Text>
-          </HStack>
-        )
-        : null}
-
-      <Spacer />
-
-      <Text
-        font={10}
-        fontWeight="bold"
-        foregroundStyle="white"
-        padding={{ horizontal: 7, vertical: 3 }}
-        background={providerAccentColor(props.provider)}
-        clipShape="capsule"
-      >
-        {providerFullName(props.provider)}
-      </Text>
-
-      <CircleIconButton
-        icon="arrow.clockwise"
-        size={30}
-        onTap={() => setRefreshSeq((seq: number): number => seq + 1)}
-      />
-    </HStack>
-  )
+  const metaParts: string[] = [providerFullName(props.provider)]
+  if (detail?.subscriberCountText) metaParts.push(detail.subscriberCountText)
+  if (detail) metaParts.push(`${videos.length} 部影片`)
 
   const banner: VirtualNode = detail?.bannerUrl
     ? (
-      <ZStack frame={{ maxWidth: "infinity", height: BANNER_HEIGHT }} clipped>
-        <Image
-          imageUrl={detail.bannerUrl}
-          resizable
-          scaleToFill
-          frame={{ maxWidth: "infinity", height: BANNER_HEIGHT }}
-        />
-      </ZStack>
-    )
-    : (
-      <VStack
-        frame={{ maxWidth: "infinity", height: 56 }}
-        background={providerSoftBgColor(props.provider)}
+      <Rectangle
+        fill="secondarySystemFill"
+        frame={{ maxWidth: "infinity", height: BANNER_HEIGHT }}
+        overlay={
+          <Image
+            imageUrl={detail.bannerUrl}
+            resizable
+            scaleToFill
+            frame={{ maxWidth: "infinity", maxHeight: "infinity" }}
+          />
+        }
+        clipped
       />
     )
+    : <Rectangle fill="rgba(0,0,0,0)" frame={{ maxWidth: "infinity", height: 52 }} />
 
-  const infoCard: VirtualNode = (
-    <VStack
-      spacing={12}
-      padding={16}
-      frame={{ maxWidth: "infinity" }}
-      background="secondarySystemGroupedBackground"
-      clipShape={{ type: "rect", cornerRadius: 16 }}
-    >
-      <HStack spacing={14} alignment="center" frame={{ maxWidth: "infinity" }}>
-        <AvatarCircle
-          provider={props.provider}
-          name={currentName}
-          avatarUrl={currentAvatar || undefined}
-          size={AVATAR_SIZE}
-        />
-
-        <VStack
-          alignment="leading"
-          spacing={4}
-          frame={{ maxWidth: "infinity", alignment: "leading" }}
-        >
-          <Text font="title3" fontWeight="bold" foregroundStyle="label" lineLimit={1}>
+  const hero: VirtualNode = (
+    <VStack alignment="leading" spacing={14} padding={{ horizontal: space.page }} frame={{ maxWidth: "infinity", alignment: "leading" }}>
+      <HStack spacing={14} frame={{ maxWidth: "infinity", alignment: "leading" }}>
+        <Avatar url={currentAvatar || undefined} name={currentName} size={AVATAR_SIZE} provider={props.provider} />
+        <VStack alignment="leading" spacing={5} frame={{ maxWidth: "infinity", alignment: "leading" }}>
+          <Text font={type.title + 2} fontWeight="heavy" foregroundStyle="label" lineLimit={2}>
             {currentName}
           </Text>
           <HStack spacing={6}>
-            <Text
-              font={9}
-              fontWeight="bold"
-              foregroundStyle="white"
-              padding={{ horizontal: 5, vertical: 2 }}
-              background={providerAccentColor(props.provider)}
-              clipShape={{ type: "rect", cornerRadius: 4 }}
-            >
-              {providerFullName(props.provider)}
-            </Text>
-            {detail?.subscriberCountText
-              ? (
-                <Text font={11} foregroundStyle="secondaryLabel" lineLimit={1}>
-                  {detail.subscriberCountText}
-                </Text>
-              )
-              : null}
-            <Text font={11} foregroundStyle="tertiaryLabel" lineLimit={1}>
-              {`${videos.length} 部影片`}
+            <Rectangle
+              fill={providerColor(props.provider)}
+              frame={{ width: 7, height: 7 }}
+              clipShape={{ type: "rect", cornerRadius: 3.5 }}
+            />
+            <Text font={type.meta + 1} foregroundStyle="secondaryLabel" lineLimit={1}>
+              {metaParts.join(" · ")}
             </Text>
           </HStack>
         </VStack>
-
-        <HStack
-          spacing={5}
-          padding={{ horizontal: 14, vertical: 8 }}
-          background={subscribed ? "tertiarySystemFill" : providerAccentColor(props.provider)}
-          clipShape="capsule"
-          onTapGesture={handleToggleSubscription}
-        >
-          <Image
-            systemName={subscribed ? "checkmark" : "plus"}
-            font={12}
-            foregroundStyle={subscribed ? "secondaryLabel" : "white"}
-          />
-          <Text
-            font={13}
-            fontWeight={subscribed ? "medium" : "bold"}
-            foregroundStyle={subscribed ? "secondaryLabel" : "white"}
-            lineLimit={1}
-          >
-            {subscribed ? "已訂閱" : "訂閱"}
-          </Text>
-        </HStack>
       </HStack>
 
-      {detail?.description
-        ? (
-          <Text
-            font="footnote"
-            foregroundStyle="secondaryLabel"
-            lineLimit={descriptionExpanded ? undefined : 2}
-            multilineTextAlignment="leading"
-            onTapGesture={() => setDescriptionExpanded(!descriptionExpanded)}
-          >
-            {detail.description}
-          </Text>
-        )
-        : null}
+      {detail?.description ? (
+        <Text
+          font={type.body}
+          foregroundStyle="secondaryLabel"
+          lineLimit={descriptionExpanded ? undefined : 2}
+          multilineTextAlignment="leading"
+          frame={{ maxWidth: "infinity", alignment: "leading" }}
+          onTapGesture={() => setDescriptionExpanded(!descriptionExpanded)}
+        >
+          {detail.description}
+        </Text>
+      ) : loading && !detail ? (
+        <VStack alignment="leading" spacing={6} frame={{ maxWidth: "infinity", alignment: "leading" }}>
+          <Skeleton height={12} />
+          <Skeleton width={180} height={12} />
+        </VStack>
+      ) : null}
+
+      <HStack spacing={10} frame={{ maxWidth: "infinity" }}>
+        <PillButton
+          label={subscribed ? "已訂閱" : "訂閱"}
+          icon={subscribed ? "checkmark" : "plus"}
+          prominent={!subscribed}
+          onTap={handleToggleSubscription}
+        />
+        {filteredVideos.length > 0 ? (
+          <PillButton label="全部播放" icon="play.fill" prominent={false} onTap={handlePlayAll} />
+        ) : null}
+      </HStack>
     </VStack>
   )
 
-  const toolbar: VirtualNode = (
-    <VStack spacing={8} frame={{ maxWidth: "infinity" }}>
-      <HStack
-        spacing={6}
-        padding={{ horizontal: 12, vertical: 8 }}
-        background="tertiarySystemFill"
-        clipShape={{ type: "rect", cornerRadius: 10 }}
-        frame={{ maxWidth: "infinity" }}
-      >
-        <Image systemName="magnifyingglass" font={14} foregroundStyle="secondaryLabel" />
-        <TextField
-          title="篩選頻道影片"
-          value={query}
-          onChanged={setQuery}
-          prompt="篩選頻道影片…"
-          font={14}
-          frame={{ maxWidth: "infinity" }}
-        />
-        {query.length > 0
-          ? (
-            <HStack spacing={0} onTapGesture={() => setQuery("")}>
-              <Image systemName="xmark.circle.fill" font={15} foregroundStyle="tertiaryLabel" />
-            </HStack>
-          )
-          : null}
-      </HStack>
-
-      <HStack spacing={8} frame={{ maxWidth: "infinity" }}>
-        <Chip
-          label="最新上傳"
-          active={sortMode === "latest"}
-          activeColor={LINK_BLUE}
-          onTap={() => setSortMode("latest")}
-        />
-        <Chip
-          label="熱門觀看"
-          active={sortMode === "popular"}
-          activeColor={LINK_BLUE}
-          onTap={() => setSortMode("popular")}
-        />
-
-        <Spacer />
-
-        {filteredVideos.length > 0
-          ? (
-            <Chip
-              label="全部播放"
-              icon="play.fill"
-              active
-              activeColor={providerAccentColor(props.provider)}
-              onTap={handlePlayAll}
-            />
-          )
-          : null}
-
-        <CircleIconButton
-          icon={layoutMode === "row" ? "rectangle.grid.1x2" : "list.bullet"}
-          size={30}
-          onTap={() => setLayoutMode(layoutMode === "row" ? "grid" : "row")}
-        />
-      </HStack>
-    </VStack>
+  const filterField: VirtualNode = (
+    <SearchField value={query} prompt="在頻道中搜尋" onChange={setQuery} />
   )
 
   let listContent: VirtualNode
   if (loading && videos.length === 0) {
-    listContent = (
-      <VStack spacing={10} frame={{ maxWidth: "infinity", minHeight: 200 }}>
-        <ProgressView />
-        <Text font={13} foregroundStyle="secondaryLabel">載入頻道資料中…</Text>
-      </VStack>
-    )
+    listContent = <VideoCardSkeleton layout={layoutMode} />
   } else if (errorText) {
     listContent = (
-      <VStack spacing={12} frame={{ maxWidth: "infinity", minHeight: 200 }}>
-        <Image systemName="wifi.exclamationmark" font={30} foregroundStyle="tertiaryLabel" />
-        <Text font={13} foregroundStyle="secondaryLabel">{errorText}</Text>
-        <Button
-          title="重試"
-          action={() => setRefreshSeq((seq: number): number => seq + 1)}
-          buttonStyle="borderedProminent"
-          controlSize="small"
-          tint={LINK_BLUE}
-        />
-      </VStack>
+      <EmptyState
+        icon="wifi.exclamationmark"
+        title="連不上伺服器"
+        message={errorText}
+        actionLabel="重試"
+        onAction={() => void load()}
+      />
     )
   } else if (filteredVideos.length === 0) {
     listContent = (
-      <VStack spacing={10} frame={{ maxWidth: "infinity", minHeight: 200 }}>
-        <Image
-          systemName={keyword.length > 0 ? "magnifyingglass" : "tray"}
-          font={30}
-          foregroundStyle="tertiaryLabel"
-        />
-        <Text font={13} foregroundStyle="secondaryLabel">
-          {keyword.length > 0 ? "沒有符合關鍵字的影片" : "此頻道目前沒有可顯示的影片"}
-        </Text>
-      </VStack>
+      <EmptyState
+        icon={keyword.length > 0 ? "magnifyingglass" : "tray"}
+        title={keyword.length > 0 ? "沒有符合的影片" : "這個頻道還沒有影片"}
+      />
     )
   } else {
     listContent = (
-      <VStack spacing={layoutMode === "grid" ? 18 : 0} frame={{ maxWidth: "infinity" }}>
+      <LazyVStack spacing={layoutMode === "grid" ? space.cardGap : 4} frame={{ maxWidth: "infinity" }}>
         {filteredVideos.map((video: UnifiedVideoItem) => (
           <VideoCard
             key={video.id}
@@ -469,34 +257,43 @@ export function ChannelView(props: ChannelViewProps): VirtualNode {
             onOpenChannel={props.onOpenChannel}
           />
         ))}
-      </VStack>
+      </LazyVStack>
     )
   }
 
   return (
-    <VStack spacing={0} frame={{ maxWidth: "infinity", maxHeight: "infinity" }}>
-      {topBar}
+    <ZStack alignment="topLeading" frame={{ maxWidth: "infinity", maxHeight: "infinity" }}>
       <ScrollView
         axes="vertical"
-        scrollIndicator="automatic"
+        scrollIndicator="hidden"
+        scrollDismissesKeyboard="immediately"
         frame={{ maxWidth: "infinity", maxHeight: "infinity" }}
+        refreshable={load}
       >
-        <VStack spacing={14} alignment="leading" frame={{ maxWidth: "infinity" }} padding={{ top: 4 }}>
+        <VStack spacing={20} frame={{ maxWidth: "infinity" }} padding={{ bottom: 16 }}>
           {banner}
-          <VStack spacing={14} padding={{ horizontal: 12 }} frame={{ maxWidth: "infinity" }}>
-            {infoCard}
-            {toolbar}
+          {hero}
+          <VStack spacing={12} frame={{ maxWidth: "infinity" }}>
+            <VStack padding={{ horizontal: space.page }} frame={{ maxWidth: "infinity" }}>
+              {filterField}
+            </VStack>
+            <ChipBar
+              options={SORT_OPTIONS}
+              value={sortMode}
+              onChange={setSortMode}
+              trailing={<LayoutToggle layout={layoutMode} onChange={setLayoutMode} />}
+            />
           </VStack>
-          <VStack
-            spacing={0}
-            frame={{ maxWidth: "infinity" }}
-            padding={{ horizontal: layoutMode === "grid" ? 12 : 0 }}
-          >
-            {listContent}
-          </VStack>
-          <Spacer frame={{ height: 96 }} />
+          {listContent}
         </VStack>
       </ScrollView>
-    </VStack>
+
+      {props.onClose ? (
+        <HStack padding={{ horizontal: space.page, top: 6 }} frame={{ maxWidth: "infinity", alignment: "leading" }}>
+          <GlassIconButton icon="chevron.left" onTap={props.onClose} />
+          <Spacer />
+        </HStack>
+      ) : null}
+    </ZStack>
   )
 }

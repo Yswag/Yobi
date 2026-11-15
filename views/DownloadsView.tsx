@@ -1,15 +1,14 @@
 import {
   HStack,
   Image,
+  LazyVStack,
   ScrollView,
-  Spacer,
   Text,
   VStack,
-  ZStack,
   useEffect,
   useState,
 } from "scripting"
-import type { Color, VirtualNode } from "scripting"
+import type { VirtualNode } from "scripting"
 import type { DownloadTaskState, OfflineDownload, Provider } from "../types"
 import {
   clearAllDownloads,
@@ -20,8 +19,17 @@ import {
   subscribeDownloadChanges,
   totalDownloadBytes,
 } from "../services"
-import { formatDuration, providerAccentColor, providerBadgeLabel } from "../utils/format"
 import { openVideo } from "../state/playerStore"
+import { VideoCard } from "../components/VideoCard"
+import {
+  ChipBar,
+  EmptyState,
+  GlassIconButton,
+  PageHeader,
+  ProgressTrack,
+  PROVIDER_FILTERS,
+} from "../ui/primitives"
+import { palette, radius, space, type } from "../ui/theme"
 
 export interface DownloadsViewProps {
   onOpenSettings?: () => void
@@ -29,12 +37,52 @@ export interface DownloadsViewProps {
 
 type DownloadFilter = "all" | Provider
 
-const LINK_BLUE: Color = "rgba(10,132,255,1)"
-const DANGER_RED: Color = "rgba(255,59,48,1)"
-const OFFLINE_GREEN: Color = "rgba(48,209,88,1)"
-const THUMB_WIDTH: number = 132
-const THUMB_HEIGHT: number = 74
-const EMPTY_BOTTOM: number = 96
+function cacheLabel(entry: OfflineDownload): string {
+  if (entry.cacheMode === "http") return "MP4"
+  return entry.cacheMode === "dash" ? "DASH" : "HLS"
+}
+
+function entryMeta(entry: OfflineDownload): string {
+  const parts: string[] = [entry.qualityLabel, cacheLabel(entry)]
+  if (entry.bytes > 0) parts.push(formatBytes(entry.bytes))
+  return parts.join(" · ")
+}
+
+function ActiveDownloadCard(props: { task: DownloadTaskState }): VirtualNode {
+  const task: DownloadTaskState = props.task
+  const failed: boolean = Boolean(task.error)
+  const detail: string = failed
+    ? task.error ?? ""
+    : `${task.qualityLabel} · ${task.totalSegments > 0 ? `${task.downloadedSegments}/${task.totalSegments} 片段` : "準備中"}`
+
+  return (
+    <VStack
+      alignment="leading"
+      spacing={10}
+      padding={14}
+      frame={{ maxWidth: "infinity", alignment: "leading" }}
+      background={{ style: "secondarySystemFill", shape: { type: "rect", cornerRadius: radius.lg, style: "continuous" } }}
+    >
+      <HStack spacing={10} frame={{ maxWidth: "infinity" }}>
+        <Image
+          systemName={failed ? "exclamationmark.triangle.fill" : "arrow.down.circle.fill"}
+          font={18}
+          foregroundStyle={failed ? palette.danger : palette.brand}
+        />
+        <Text font={type.body} fontWeight="semibold" foregroundStyle="label" lineLimit={1} frame={{ maxWidth: "infinity", alignment: "leading" }}>
+          {task.title}
+        </Text>
+        <Text font={type.meta + 1} fontWeight="semibold" monospacedDigit foregroundStyle={failed ? palette.danger : "secondaryLabel"}>
+          {failed ? "失敗" : `${Math.round(task.progress * 100)}%`}
+        </Text>
+      </HStack>
+      <ProgressTrack ratio={task.progress} color={failed ? palette.danger : palette.brand} height={4} onMedia={false} />
+      <Text font={type.caption} foregroundStyle={failed ? palette.danger : "tertiaryLabel"} lineLimit={2}>
+        {detail}
+      </Text>
+    </VStack>
+  )
+}
 
 export function DownloadsView(props: DownloadsViewProps): VirtualNode {
   const [entries, setEntries] = useState<OfflineDownload[]>(() => getDownloads())
@@ -87,237 +135,76 @@ export function DownloadsView(props: DownloadsViewProps): VirtualNode {
     })
   }
 
-  const renderChip = (label: string, value: DownloadFilter): VirtualNode => {
-    const isActive: boolean = filter === value
-    const accent: Color = value === "all" ? LINK_BLUE : providerAccentColor(value)
-    return (
-      <HStack
-        spacing={0}
-        padding={{ horizontal: 10, vertical: 5 }}
-        background={isActive ? accent : "tertiarySystemFill"}
-        clipShape="capsule"
-        onTapGesture={() => setFilter(value)}
-      >
-        <Text
-          font={11}
-          fontWeight={isActive ? "semibold" : "medium"}
-          foregroundStyle={isActive ? "white" : "secondaryLabel"}
-          lineLimit={1}
-        >
-          {label}
-        </Text>
-      </HStack>
-    )
-  }
-
-  const renderEntry = (entry: OfflineDownload): VirtualNode => (
-    <VStack
-      key={`dl-${entry.id}`}
-      spacing={0}
-      padding={10}
-      frame={{ maxWidth: "infinity", alignment: "leading" }}
-      background="secondarySystemGroupedBackground"
-      clipShape={{ type: "rect", cornerRadius: 12 }}
-    >
-      <HStack alignment="top" spacing={10} frame={{ maxWidth: "infinity" }}>
-        <ZStack
-          alignment="bottomTrailing"
-          frame={{ width: THUMB_WIDTH, height: THUMB_HEIGHT }}
-          background="rgba(120,120,128,0.18)"
-          clipShape={{ type: "rect", cornerRadius: 8 }}
-          onTapGesture={() => handlePlay(entry)}
-        >
-          {entry.item.thumbnailUrl ? (
-            <Image
-              imageUrl={entry.item.thumbnailUrl}
-              resizable
-              scaleToFill
-              frame={{ width: THUMB_WIDTH, height: THUMB_HEIGHT }}
-            />
-          ) : (
-            <Image systemName="play.rectangle.fill" font={22} foregroundStyle="secondaryLabel" />
-          )}
-          <Text
-            font={9}
-            fontWeight="bold"
-            foregroundStyle="white"
-            padding={{ horizontal: 4, vertical: 1.5 }}
-            background={providerAccentColor(entry.item.provider)}
-            clipShape={{ type: "rect", cornerRadius: 3 }}
-            offset={{ x: -4, y: -4 }}
-          >
-            {providerBadgeLabel(entry.item.provider)}
-          </Text>
-        </ZStack>
-
-        <VStack alignment="leading" spacing={4} frame={{ maxWidth: "infinity", alignment: "leading" }}>
-          <Text
-            font={13}
-            fontWeight="semibold"
-            foregroundStyle="label"
-            lineLimit={2}
-            multilineTextAlignment="leading"
-            onTapGesture={() => handlePlay(entry)}
-          >
-            {entry.item.title}
-          </Text>
-          <Text font={11} foregroundStyle="secondaryLabel" lineLimit={1}>
-            {entry.item.authorName || "未知作者"}
-          </Text>
-          <HStack spacing={5}>
-            <Text
-              font={10}
-              fontWeight="semibold"
-              foregroundStyle="white"
-              padding={{ horizontal: 5, vertical: 1.5 }}
-              background="rgba(120,120,128,0.85)"
-              clipShape="capsule"
-            >
-              {entry.qualityLabel}
-            </Text>
-            <Text
-              font={10}
-              fontWeight="semibold"
-              foregroundStyle={OFFLINE_GREEN}
-              padding={{ horizontal: 5, vertical: 1.5 }}
-              background="rgba(48,209,88,0.16)"
-              clipShape="capsule"
-            >
-              {entry.cacheMode === "http" ? "已下載" : entry.cacheMode === "dash" ? "DASH" : "HLS"}
-            </Text>
-            <Text font={10} foregroundStyle="tertiaryLabel" lineLimit={1}>
-              {`${entry.bytes > 0 ? formatBytes(entry.bytes) : "—"} · ${formatDuration(entry.duration)}`}
-            </Text>
-          </HStack>
-        </VStack>
-
-        <VStack
-          spacing={0}
-          frame={{ width: 30, height: 30 }}
-          background="tertiarySystemFill"
-          clipShape="circle"
-          onTapGesture={() => handleRemove(entry)}
-        >
-          <Image systemName="trash" font={12} foregroundStyle={DANGER_RED} />
-        </VStack>
-      </HStack>
-    </VStack>
-  )
+  const hasAny: boolean = entries.length > 0 || active !== null
 
   return (
-    <VStack spacing={0} frame={{ maxWidth: "infinity", maxHeight: "infinity" }} background="systemGroupedBackground">
-      <VStack spacing={10} padding={{ horizontal: 14, vertical: 10 }} frame={{ maxWidth: "infinity" }}>
-        <HStack spacing={8} frame={{ maxWidth: "infinity" }}>
-          <Text font={22} fontWeight="bold" foregroundStyle="label">
-            離線下載
-          </Text>
-          <Spacer />
-          {props.onOpenSettings ? (
-            <VStack
-              spacing={0}
-              frame={{ width: 30, height: 30 }}
-              background="tertiarySystemFill"
-              clipShape="circle"
-              onTapGesture={props.onOpenSettings}
+    <ScrollView axes="vertical" scrollIndicator="hidden" frame={{ maxWidth: "infinity", maxHeight: "infinity" }}>
+      <VStack spacing={14} frame={{ maxWidth: "infinity" }} padding={{ bottom: 16 }}>
+        <VStack alignment="leading" spacing={0} frame={{ maxWidth: "infinity", alignment: "leading" }}>
+          <PageHeader
+            title="下載"
+            trailing={props.onOpenSettings ? <GlassIconButton icon="gearshape" onTap={props.onOpenSettings} /> : undefined}
+          />
+          {entries.length > 0 ? (
+            <Text
+              font={type.meta + 1}
+              monospacedDigit
+              foregroundStyle="secondaryLabel"
+              padding={{ horizontal: space.page }}
+              offset={{ x: 0, y: -8 }}
             >
-              <Image systemName="gearshape.fill" font={13} foregroundStyle="secondaryLabel" />
-            </VStack>
+              {`${entries.length} 部影片 · 共 ${formatBytes(usedBytes)}`}
+            </Text>
           ) : null}
-        </HStack>
+        </VStack>
 
-        <HStack spacing={6} frame={{ maxWidth: "infinity" }}>
-          {renderChip("全部", "all")}
-          {renderChip(providerBadgeLabel("yt"), "yt")}
-          {renderChip(providerBadgeLabel("bili"), "bili")}
-          <Spacer />
-          <Text font={11} monospacedDigit foregroundStyle="tertiaryLabel">
-            {`${visible.length} 部 · ${formatBytes(usedBytes)}`}
-          </Text>
-        </HStack>
-      </VStack>
+        {active ? (
+          <VStack padding={{ horizontal: space.page }} frame={{ maxWidth: "infinity" }}>
+            <ActiveDownloadCard task={active} />
+          </VStack>
+        ) : null}
 
-      <ScrollView axes="vertical" scrollIndicator="automatic" frame={{ maxWidth: "infinity", maxHeight: "infinity" }}>
-        <VStack alignment="leading" spacing={10} padding={{ horizontal: 14 }} frame={{ maxWidth: "infinity" }}>
-          {active ? (
-            <VStack
-              alignment="leading"
-              spacing={8}
-              padding={12}
-              frame={{ maxWidth: "infinity", alignment: "leading" }}
-              background="secondarySystemGroupedBackground"
-              clipShape={{ type: "rect", cornerRadius: 12 }}
-            >
-              <HStack spacing={8} frame={{ maxWidth: "infinity" }}>
-                <Image systemName="arrow.down.circle.fill" font={14} foregroundStyle={LINK_BLUE} />
-                <Text font={12} fontWeight="semibold" foregroundStyle="label" lineLimit={1}>
-                  {active.title}
-                </Text>
-                <Spacer />
-                <Text font={11} monospacedDigit foregroundStyle="secondaryLabel">
-                  {active.error ? "失敗" : `${Math.round(active.progress * 100)}%`}
-                </Text>
-              </HStack>
-
-              <ZStack
-                alignment="leading"
-                frame={{ maxWidth: "infinity", height: 4 }}
-                background="rgba(120,120,128,0.24)"
-                clipShape="capsule"
+        {!hasAny ? (
+          <EmptyState
+            icon="arrow.down.circle"
+            title="沒有離線影片"
+            message="在播放頁點「下載」，沒有網路也能看"
+          />
+        ) : (
+          <VStack spacing={12} frame={{ maxWidth: "infinity" }}>
+            {entries.length > 0 ? <ChipBar options={PROVIDER_FILTERS} value={filter} onChange={setFilter} /> : null}
+            {entries.length > 0 && visible.length === 0 ? (
+              <EmptyState icon="tray" title="這個平台沒有下載" />
+            ) : (
+              <LazyVStack spacing={4} frame={{ maxWidth: "infinity" }}>
+                {visible.map((entry: OfflineDownload) => (
+                  <VideoCard
+                    key={`dl-${entry.id}`}
+                    item={{ ...entry.item, duration: entry.duration || entry.item.duration }}
+                    layout="row"
+                    meta={entryMeta(entry)}
+                    actions={[{ label: "刪除離線檔案", icon: "trash", destructive: true, onTap: () => handleRemove(entry) }]}
+                    onSelect={() => handlePlay(entry)}
+                  />
+                ))}
+              </LazyVStack>
+            )}
+            {entries.length > 0 ? (
+              <Text
+                font={type.body}
+                fontWeight="semibold"
+                foregroundStyle={palette.danger}
+                padding={{ vertical: 12 }}
+                frame={{ maxWidth: "infinity" }}
+                contentShape="rect"
+                onTapGesture={handleClearAll}
               >
-                <HStack
-                  spacing={0}
-                  frame={{ width: Math.max(2, Math.round((Device.screen.width - 76) * active.progress)), height: 4 }}
-                  background={active.error ? DANGER_RED : LINK_BLUE}
-                  clipShape="capsule"
-                />
-              </ZStack>
-
-              <Text font={10} foregroundStyle={active.error ? DANGER_RED : "tertiaryLabel"} lineLimit={2}>
-                {active.error
-                  ? active.error
-                  : `${active.qualityLabel} · ${active.totalSegments > 0 ? `${active.downloadedSegments}/${active.totalSegments} 片段` : "準備中…"}`}
-              </Text>
-            </VStack>
-          ) : null}
-
-          {visible.length === 0 && !active ? (
-            <VStack
-              spacing={10}
-              padding={{ vertical: 56 }}
-              frame={{ maxWidth: "infinity" }}
-            >
-              <Image systemName="arrow.down.circle" font={40} foregroundStyle="tertiaryLabel" />
-              <Text font={15} fontWeight="semibold" foregroundStyle="label">
-                尚無離線下載
-              </Text>
-              <Text font={12} foregroundStyle="secondaryLabel" multilineTextAlignment="center">
-                {"在播放頁點「下載」即可把影片存到本機，\n之後沒有網路也能播放。"}
-              </Text>
-            </VStack>
-          ) : (
-            visible.map((entry: OfflineDownload) => renderEntry(entry))
-          )}
-
-          {visible.length > 0 ? (
-            <HStack
-              spacing={6}
-              padding={{ horizontal: 12, vertical: 9 }}
-              frame={{ maxWidth: "infinity" }}
-              background="rgba(255,59,48,0.12)"
-              clipShape="capsule"
-              onTapGesture={handleClearAll}
-            >
-              <Image systemName="trash.fill" font={12} foregroundStyle={DANGER_RED} />
-              <Text font={12} fontWeight="semibold" foregroundStyle={DANGER_RED}>
                 清除全部離線檔案
               </Text>
-              <Spacer />
-            </HStack>
-          ) : null}
-
-          <Spacer frame={{ height: EMPTY_BOTTOM }} />
-        </VStack>
-      </ScrollView>
-    </VStack>
+            ) : null}
+          </VStack>
+        )}
+      </VStack>
+    </ScrollView>
   )
 }

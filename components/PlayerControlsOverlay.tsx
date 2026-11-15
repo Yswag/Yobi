@@ -10,11 +10,12 @@ import {
   Text,
   VStack,
   ZStack,
+  gradient,
   useEffect,
   useRef,
   useState,
 } from "scripting"
-import type { Color, DragGestureDetails, Point, VirtualNode } from "scripting"
+import type { DragGestureDetails, Point, VirtualNode } from "scripting"
 import type { PlayerProgressSnapshot, PlayerStoreSnapshot } from "../state/playerStore"
 import {
   dismissActiveSponsorSegment,
@@ -38,9 +39,8 @@ import {
   SPONSOR_CATEGORY_COLORS,
   SPONSOR_CATEGORY_LABELS,
   formatDuration,
-  providerAccentColor,
-  providerBadgeLabel,
 } from "../utils/format"
+import { palette, type } from "../ui/theme"
 
 export interface PlayerControlsOverlayProps {
   width: number
@@ -53,20 +53,45 @@ const AUTO_HIDE_MS: number = 4000
 const DOUBLE_TAP_MS: number = 230
 const TAP_HINT_MS: number = 650
 const PLAYBACK_RATES: number[] = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2]
+const EDGE_SCRIM_HEIGHT: number = 96
 
-function deliveryLabel(store: PlayerStoreSnapshot): string {
-  const delivery: string | undefined = store.manifest?.delivery
-  if (!delivery) return ""
-  if (delivery === "progressive") return "MP4"
-  return delivery.toUpperCase()
+function GlassCircle(props: { icon: string; size: number; iconSize: number; onTap: () => void }): VirtualNode {
+  return (
+    <Button action={props.onTap} buttonStyle="plain">
+      <VStack
+        frame={{ width: props.size, height: props.size }}
+        contentShape={{ type: "rect", cornerRadius: props.size / 2 }}
+        glassEffect={{
+          glass: UIGlass.clear().interactive(),
+          shape: { type: "rect", cornerRadius: props.size / 2 },
+        }}
+      >
+        <Image
+          systemName={props.icon}
+          font={props.iconSize}
+          fontWeight="semibold"
+          foregroundStyle={palette.onMedia}
+          contentTransition="symbolEffectReplace"
+        />
+      </VStack>
+    </Button>
+  )
 }
 
-function toColor(value: string): Color {
-  return value as Color
+function OverlayCapsule(props: { children: VirtualNode | VirtualNode[] }): VirtualNode {
+  return (
+    <HStack
+      spacing={6}
+      padding={{ horizontal: 12, vertical: 7 }}
+      background={{ style: palette.scrim, shape: "capsule" }}
+    >
+      {props.children}
+    </HStack>
+  )
 }
 
-function capsuleBackground(color: string): { style: Color; shape: "capsule" } {
-  return { style: toColor(color), shape: "capsule" }
+function rateLabel(rate: number): string {
+  return `${rate === Math.floor(rate) ? rate.toFixed(0) : String(rate)}×`
 }
 
 export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): VirtualNode {
@@ -94,8 +119,8 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
   }, [])
 
   const duration: number = progress.duration || 0
-  const trackWidth: number = Math.max(1, props.width - 24)
-  const accentColor: Color = toColor(providerAccentColor(store.currentItem?.provider ?? "yt"))
+  const edgeInset: number = store.isFullscreen ? 24 : 12
+  const trackWidth: number = Math.max(1, props.width - edgeInset * 2)
 
   function clearAutoHide(): void {
     if (hideTimerRef.current !== null) {
@@ -207,7 +232,7 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
       return (
         <Rectangle
           key={seg.uuid}
-          fill={toColor(SPONSOR_CATEGORY_COLORS[seg.category])}
+          fill={SPONSOR_CATEGORY_COLORS[seg.category]}
           frame={{ width: Math.max(2, fullWidth * widthRatio), height: blockHeight }}
           offset={{ x: fullWidth * leftRatio, y: 0 }}
         />
@@ -215,159 +240,132 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
     })
   }
 
-  function renderBoostCapsule(): VirtualNode {
+  function renderScrims(): VirtualNode {
+    const edge: number = Math.min(EDGE_SCRIM_HEIGHT, Math.round(props.height * 0.38))
     return (
-      <HStack spacing={5} padding={{ horizontal: 12, vertical: 6 }} background={capsuleBackground("rgba(0, 0, 0, 0.72)")}>
-        <Image systemName="forward.fill" font={11} foregroundStyle="white" />
-        <Text font={12} fontWeight="semibold" foregroundStyle="white">2.0x 倍速快進中</Text>
-      </HStack>
-    )
-  }
-
-  function renderTapHintCapsule(): VirtualNode | null {
-    if (tapHint === null) return null
-    const forward: boolean = tapHint === "right"
-    return (
-      <HStack spacing={5} padding={{ horizontal: 12, vertical: 6 }} background={capsuleBackground("rgba(0, 0, 0, 0.72)")}>
-        <Image systemName={forward ? "goforward.10" : "gobackward.10"} font={12} foregroundStyle="white" />
-        <Text font={12} fontWeight="semibold" foregroundStyle="white">10 秒</Text>
-      </HStack>
-    )
-  }
-
-  function renderScrubCapsule(): VirtualNode {
-    return (
-      <HStack spacing={4} padding={{ horizontal: 14, vertical: 8 }} background={capsuleBackground("rgba(0, 0, 0, 0.78)")}>
-        <Text font={13} fontWeight="semibold" foregroundStyle="white" monospaced>
-          {`${formatDuration(scrubPreviewSec)} / ${formatDuration(duration)}`}
-        </Text>
-      </HStack>
+      <ZStack frame={{ width: props.width, height: props.height }} allowsHitTesting={false}>
+        <Rectangle fill="rgba(0,0,0,0.22)" frame={{ width: props.width, height: props.height }} />
+        <VStack spacing={0} frame={{ width: props.width, height: props.height }}>
+          <Rectangle
+            fill={gradient("linear", { colors: ["rgba(0,0,0,0.6)", "rgba(0,0,0,0)"], startPoint: "top", endPoint: "bottom" })}
+            frame={{ width: props.width, height: edge }}
+          />
+          <Spacer />
+          <Rectangle
+            fill={gradient("linear", { colors: ["rgba(0,0,0,0)", "rgba(0,0,0,0.7)"], startPoint: "top", endPoint: "bottom" })}
+            frame={{ width: props.width, height: edge }}
+          />
+        </VStack>
+      </ZStack>
     )
   }
 
   function renderControlsLayer(): VirtualNode {
     const title: string = store.currentItem?.title ?? ""
     const provider = store.currentItem?.provider ?? "yt"
-    const modeLabel: string = deliveryLabel(store)
     const sliderMax: number = Math.max(1, progress.duration || 1)
     const sliderValue: number = isScrubbing
       ? scrubPreviewSec
       : Math.min(progress.position, sliderMax)
+    const playing: boolean = store.status === "playing"
+    const loading: boolean = store.status === "loading" || store.status === "buffering"
+    const hasSubtitles: boolean = (store.manifest?.subtitles.length ?? 0) > 0
 
     return (
       <ZStack frame={{ width: props.width, height: props.height }}>
-        <Rectangle
-          fill="rgba(0, 0, 0, 0.45)"
-          frame={{ width: props.width, height: props.height }}
-          allowsHitTesting={false}
-        />
+        {renderScrims()}
         <VStack spacing={0} frame={{ width: props.width, height: props.height }}>
-          <HStack spacing={8} padding={{ horizontal: 12, vertical: 8 }}>
-            <Button action={handleBack} buttonStyle="plain">
-              <Image
-                systemName={store.isFullscreen ? "chevron.left" : "chevron.down"}
-                font={15}
-                foregroundStyle="white"
-                frame={{ width: 30, height: 30 }}
-              />
-            </Button>
-            <HStack spacing={6}>
-              <Text
-                font={10}
-                fontWeight="bold"
-                foregroundStyle="white"
-                padding={{ horizontal: 5, vertical: 2 }}
-                background={{ style: toColor(providerAccentColor(provider)), shape: { type: "rect", cornerRadius: 4 } }}
-              >
-                {providerBadgeLabel(provider)}
-              </Text>
-              {modeLabel.length > 0 ? (
-                <Text
-                  font={10}
-                  fontWeight="bold"
-                  foregroundStyle="white"
-                  padding={{ horizontal: 5, vertical: 2 }}
-                  background={{ style: "rgba(255, 255, 255, 0.22)", shape: { type: "rect", cornerRadius: 4 } }}
-                >
-                  {modeLabel}
-                </Text>
-              ) : null}
-            </HStack>
-            <Text font={13} fontWeight="semibold" foregroundStyle="white" lineLimit={1} layoutPriority={1}>
+          <HStack spacing={10} padding={{ horizontal: edgeInset, top: store.isFullscreen ? 14 : 8 }}>
+            <GlassCircle
+              icon={store.isFullscreen ? "chevron.left" : "chevron.down"}
+              size={34}
+              iconSize={14}
+              onTap={handleBack}
+            />
+            <Text
+              font={store.isFullscreen ? type.cardTitle + 1 : type.body}
+              fontWeight="semibold"
+              foregroundStyle={palette.onMedia}
+              lineLimit={1}
+              layoutPriority={1}
+              shadow={{ color: "rgba(0,0,0,0.4)", radius: 4 }}
+            >
               {title}
             </Text>
             <Spacer />
-            <HStack spacing={12}>
+            <HStack spacing={14} fixedSize>
               {provider === "bili" ? (
                 <Button action={() => toggleDanmaku()} buttonStyle="plain">
                   <Image
-                    systemName={store.danmakuEnabled ? "bubble.left.and.bubble.right.fill" : "bubble.left.and.bubble.right"}
-                    font={16}
-                    foregroundStyle="white"
+                    systemName={store.danmakuEnabled ? "text.bubble.fill" : "text.bubble"}
+                    font={17}
+                    foregroundStyle={palette.onMedia}
                     frame={{ width: 30, height: 30 }}
                   />
                 </Button>
               ) : null}
               {provider === "bili" ? (
                 <Button action={() => props.onOpenDanmakuSheet?.()} buttonStyle="plain">
-                  <Image
-                    systemName="slider.horizontal.3"
-                    font={16}
-                    foregroundStyle="white"
-                    frame={{ width: 30, height: 30 }}
-                  />
+                  <Image systemName="slider.horizontal.3" font={17} foregroundStyle={palette.onMedia} frame={{ width: 30, height: 30 }} />
                 </Button>
               ) : null}
               <Button action={() => props.onOpenQualitySheet?.()} buttonStyle="plain">
                 <Text
-                  font={11}
-                  fontWeight="semibold"
-                  foregroundStyle="white"
-                  padding={{ horizontal: 7, vertical: 3 }}
-                  border={{ style: "rgba(255, 255, 255, 0.45)", width: 1 }}
-                  background={{ style: "rgba(255, 255, 255, 0.12)", shape: { type: "rect", cornerRadius: 6 } }}
+                  font={type.caption}
+                  fontWeight="bold"
+                  foregroundStyle={palette.onMedia}
+                  lineLimit={1}
+                  fixedSize
+                  padding={{ horizontal: 8, vertical: 4 }}
+                  background={{ style: "rgba(255,255,255,0.18)", shape: "capsule" }}
                 >
                   {store.selectedQualityLabel}
                 </Text>
               </Button>
               <Button action={() => void startPiP()} buttonStyle="plain">
-                <Image systemName="pip.enter" font={16} foregroundStyle="white" frame={{ width: 30, height: 30 }} />
+                <Image systemName="pip.enter" font={17} foregroundStyle={palette.onMedia} frame={{ width: 30, height: 30 }} />
               </Button>
             </HStack>
           </HStack>
 
           <Spacer />
 
-          <HStack spacing={40}>
-            <Button action={() => void seekBy(-10)} buttonStyle="plain">
-              <Image systemName="gobackward.10" font={24} foregroundStyle="white" />
-            </Button>
-            <Button action={() => void togglePlayPause()} buttonStyle="plain">
-              <ZStack
-                frame={{ width: 48, height: 48 }}
-                background={{ style: "rgba(0, 0, 0, 0.5)", shape: "circle" }}
-              >
-                <Image
-                  systemName={store.status === "playing" ? "pause.fill" : "play.fill"}
-                  font={26}
-                  foregroundStyle="white"
-                />
-              </ZStack>
-            </Button>
-            <Button action={() => void seekBy(10)} buttonStyle="plain">
-              <Image systemName="goforward.10" font={24} foregroundStyle="white" />
-            </Button>
+          <HStack spacing={store.isFullscreen ? 56 : 36}>
+            <GlassCircle icon="gobackward.10" size={48} iconSize={20} onTap={() => void seekBy(-10)} />
+            {loading ? (
+              <VStack frame={{ width: 68, height: 68 }}>
+                <ProgressView tint="white" controlSize="large" />
+              </VStack>
+            ) : (
+              <GlassCircle icon={playing ? "pause.fill" : "play.fill"} size={68} iconSize={28} onTap={() => void togglePlayPause()} />
+            )}
+            <GlassCircle icon="goforward.10" size={48} iconSize={20} onTap={() => void seekBy(10)} />
           </HStack>
 
           <Spacer />
 
-          <VStack spacing={4} padding={{ horizontal: 12, bottom: 8 }}>
-            <ZStack alignment="leading" frame={{ width: trackWidth, height: 18 }}>
+          <VStack spacing={2} padding={{ horizontal: edgeInset, bottom: store.isFullscreen ? 16 : 6 }}>
+            <HStack spacing={6} frame={{ width: trackWidth }}>
+              <Text font={type.caption} fontWeight="semibold" monospacedDigit foregroundStyle={palette.onMedia}>
+                {formatDuration(isScrubbing ? scrubPreviewSec : progress.position)}
+              </Text>
+              {progress.activeChapter ? (
+                <Text font={type.caption} foregroundStyle={palette.onMediaDim} lineLimit={1}>
+                  {`· ${progress.activeChapter.title}`}
+                </Text>
+              ) : null}
+              <Spacer />
+              <Text font={type.caption} fontWeight="semibold" monospacedDigit foregroundStyle={palette.onMediaDim}>
+                {formatDuration(progress.duration)}
+              </Text>
+            </HStack>
+            <ZStack alignment="leading" frame={{ width: trackWidth, height: 22 }}>
               <Slider
                 min={0}
                 max={sliderMax}
                 step={0.5}
                 value={sliderValue}
+                tint={palette.brand}
                 onChanged={handleSliderChanged}
                 onEditingChanged={(editing: boolean) => {
                   if (!editing) setIsScrubbing(false)
@@ -375,41 +373,37 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
               />
               <ZStack
                 alignment="leading"
-                frame={{ width: trackWidth, height: 4 }}
+                frame={{ width: trackWidth, height: 3 }}
                 offset={{ x: 0, y: 14 }}
                 allowsHitTesting={false}
               >
-                {renderSponsorBlocks(trackWidth, 4)}
+                {renderSponsorBlocks(trackWidth, 3)}
               </ZStack>
             </ZStack>
-            <HStack spacing={6}>
-              <Text font={11} foregroundStyle="white" monospaced>
-                {`${formatDuration(progress.position)} / ${formatDuration(progress.duration)}`}
-              </Text>
-              {progress.activeChapter ? (
-                <Text font={11} foregroundStyle="rgba(255, 255, 255, 0.85)" lineLimit={1}>
-                  {` • ${progress.activeChapter.title}`}
-                </Text>
-              ) : null}
+            <HStack spacing={16} frame={{ width: trackWidth }}>
               <Spacer />
-              {(store.manifest?.subtitles.length ?? 0) > 0 ? (
+              {hasSubtitles ? (
                 <Menu
                   label={
-                    <HStack spacing={3}>
+                    <HStack spacing={0}>
                       <Image
                         systemName={store.selectedSubtitleId ? "captions.bubble.fill" : "captions.bubble"}
-                        font={12}
-                        foregroundStyle="white"
+                        font={16}
+                        foregroundStyle={palette.onMedia}
                       />
-                      <Text font={11} foregroundStyle="white">字幕</Text>
                     </HStack>
                   }
                 >
-                  <Button title={store.selectedSubtitleId ? "關閉字幕" : "✓ 關閉字幕"} action={() => void selectSubtitle(null)} />
+                  <Button
+                    title="關閉字幕"
+                    systemImage={store.selectedSubtitleId ? undefined : "checkmark"}
+                    action={() => void selectSubtitle(null)}
+                  />
                   {(store.manifest?.subtitles ?? []).map((track: SubtitleTrackInfo) => (
                     <Button
                       key={track.id}
-                      title={`${store.selectedSubtitleId === track.id ? "✓ " : ""}${track.label}`}
+                      title={track.label}
+                      systemImage={store.selectedSubtitleId === track.id ? "checkmark" : undefined}
                       action={() => void selectSubtitle(track.id)}
                     />
                   ))}
@@ -417,15 +411,18 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
               ) : null}
               <Menu
                 label={
-                  <HStack spacing={2}>
-                    <Text font={11} foregroundStyle="white">{`${store.playbackRate}x`}</Text>
+                  <HStack spacing={0}>
+                    <Text font={type.meta + 1} fontWeight="bold" monospacedDigit foregroundStyle={palette.onMedia}>
+                      {rateLabel(store.playbackRate)}
+                    </Text>
                   </HStack>
                 }
               >
                 {PLAYBACK_RATES.map((rate: number) => (
                   <Button
                     key={String(rate)}
-                    title={`${store.playbackRate === rate ? "✓ " : ""}${rate.toFixed(rate === Math.floor(rate) ? 1 : 2)}x`}
+                    title={rateLabel(rate)}
+                    systemImage={store.playbackRate === rate ? "checkmark" : undefined}
                     action={() => setPlaybackRate(rate)}
                   />
                 ))}
@@ -433,8 +430,8 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
               <Button action={() => toggleFullscreen()} buttonStyle="plain">
                 <Image
                   systemName={store.isFullscreen ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right"}
-                  font={15}
-                  foregroundStyle="white"
+                  font={16}
+                  foregroundStyle={palette.onMedia}
                   frame={{ width: 28, height: 28 }}
                 />
               </Button>
@@ -454,7 +451,12 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
       <ZStack frame={{ width: props.width, height: props.height }}>
         {store.isBoosting2x ? (
           <VStack spacing={0} frame={{ width: props.width, height: props.height }}>
-            <HStack spacing={0} padding={{ top: 12 }}>{renderBoostCapsule()}</HStack>
+            <HStack spacing={0} padding={{ top: 14 }}>
+              <OverlayCapsule>
+                <Image systemName="forward.fill" font={11} foregroundStyle={palette.onMedia} />
+                <Text font={type.meta} fontWeight="semibold" foregroundStyle={palette.onMedia}>2× 快轉</Text>
+              </OverlayCapsule>
+            </HStack>
             <Spacer />
           </VStack>
         ) : null}
@@ -464,39 +466,64 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
             frame={{ width: props.width, height: props.height }}
             alignment={tapHint === "left" ? "leading" : "trailing"}
           >
-            <HStack spacing={0} padding={{ horizontal: 18 }}>{renderTapHintCapsule()}</HStack>
+            <HStack spacing={0} padding={{ horizontal: 24 }}>
+              <OverlayCapsule>
+                <Image
+                  systemName={tapHint === "right" ? "goforward.10" : "gobackward.10"}
+                  font={14}
+                  fontWeight="semibold"
+                  foregroundStyle={palette.onMedia}
+                />
+              </OverlayCapsule>
+            </HStack>
           </ZStack>
         ) : null}
 
         {isScrubbing ? (
           <ZStack frame={{ width: props.width, height: props.height }}>
-            {renderScrubCapsule()}
+            <OverlayCapsule>
+              <Text font={type.cardTitle} fontWeight="semibold" monospacedDigit foregroundStyle={palette.onMedia}>
+                {formatDuration(scrubPreviewSec)}
+              </Text>
+              <Text font={type.cardTitle} monospacedDigit foregroundStyle={palette.onMediaDim}>
+                {`/ ${formatDuration(duration)}`}
+              </Text>
+            </OverlayCapsule>
           </ZStack>
         ) : null}
 
-        {loading ? (
+        {loading && !controlsVisible ? (
           <ZStack frame={{ width: props.width, height: props.height }}>
-            <VStack spacing={8}>
-              <ProgressView tint="white" />
-              <Text font={11} foregroundStyle="rgba(255, 255, 255, 0.85)">
-                {store.status === "buffering" ? "緩衝中…" : "載入中…"}
-              </Text>
-            </VStack>
+            <ProgressView tint="white" controlSize="large" />
           </ZStack>
         ) : null}
 
         {store.status === "error" ? (
           <ZStack
             frame={{ width: props.width, height: props.height }}
-            background="rgba(0, 0, 0, 0.58)"
+            background="rgba(0,0,0,0.7)"
           >
-            <VStack spacing={10}>
-              <Text font={12} foregroundStyle="rgba(255, 255, 255, 0.9)" multilineTextAlignment="center" padding={{ horizontal: 28 }}>
+            <VStack spacing={14}>
+              <Image systemName="exclamationmark.triangle.fill" font={26} foregroundStyle={palette.onMediaDim} />
+              <Text
+                font={type.body}
+                foregroundStyle={palette.onMedia}
+                multilineTextAlignment="center"
+                padding={{ horizontal: 32 }}
+              >
                 {store.errorText ?? "播放發生錯誤"}
               </Text>
-              <Button action={handleRetry} buttonStyle="borderedProminent" controlSize="small" tint="white">
-                <Text font={12} fontWeight="semibold">重試</Text>
-              </Button>
+              <Text
+                font={type.body}
+                fontWeight="semibold"
+                foregroundStyle="black"
+                padding={{ horizontal: 20, vertical: 9 }}
+                background={{ style: "white", shape: "capsule" }}
+                contentShape="capsule"
+                onTapGesture={handleRetry}
+              >
+                重試
+              </Text>
             </VStack>
           </ZStack>
         ) : null}
@@ -506,15 +533,11 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
             frame={{ width: props.width, height: props.height }}
             alignment="bottomLeading"
           >
-            <HStack spacing={6} padding={{ leading: 14, bottom: 42 }}>
-              <HStack
-                spacing={6}
-                padding={{ horizontal: 10, vertical: 5 }}
-                background={capsuleBackground("rgba(0, 0, 0, 0.72)")}
-              >
-                <ZStack frame={{ width: 6, height: 6 }} background={{ style: "rgba(0, 212, 0, 1)", shape: "circle" }} />
-                <Text font={11} foregroundStyle="white" lineLimit={1}>{store.skippedToast}</Text>
-              </HStack>
+            <HStack spacing={0} padding={{ leading: edgeInset, bottom: 56 }}>
+              <OverlayCapsule>
+                <Image systemName="forward.end.fill" font={11} foregroundStyle={palette.success} />
+                <Text font={type.meta} foregroundStyle={palette.onMedia} lineLimit={1}>{store.skippedToast}</Text>
+              </OverlayCapsule>
             </HStack>
           </ZStack>
         ) : null}
@@ -524,29 +547,31 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
             frame={{ width: props.width, height: props.height }}
             alignment="bottomTrailing"
           >
-            <HStack spacing={6} padding={{ trailing: 14, bottom: 42 }}>
+            <HStack spacing={6} padding={{ trailing: edgeInset, bottom: 56 }}>
               <Button action={() => skipActiveSponsorSegment()} buttonStyle="plain">
                 <HStack
-                  spacing={5}
-                  padding={{ horizontal: 10, vertical: 6 }}
-                  background={capsuleBackground("rgba(0, 0, 0, 0.78)")}
+                  spacing={6}
+                  padding={{ horizontal: 14, vertical: 8 }}
+                  background={{ style: "white", shape: "capsule" }}
                 >
-                  <ZStack
-                    frame={{ width: 6, height: 6 }}
-                    background={{ style: toColor(SPONSOR_CATEGORY_COLORS[prompt.category]), shape: "circle" }}
+                  <Rectangle
+                    fill={SPONSOR_CATEGORY_COLORS[prompt.category]}
+                    frame={{ width: 7, height: 7 }}
+                    clipShape={{ type: "rect", cornerRadius: 3.5 }}
                   />
-                  <Text font={11} fontWeight="semibold" foregroundStyle="white">
-                    {`跳過${SPONSOR_CATEGORY_LABELS[prompt.category] ?? "片段"} (${promptSeconds}s)`}
+                  <Text font={type.meta + 1} fontWeight="semibold" foregroundStyle="black">
+                    {`跳過${SPONSOR_CATEGORY_LABELS[prompt.category] ?? "片段"}`}
                   </Text>
+                  <Text font={type.meta} monospacedDigit foregroundStyle="rgba(0,0,0,0.5)">{`${promptSeconds}s`}</Text>
                 </HStack>
               </Button>
               <Button action={() => dismissActiveSponsorSegment()} buttonStyle="plain">
-                <ZStack
-                  frame={{ width: 22, height: 22 }}
-                  background={{ style: "rgba(0, 0, 0, 0.78)", shape: "circle" }}
+                <VStack
+                  frame={{ width: 28, height: 28 }}
+                  background={{ style: palette.scrim, shape: { type: "rect", cornerRadius: 14 } }}
                 >
-                  <Image systemName="xmark" font={10} foregroundStyle="rgba(255, 255, 255, 0.85)" />
-                </ZStack>
+                  <Image systemName="xmark" font={11} fontWeight="bold" foregroundStyle={palette.onMedia} />
+                </VStack>
               </Button>
             </HStack>
           </ZStack>
@@ -563,9 +588,9 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
         <ZStack
           alignment="leading"
           frame={{ width: props.width, height: 2.5 }}
-          background="rgba(255, 255, 255, 0.2)"
+          background="rgba(255,255,255,0.2)"
         >
-          <Rectangle fill={accentColor} frame={{ width: props.width * ratio, height: 2.5 }} />
+          <Rectangle fill={palette.brand} frame={{ width: props.width * ratio, height: 2.5 }} />
           {renderSponsorBlocks(props.width, 2.5)}
         </ZStack>
       </ZStack>
@@ -575,7 +600,7 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
   return (
     <ZStack frame={{ width: props.width, height: props.height }}>
       <Rectangle
-        fill="rgba(0, 0, 0, 0.001)"
+        fill="rgba(0,0,0,0.001)"
         frame={{ width: props.width, height: props.height }}
         onTapGesture={{ count: 1, coordinateSpace: "local", perform: handleTap }}
         onLongPressGesture={{

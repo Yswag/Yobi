@@ -1,18 +1,20 @@
 import {
+  Button,
   HStack,
   Image,
+  LazyVStack,
+  Menu,
+  Picker,
   ScrollView,
-  Spacer,
   Text,
-  TextField,
   VStack,
-  ZStack,
   useEffect,
   useState,
 } from "scripting"
-import type { Color, VirtualNode } from "scripting"
+import type { VirtualNode } from "scripting"
 import type { CustomPlaylist, Provider, UnifiedVideoItem, WatchHistoryEntry } from "../types"
 import { VideoCard } from "../components/VideoCard"
+import type { CardAction } from "../components/VideoCard"
 import {
   clearWatchHistory,
   createPlaylist,
@@ -24,13 +26,19 @@ import {
   subscribeStorageChanges,
   toggleWatchLater,
 } from "../services"
-import {
-  formatDuration,
-  providerAccentColor,
-  providerBadgeLabel,
-  providerSoftBgColor,
-} from "../utils/format"
+import { formatDuration } from "../utils/format"
 import { openVideo } from "../state/playerStore"
+import {
+  ChipBar,
+  EmptyState,
+  GlassIconButton,
+  PageHeader,
+  PillButton,
+  PROVIDER_FILTERS,
+  SearchField,
+  Thumbnail,
+} from "../ui/primitives"
+import { palette, radius, space, type } from "../ui/theme"
 
 export interface LibraryViewProps {
   onOpenChannel?: (provider: Provider, authorId: string, authorName: string, avatarUrl?: string) => void
@@ -40,21 +48,7 @@ export interface LibraryViewProps {
 type LibraryFilter = "all" | Provider
 type LibraryTab = "history" | "watchLater" | "playlists"
 
-const LINK_BLUE: Color = "rgba(10,132,255,1)"
-const DANGER_RED: Color = "rgba(255,59,48,1)"
-const ROW_TEXT_INSET: number = 170
-const PLAY_SOFT_BG: Color = "rgba(10,132,255,0.16)"
-
-const FILTERS: { label: string; value: LibraryFilter }[] = [
-  { label: "全部", value: "all" },
-  { label: providerBadgeLabel("yt"), value: "yt" },
-  { label: providerBadgeLabel("bili"), value: "bili" },
-]
-
-function filterColor(value: LibraryFilter): Color {
-  if (value === "all") return LINK_BLUE
-  return providerAccentColor(value)
-}
+const PLAYLIST_COVER_WIDTH: number = 120
 
 function shuffle<T>(list: T[]): T[] {
   const copy: T[] = list.slice()
@@ -97,245 +91,71 @@ function entryKey(entry: WatchHistoryEntry): string {
   return `${entry.item.id}-${entry.cid ?? entry.item.cid ?? 0}-${entry.page ?? 0}`
 }
 
-// ─── Small building blocks ──────────────────────────────────────────────────
+function historyMeta(entry: WatchHistoryEntry): string {
+  const parts: string[] = []
+  if (entry.item.provider === "bili" && entry.page !== undefined && entry.page > 1) parts.push(`P${entry.page}`)
+  parts.push(`看到 ${formatDuration(entry.position)}`)
+  const when: string = relativeTime(entry.watchedAt)
+  if (when) parts.push(when)
+  return parts.join(" · ")
+}
 
-function FilterChip(props: { label: string; active: boolean; value: LibraryFilter; onTap: () => void }): VirtualNode {
-  const accent: Color = filterColor(props.value)
+function PlayActions(props: { onPlay: () => void; onShuffle?: () => void }): VirtualNode {
   return (
-    <HStack
-      spacing={0}
-      padding={{ horizontal: 10, vertical: 5 }}
-      background={props.active ? accent : "tertiarySystemFill"}
-      clipShape="capsule"
-      onTapGesture={props.onTap}
-    >
-      <Text
-        font={11}
-        fontWeight={props.active ? "semibold" : "medium"}
-        foregroundStyle={props.active ? "white" : "secondaryLabel"}
-        lineLimit={1}
-      >
-        {props.label}
-      </Text>
+    <HStack spacing={10} padding={{ horizontal: space.page }} frame={{ maxWidth: "infinity" }}>
+      <PillButton label="全部播放" icon="play.fill" prominent onTap={props.onPlay} />
+      {props.onShuffle ? <PillButton label="隨機播放" icon="shuffle" onTap={props.onShuffle} /> : null}
     </HStack>
   )
 }
 
-function CircleIcon(props: {
-  icon: string
-  size: number
-  tint?: Color
-  background?: Color
-  onTap: () => void
-}): VirtualNode {
-  return (
-    <VStack
-      frame={{ width: props.size, height: props.size }}
-      background={props.background ?? "tertiarySystemFill"}
-      clipShape="circle"
-      onTapGesture={props.onTap}
-    >
-      <Image
-        systemName={props.icon}
-        font={Math.round(props.size * 0.4)}
-        foregroundStyle={props.tint ?? "label"}
-      />
-    </VStack>
-  )
-}
-
-function PillButton(props: {
-  icon: string
-  label: string
-  filled?: boolean
-  onTap: () => void
-}): VirtualNode {
-  const foreground: Color = props.filled ? "white" : "label"
-  return (
-    <HStack
-      spacing={5}
-      padding={{ horizontal: 11, vertical: 7 }}
-      background={props.filled ? LINK_BLUE : "tertiarySystemFill"}
-      clipShape="capsule"
-      onTapGesture={props.onTap}
-    >
-      <Image systemName={props.icon} font={11} foregroundStyle={props.filled ? "white" : "secondaryLabel"} />
-      <Text font={12} fontWeight="semibold" foregroundStyle={foreground} lineLimit={1}>
-        {props.label}
-      </Text>
-    </HStack>
-  )
-}
-
-function TabChip(props: {
-  label: string
-  count: number
-  active: boolean
-  onTap: () => void
-}): VirtualNode {
-  const tint: Color = props.active ? LINK_BLUE : "secondaryLabel"
-  return (
-    <HStack
-      spacing={5}
-      padding={{ horizontal: 8, vertical: 8 }}
-      frame={{ maxWidth: "infinity" }}
-      background={props.active ? PLAY_SOFT_BG : "tertiarySystemFill"}
-      clipShape="capsule"
-      onTapGesture={props.onTap}
-    >
-      <Text font={12} fontWeight={props.active ? "semibold" : "medium"} foregroundStyle={tint} lineLimit={1}>
-        {props.label}
-      </Text>
-      <Text
-        font={10}
-        fontWeight="bold"
-        monospacedDigit
-        foregroundStyle={props.active ? LINK_BLUE : "tertiaryLabel"}
-        padding={{ horizontal: 4, vertical: 1 }}
-        background={props.active ? "rgba(10,132,255,0.18)" : "secondarySystemFill"}
-        clipShape="capsule"
-      >
-        {props.count}
-      </Text>
-    </HStack>
-  )
-}
-
-function EmptyState(props: { icon: string; title: string; hint?: string }): VirtualNode {
-  return (
-    <VStack spacing={8} frame={{ maxWidth: "infinity", minHeight: 220 }} padding={{ horizontal: 32 }}>
-      <Image systemName={props.icon} font={32} foregroundStyle="tertiaryLabel" />
-      <Text font={14} fontWeight="medium" foregroundStyle="secondaryLabel" multilineTextAlignment="center">
-        {props.title}
-      </Text>
-      {props.hint
-        ? <Text font={12} foregroundStyle="tertiaryLabel" multilineTextAlignment="center">{props.hint}</Text>
-        : null}
-    </VStack>
-  )
-}
-
-function RowAction(props: { icon: string; label: string; destructive?: boolean; onTap: () => void }): VirtualNode {
-  const tint: Color = props.destructive ? DANGER_RED : "secondaryLabel"
-  return (
-    <HStack
-      spacing={4}
-      padding={{ horizontal: 9, vertical: 4 }}
-      background={props.destructive ? "rgba(255,59,48,0.14)" : "tertiarySystemFill"}
-      clipShape="capsule"
-      onTapGesture={props.onTap}
-    >
-      <Image systemName={props.icon} font={10} foregroundStyle={tint} />
-      <Text font={11} fontWeight="medium" foregroundStyle={tint} lineLimit={1}>{props.label}</Text>
-    </HStack>
-  )
-}
-
-function PlaylistCover(props: { playlist: CustomPlaylist; size: number }): VirtualNode {
-  const coverUrl: string = props.playlist.items[0]?.thumbnailUrl ?? ""
-  return (
-    <ZStack
-      frame={{ width: props.size, height: props.size }}
-      background={PLAY_SOFT_BG}
-      clipShape={{ type: "rect", cornerRadius: 10 }}
-      clipped
-    >
-      {coverUrl
-        ? <Image imageUrl={coverUrl} resizable scaleToFill frame={{ width: props.size, height: props.size }} />
-        : <Image systemName="music.note.list" font={Math.round(props.size * 0.36)} foregroundStyle={LINK_BLUE} />}
-    </ZStack>
-  )
-}
-
-// ─── Rows ───────────────────────────────────────────────────────────────────
-
-function HistoryRow(props: {
-  entry: WatchHistoryEntry
-  onPlay: () => void
-  onOpenChannel?: (provider: Provider, authorId: string, authorName: string, avatarUrl?: string) => void
-}): VirtualNode {
-  const entry: WatchHistoryEntry = props.entry
-  const total: number = entry.duration || entry.item.duration || 0
-  const pageLabel: string | null =
-    entry.item.provider === "bili" && entry.page !== undefined && entry.page > 1 ? `P${entry.page}` : null
-
-  return (
-    <VStack spacing={0} frame={{ maxWidth: "infinity" }}>
-      <VideoCard
-        item={entry.item}
-        layout="row"
-        progressSeconds={entry.position}
-        onSelect={props.onPlay}
-        onOpenChannel={props.onOpenChannel}
-      />
-      <HStack
-        spacing={6}
-        frame={{ maxWidth: "infinity" }}
-        padding={{ leading: ROW_TEXT_INSET, trailing: 14, bottom: 10 }}
-      >
-        <Image systemName="clock" font={10} foregroundStyle="tertiaryLabel" />
-        <Text font={11} foregroundStyle="tertiaryLabel" lineLimit={1}>
-          {total > 0
-            ? `已看 ${formatDuration(entry.position)} / ${formatDuration(total)}`
-            : `已看 ${formatDuration(entry.position)}`}
-        </Text>
-        {pageLabel
-          ? (
-            <Text
-              font={9}
-              fontWeight="bold"
-              foregroundStyle={entry.item.provider === "bili" ? providerAccentColor("bili") : LINK_BLUE}
-              padding={{ horizontal: 4, vertical: 1 }}
-              background={providerSoftBgColor(entry.item.provider)}
-              clipShape={{ type: "rect", cornerRadius: 3 }}
-            >
-              {pageLabel}
-            </Text>
-          )
-          : null}
-        <Spacer />
-        <Text font={10} foregroundStyle="tertiaryLabel" lineLimit={1}>{relativeTime(entry.watchedAt)}</Text>
-      </HStack>
-    </VStack>
-  )
-}
-
-function PlaylistCard(props: {
+function PlaylistRow(props: {
   playlist: CustomPlaylist
   onOpen: () => void
   onPlay: () => void
+  onShuffle: () => void
   onDelete: () => void
 }): VirtualNode {
   const playlist: CustomPlaylist = props.playlist
-  const meta: string = `${playlist.items.length} 部影片 • ${relativeTime(playlist.updatedAt)}`
+  const coverUrl: string | undefined = playlist.items[0]?.thumbnailUrl || undefined
 
   return (
-    <HStack
-      spacing={8}
-      padding={10}
-      frame={{ maxWidth: "infinity" }}
-      background="tertiarySystemFill"
-      clipShape={{ type: "rect", cornerRadius: 14 }}
-    >
-      <HStack spacing={10} frame={{ maxWidth: "infinity" }} onTapGesture={props.onOpen}>
-        <PlaylistCover playlist={playlist} size={62} />
-        <VStack alignment="leading" spacing={3} frame={{ maxWidth: "infinity" }}>
-          <Text font={14} fontWeight="semibold" foregroundStyle="label" lineLimit={1}>{playlist.name}</Text>
-          <Text font={11} foregroundStyle="secondaryLabel" lineLimit={1}>{meta}</Text>
-          {playlist.description
-            ? <Text font={11} foregroundStyle="tertiaryLabel" lineLimit={1}>{playlist.description}</Text>
-            : null}
+    <HStack spacing={12} padding={{ horizontal: space.page, vertical: 8 }} frame={{ maxWidth: "infinity" }}>
+      <HStack spacing={12} frame={{ maxWidth: "infinity", alignment: "leading" }} contentShape="rect" onTapGesture={props.onOpen}>
+        {coverUrl ? (
+          <Thumbnail url={coverUrl} width={PLAYLIST_COVER_WIDTH} cornerRadius={radius.sm} />
+        ) : (
+          <VStack
+            frame={{ width: PLAYLIST_COVER_WIDTH, height: Math.round(PLAYLIST_COVER_WIDTH * 9 / 16) }}
+            background={{ style: palette.brandSoft, shape: { type: "rect", cornerRadius: radius.sm, style: "continuous" } }}
+          >
+            <Image systemName="music.note.list" font={22} foregroundStyle={palette.brand} />
+          </VStack>
+        )}
+        <VStack alignment="leading" spacing={3} frame={{ maxWidth: "infinity", alignment: "leading" }}>
+          <Text font={type.cardTitle} fontWeight="semibold" foregroundStyle="label" lineLimit={1}>{playlist.name}</Text>
+          <Text font={type.meta} foregroundStyle="secondaryLabel" lineLimit={1}>
+            {`${playlist.items.length} 部影片 · ${relativeTime(playlist.updatedAt)}`}
+          </Text>
+          {playlist.description ? (
+            <Text font={type.caption} foregroundStyle="tertiaryLabel" lineLimit={1}>{playlist.description}</Text>
+          ) : null}
         </VStack>
       </HStack>
-      <HStack spacing={6}>
-        <CircleIcon icon="play.fill" size={30} tint={LINK_BLUE} background={PLAY_SOFT_BG} onTap={props.onPlay} />
-        <CircleIcon icon="trash" size={30} tint={DANGER_RED} background="rgba(255,59,48,0.14)" onTap={props.onDelete} />
-      </HStack>
+      <Menu
+        label={
+          <HStack spacing={0} frame={{ width: 28, height: 28 }} contentShape="rect">
+            <Image systemName="ellipsis" font={15} fontWeight="semibold" foregroundStyle="secondaryLabel" />
+          </HStack>
+        }
+      >
+        <Button title="全部播放" systemImage="play.fill" action={props.onPlay} />
+        <Button title="隨機播放" systemImage="shuffle" action={props.onShuffle} />
+        <Button title="刪除清單" systemImage="trash" role="destructive" action={props.onDelete} />
+      </Menu>
     </HStack>
   )
 }
-
-// ─── View ───────────────────────────────────────────────────────────────────
 
 export function LibraryView(props: LibraryViewProps): VirtualNode {
   const [history, setHistory] = useState<WatchHistoryEntry[]>(getWatchHistory())
@@ -358,21 +178,17 @@ export function LibraryView(props: LibraryViewProps): VirtualNode {
   }, [])
 
   const keyword: string = query.trim().toLowerCase()
+  const byProvider = (item: UnifiedVideoItem): boolean => filter === "all" || item.provider === filter
 
-  const filteredHistory: WatchHistoryEntry[] = history.filter((entry: WatchHistoryEntry): boolean => {
-    if (filter !== "all" && entry.item.provider !== filter) return false
-    return matchesKeyword(entry.item, keyword)
-  })
-  const filteredWatchLater: UnifiedVideoItem[] = watchLater.filter(
-    (item: UnifiedVideoItem): boolean => filter === "all" || item.provider === filter,
+  const filteredHistory: WatchHistoryEntry[] = history.filter(
+    (entry: WatchHistoryEntry): boolean => byProvider(entry.item) && matchesKeyword(entry.item, keyword),
   )
+  const filteredWatchLater: UnifiedVideoItem[] = watchLater.filter(byProvider)
 
   const selectedPlaylist: CustomPlaylist | null = selectedPlaylistId
     ? playlists.find((playlist: CustomPlaylist): boolean => playlist.id === selectedPlaylistId) ?? null
     : null
-  const playlistItems: UnifiedVideoItem[] = selectedPlaylist
-    ? selectedPlaylist.items.filter((item: UnifiedVideoItem): boolean => filter === "all" || item.provider === filter)
-    : []
+  const playlistItems: UnifiedVideoItem[] = selectedPlaylist ? selectedPlaylist.items.filter(byProvider) : []
 
   const openEntry = (entry: WatchHistoryEntry, queue: UnifiedVideoItem[]): void => {
     void openVideo(entry.item, {
@@ -381,12 +197,6 @@ export function LibraryView(props: LibraryViewProps): VirtualNode {
       startSeconds: entry.position,
       queue,
     })
-  }
-
-  const playHistoryFrom = (entries: WatchHistoryEntry[]): void => {
-    const first: WatchHistoryEntry | undefined = entries[0]
-    if (!first) return
-    openEntry(first, entries.map((entry: WatchHistoryEntry): UnifiedVideoItem => entry.item))
   }
 
   const playQueue = (items: UnifiedVideoItem[], random: boolean): void => {
@@ -438,332 +248,214 @@ export function LibraryView(props: LibraryViewProps): VirtualNode {
     deletePlaylist(playlist.id)
   }
 
-  // ─── Header + tabs ────────────────────────────────────────────────────────
-
-  const header: VirtualNode = (
-    <VStack spacing={10} padding={{ horizontal: 14, top: 10, bottom: 8 }} frame={{ maxWidth: "infinity" }}>
-      <HStack spacing={6} frame={{ maxWidth: "infinity" }}>
-        <Text font="title2" fontWeight="bold" foregroundStyle="label">媒體庫</Text>
-        <Spacer />
-        {FILTERS.map((item: { label: string; value: LibraryFilter }) => (
-          <FilterChip
-            key={item.value}
-            label={item.label}
-            value={item.value}
-            active={filter === item.value}
-            onTap={() => setFilter(item.value)}
-          />
-        ))}
-        {props.onOpenSettings
-          ? <CircleIcon icon="gearshape.fill" size={30} onTap={props.onOpenSettings} />
-          : null}
-      </HStack>
-      <HStack spacing={6} frame={{ maxWidth: "infinity" }}>
-        <TabChip
-          label="觀看歷史"
-          count={history.length}
-          active={tab === "history"}
-          onTap={() => setTab("history")}
-        />
-        <TabChip
-          label="稍後觀看"
-          count={watchLater.length}
-          active={tab === "watchLater"}
-          onTap={() => setTab("watchLater")}
-        />
-        <TabChip
-          label="自訂清單"
-          count={playlists.length}
-          active={tab === "playlists"}
-          onTap={() => setTab("playlists")}
-        />
-      </HStack>
-    </VStack>
-  )
-
-  // ─── Tab content: history ─────────────────────────────────────────────────
-
-  const searchBar: VirtualNode = (
-    <HStack
-      spacing={6}
-      padding={{ horizontal: 10, vertical: 8 }}
-      background="tertiarySystemFill"
-      clipShape={{ type: "rect", cornerRadius: 10 }}
-      frame={{ maxWidth: "infinity" }}
-    >
-      <Image systemName="magnifyingglass" font={13} foregroundStyle="secondaryLabel" />
-      <TextField
-        title="搜尋觀看紀錄"
-        value={query}
-        onChanged={setQuery}
-        prompt="搜尋觀看紀錄…"
-        font={13}
-        submitLabel="search"
-        frame={{ maxWidth: "infinity" }}
-      />
-      {query.length > 0
-        ? (
-          <HStack spacing={0} onTapGesture={() => setQuery("")}>
-            <Image systemName="xmark.circle.fill" font={14} foregroundStyle="tertiaryLabel" />
-          </HStack>
-        )
-        : null}
-    </HStack>
-  )
-
-  const historyContent: VirtualNode = (
-    <VStack spacing={10} frame={{ maxWidth: "infinity" }} padding={{ horizontal: 14 }}>
-      {searchBar}
-      <HStack spacing={8} frame={{ maxWidth: "infinity" }}>
-        <Text font={11} foregroundStyle="secondaryLabel">
-          {`${filteredHistory.length} 部影片`}
-        </Text>
-        <Spacer />
-        <PillButton
-          icon="play.fill"
-          label="全部播放"
-          filled
-          onTap={() => playHistoryFrom(filteredHistory)}
-        />
-        <PillButton
-          icon="trash"
-          label="清空紀錄"
-          onTap={() => {
-            void confirmClearHistory()
+  const videoList = (items: UnifiedVideoItem[], actionsFor: (item: UnifiedVideoItem) => CardAction[]): VirtualNode => (
+    <LazyVStack spacing={4} frame={{ maxWidth: "infinity" }}>
+      {items.map((item: UnifiedVideoItem) => (
+        <VideoCard
+          key={item.id}
+          item={item}
+          layout="row"
+          actions={actionsFor(item)}
+          onSelect={() => {
+            void openVideo(item, { queue: items })
           }}
+          onOpenChannel={props.onOpenChannel}
         />
-      </HStack>
-      {filteredHistory.length === 0
-        ? (
+      ))}
+    </LazyVStack>
+  )
+
+  // Playlist detail replaces the whole page, with its own back affordance.
+  if (selectedPlaylist) {
+    return (
+      <ScrollView axes="vertical" scrollIndicator="hidden" frame={{ maxWidth: "infinity", maxHeight: "infinity" }}>
+        <VStack spacing={16} frame={{ maxWidth: "infinity" }} padding={{ top: 6, bottom: 16 }}>
+          <HStack padding={{ horizontal: space.page }} frame={{ maxWidth: "infinity", alignment: "leading" }}>
+            <GlassIconButton icon="chevron.left" onTap={() => setSelectedPlaylistId(null)} />
+          </HStack>
+          <VStack alignment="leading" spacing={6} padding={{ horizontal: space.page }} frame={{ maxWidth: "infinity", alignment: "leading" }}>
+            <Text font={type.largeTitle - 4} fontWeight="heavy" foregroundStyle="label" lineLimit={2}>
+              {selectedPlaylist.name}
+            </Text>
+            <Text font={type.meta + 1} foregroundStyle="secondaryLabel" lineLimit={1}>
+              {`${playlistItems.length} 部影片 · ${relativeTime(selectedPlaylist.updatedAt)}`}
+            </Text>
+            {selectedPlaylist.description ? (
+              <Text font={type.body} foregroundStyle="secondaryLabel" lineLimit={3}>{selectedPlaylist.description}</Text>
+            ) : null}
+          </VStack>
+          {playlistItems.length > 0 ? (
+            <PlayActions
+              onPlay={() => playQueue(playlistItems, false)}
+              onShuffle={() => playQueue(playlistItems, true)}
+            />
+          ) : null}
+          <ChipBar options={PROVIDER_FILTERS} value={filter} onChange={setFilter} />
+          {playlistItems.length === 0 ? (
+            <EmptyState
+              icon="tray"
+              title="這個清單還沒有影片"
+              message="在任何影片的「⋯」選單選「加入播放清單」"
+            />
+          ) : videoList(playlistItems, (item: UnifiedVideoItem) => [{
+            label: "從清單移除",
+            icon: "minus.circle",
+            destructive: true,
+            onTap: () => removeVideoFromPlaylist(selectedPlaylist.id, item.id),
+          }])}
+        </VStack>
+      </ScrollView>
+    )
+  }
+
+  let tabContent: VirtualNode
+  if (tab === "history") {
+    tabContent = (
+      <VStack spacing={14} frame={{ maxWidth: "infinity" }}>
+        {history.length > 0 ? (
+          <VStack padding={{ horizontal: space.page }} frame={{ maxWidth: "infinity" }}>
+            <SearchField value={query} prompt="搜尋觀看紀錄" onChange={setQuery} />
+          </VStack>
+        ) : null}
+        <ChipBar
+          options={PROVIDER_FILTERS}
+          value={filter}
+          onChange={setFilter}
+          trailing={history.length > 0 ? (
+            <Menu
+              label={
+                <HStack spacing={0} frame={{ width: 34, height: 34 }} contentShape="rect">
+                  <Image systemName="ellipsis.circle" font={18} foregroundStyle="secondaryLabel" />
+                </HStack>
+              }
+            >
+              <Button
+                title="全部播放"
+                systemImage="play.fill"
+                action={() => {
+                  const first: WatchHistoryEntry | undefined = filteredHistory[0]
+                  if (first) openEntry(first, filteredHistory.map((entry: WatchHistoryEntry) => entry.item))
+                }}
+              />
+              <Button title="清空觀看紀錄" systemImage="trash" role="destructive" action={() => void confirmClearHistory()} />
+            </Menu>
+          ) : undefined}
+        />
+        {filteredHistory.length === 0 ? (
           <EmptyState
             icon="clock.arrow.circlepath"
-            title={history.length === 0 ? "尚無觀看歷史" : "沒有符合的觀看紀錄"}
-            hint={history.length === 0 ? "看過的影片會自動出現在這裡，並保留上次播放進度。" : "換個關鍵字或切換平台篩選試試。"}
+            title={history.length === 0 ? "還沒有觀看紀錄" : "沒有符合的紀錄"}
+            message={history.length === 0 ? "看過的影片會留在這裡，並記住播放進度" : undefined}
           />
-        )
-        : (
-          <VStack spacing={0} frame={{ maxWidth: "infinity" }}>
+        ) : (
+          <LazyVStack spacing={4} frame={{ maxWidth: "infinity" }}>
             {filteredHistory.map((entry: WatchHistoryEntry) => (
-              <HistoryRow
+              <VideoCard
                 key={entryKey(entry)}
-                entry={entry}
-                onPlay={() => openEntry(entry, filteredHistory.map((item: WatchHistoryEntry): UnifiedVideoItem => item.item))}
+                item={entry.item}
+                layout="row"
+                progressSeconds={entry.position}
+                meta={historyMeta(entry)}
+                zoomKey={`history:${entryKey(entry)}`}
+                onSelect={() => openEntry(entry, filteredHistory.map((item: WatchHistoryEntry) => item.item))}
                 onOpenChannel={props.onOpenChannel}
               />
             ))}
-          </VStack>
+          </LazyVStack>
         )}
-    </VStack>
-  )
-
-  // ─── Tab content: watch later ─────────────────────────────────────────────
-
-  const watchLaterContent: VirtualNode = (
-    <VStack spacing={10} frame={{ maxWidth: "infinity" }} padding={{ horizontal: 14 }}>
-      <HStack spacing={8} frame={{ maxWidth: "infinity" }}>
-        <Text font={11} foregroundStyle="secondaryLabel">
-          {`共 ${filteredWatchLater.length} 部`}
-        </Text>
-        <Spacer />
-        <PillButton
-          icon="play.fill"
-          label="全部播放"
-          filled
-          onTap={() => playQueue(filteredWatchLater, false)}
-        />
-        <PillButton
-          icon="shuffle"
-          label="隨機播放"
-          onTap={() => playQueue(filteredWatchLater, true)}
-        />
-      </HStack>
-      {filteredWatchLater.length === 0
-        ? (
+      </VStack>
+    )
+  } else if (tab === "watchLater") {
+    tabContent = (
+      <VStack spacing={14} frame={{ maxWidth: "infinity" }}>
+        {filteredWatchLater.length > 0 ? (
+          <PlayActions
+            onPlay={() => playQueue(filteredWatchLater, false)}
+            onShuffle={() => playQueue(filteredWatchLater, true)}
+          />
+        ) : null}
+        <ChipBar options={PROVIDER_FILTERS} value={filter} onChange={setFilter} />
+        {filteredWatchLater.length === 0 ? (
           <EmptyState
             icon="bookmark"
-            title="稍後觀看清單是空的"
-            hint="從影片卡片的「⋯」選單把想看的影片收進來。"
+            title="稍後觀看是空的"
+            message="在影片的「⋯」選單選「加入稍後觀看」"
           />
-        )
-        : (
-          <VStack spacing={0} frame={{ maxWidth: "infinity" }}>
-            {filteredWatchLater.map((item: UnifiedVideoItem) => (
-              <VStack key={item.id} spacing={0} frame={{ maxWidth: "infinity" }}>
-                <VideoCard
-                  item={item}
-                  layout="row"
-                  onSelect={() => {
-                    void openVideo(item, { queue: filteredWatchLater })
-                  }}
-                  onOpenChannel={props.onOpenChannel}
-                />
-                <HStack
-                  spacing={6}
-                  frame={{ maxWidth: "infinity" }}
-                  padding={{ leading: ROW_TEXT_INSET, trailing: 14, bottom: 10 }}
-                >
-                  <Text font={10} foregroundStyle="tertiaryLabel" lineLimit={1}>{item.authorName}</Text>
-                  <Spacer />
-                  <RowAction
-                    icon="trash"
-                    label="移除"
-                    destructive
-                    onTap={() => {
-                      toggleWatchLater(item)
-                    }}
-                  />
-                </HStack>
-              </VStack>
-            ))}
+        ) : videoList(filteredWatchLater, (item: UnifiedVideoItem) => [{
+          label: "從稍後觀看移除",
+          icon: "bookmark.slash",
+          destructive: true,
+          onTap: () => {
+            toggleWatchLater(item)
+          },
+        }])}
+      </VStack>
+    )
+  } else {
+    tabContent = (
+      <VStack spacing={8} frame={{ maxWidth: "infinity" }}>
+        <HStack
+          spacing={12}
+          padding={{ horizontal: space.page, vertical: 8 }}
+          frame={{ maxWidth: "infinity", alignment: "leading" }}
+          contentShape="rect"
+          onTapGesture={() => void createPlaylistFlow()}
+        >
+          <VStack
+            frame={{ width: PLAYLIST_COVER_WIDTH, height: Math.round(PLAYLIST_COVER_WIDTH * 9 / 16) }}
+            background={{ style: "tertiarySystemFill", shape: { type: "rect", cornerRadius: radius.sm, style: "continuous" } }}
+          >
+            <Image systemName="plus" font={22} fontWeight="semibold" foregroundStyle={palette.brand} />
           </VStack>
-        )}
-    </VStack>
-  )
-
-  // ─── Tab content: playlists ───────────────────────────────────────────────
-
-  const playlistOverview: VirtualNode = (
-    <VStack spacing={10} frame={{ maxWidth: "infinity" }} padding={{ horizontal: 14 }}>
-      <HStack
-        spacing={8}
-        padding={{ horizontal: 12, vertical: 11 }}
-        frame={{ maxWidth: "infinity" }}
-        background={PLAY_SOFT_BG}
-        clipShape={{ type: "rect", cornerRadius: 12 }}
-        onTapGesture={() => {
-          void createPlaylistFlow()
-        }}
-      >
-        <Image systemName="plus.circle.fill" font={18} foregroundStyle={LINK_BLUE} />
-        <Text font={14} fontWeight="semibold" foregroundStyle={LINK_BLUE}>新增播放清單</Text>
-        <Spacer />
-      </HStack>
-      {playlists.length === 0
-        ? (
+          <Text font={type.cardTitle} fontWeight="semibold" foregroundStyle={palette.brand}>新增播放清單</Text>
+        </HStack>
+        {playlists.length === 0 ? (
           <EmptyState
             icon="music.note.list"
             title="還沒有播放清單"
-            hint="建立清單，把不同平台的影片收在一起。"
+            message="把不同平台的影片收在同一個清單"
           />
-        )
-        : (
+        ) : (
           playlists.map((playlist: CustomPlaylist) => (
-            <PlaylistCard
+            <PlaylistRow
               key={playlist.id}
               playlist={playlist}
               onOpen={() => setSelectedPlaylistId(playlist.id)}
               onPlay={() => playQueue(playlist.items, false)}
-              onDelete={() => {
-                void confirmDeletePlaylist(playlist)
-              }}
+              onShuffle={() => playQueue(playlist.items, true)}
+              onDelete={() => void confirmDeletePlaylist(playlist)}
             />
           ))
         )}
-    </VStack>
-  )
-
-  const playlistDetail: VirtualNode = selectedPlaylist
-    ? (
-      <VStack spacing={10} frame={{ maxWidth: "infinity" }} padding={{ horizontal: 14 }}>
-        <HStack spacing={4} onTapGesture={() => setSelectedPlaylistId(null)}>
-          <Image systemName="chevron.left" font={12} fontWeight="semibold" foregroundStyle={LINK_BLUE} />
-          <Text font={13} fontWeight="medium" foregroundStyle={LINK_BLUE}>返回所有清單</Text>
-          <Spacer />
-        </HStack>
-
-        <HStack alignment="top" spacing={10} frame={{ maxWidth: "infinity" }}>
-          <PlaylistCover playlist={selectedPlaylist} size={56} />
-          <VStack alignment="leading" spacing={3} frame={{ maxWidth: "infinity" }}>
-            <Text font="title3" fontWeight="bold" foregroundStyle="label" lineLimit={2} multilineTextAlignment="leading">
-              {selectedPlaylist.name}
-            </Text>
-            <Text font={11} foregroundStyle="secondaryLabel" lineLimit={1}>
-              {`${playlistItems.length} 部影片 • ${relativeTime(selectedPlaylist.updatedAt)}`}
-            </Text>
-            {selectedPlaylist.description
-              ? <Text font={11} foregroundStyle="tertiaryLabel" lineLimit={2}>{selectedPlaylist.description}</Text>
-              : null}
-          </VStack>
-        </HStack>
-
-        <HStack spacing={8} frame={{ maxWidth: "infinity" }}>
-          <PillButton
-            icon="play.fill"
-            label="全部播放"
-            filled
-            onTap={() => playQueue(playlistItems, false)}
-          />
-          <PillButton
-            icon="shuffle"
-            label="隨機播放"
-            onTap={() => playQueue(playlistItems, true)}
-          />
-          <Spacer />
-        </HStack>
-
-        {playlistItems.length === 0
-          ? (
-            <EmptyState
-              icon="tray"
-              title="這個清單還沒有影片"
-              hint="從任何影片卡片的「⋯」選單，或播放頁面把影片加入這個清單。"
-            />
-          )
-          : (
-            <VStack spacing={0} frame={{ maxWidth: "infinity" }}>
-              {playlistItems.map((item: UnifiedVideoItem) => (
-                <VStack key={item.id} spacing={0} frame={{ maxWidth: "infinity" }}>
-                  <VideoCard
-                    item={item}
-                    layout="row"
-                    onSelect={() => {
-                      void openVideo(item, { queue: playlistItems })
-                    }}
-                    onOpenChannel={props.onOpenChannel}
-                  />
-                  <HStack
-                    spacing={6}
-                    frame={{ maxWidth: "infinity" }}
-                    padding={{ leading: ROW_TEXT_INSET, trailing: 14, bottom: 10 }}
-                  >
-                    <Text font={10} foregroundStyle="tertiaryLabel" lineLimit={1}>{item.authorName}</Text>
-                    <Spacer />
-                    <RowAction
-                      icon="minus.circle"
-                      label="從清單移除"
-                      destructive
-                      onTap={() => {
-                        removeVideoFromPlaylist(selectedPlaylist.id, item.id)
-                      }}
-                    />
-                  </HStack>
-                </VStack>
-              ))}
-            </VStack>
-          )}
       </VStack>
     )
-    : playlistOverview
-
-  const tabContent: VirtualNode = tab === "history"
-    ? historyContent
-    : tab === "watchLater"
-      ? watchLaterContent
-      : playlistDetail
+  }
 
   return (
-    <VStack spacing={0} frame={{ maxWidth: "infinity", maxHeight: "infinity" }} background="systemBackground">
-      {header}
-      <ScrollView
-        axes="vertical"
-        scrollIndicator="automatic"
-        frame={{ maxWidth: "infinity", maxHeight: "infinity" }}
-      >
-        <VStack spacing={12} frame={{ maxWidth: "infinity" }} padding={{ top: 2, bottom: 4 }}>
-          {tabContent}
-          <Spacer frame={{ height: 96 }} />
-        </VStack>
-      </ScrollView>
-    </VStack>
+    <ScrollView
+      axes="vertical"
+      scrollIndicator="hidden"
+      scrollDismissesKeyboard="immediately"
+      frame={{ maxWidth: "infinity", maxHeight: "infinity" }}
+    >
+      <VStack spacing={14} frame={{ maxWidth: "infinity" }} padding={{ bottom: 16 }}>
+        <PageHeader
+          title="媒體庫"
+          trailing={props.onOpenSettings ? <GlassIconButton icon="gearshape" onTap={props.onOpenSettings} /> : undefined}
+        />
+        <Picker
+          title="媒體庫分類"
+          value={tab}
+          onChanged={(next: string) => setTab(next as LibraryTab)}
+          pickerStyle="segmented"
+          padding={{ horizontal: space.page }}
+        >
+          <Text tag="history">{`觀看紀錄 ${history.length}`}</Text>
+          <Text tag="watchLater">{`稍後觀看 ${watchLater.length}`}</Text>
+          <Text tag="playlists">{`清單 ${playlists.length}`}</Text>
+        </Picker>
+        {tabContent}
+      </VStack>
+    </ScrollView>
   )
 }

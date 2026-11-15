@@ -1,4 +1,4 @@
-import { Button, HStack, Image, Menu, Spacer, Text, VStack, ZStack } from "scripting"
+import { Button, HStack, Image, Menu, Text, VStack } from "scripting"
 import type { VirtualNode } from "scripting"
 import type { Provider, UnifiedVideoItem } from "../types"
 import {
@@ -7,30 +7,32 @@ import {
   getPlaylists,
   toggleWatchLater,
 } from "../services"
-import {
-  formatCount,
-  formatDuration,
-  getVideoShareUrl,
-  providerBadgeLabel,
-} from "../utils/format"
+import { formatCount, getVideoShareUrl } from "../utils/format"
+import { Avatar, Skeleton, Thumbnail } from "../ui/primitives"
+import { pageContentWidth, radius, space, thumbHeight, type } from "../ui/theme"
+import { markZoomSource } from "../ui/zoom"
+
+export interface CardAction {
+  label: string
+  icon: string
+  destructive?: boolean
+  onTap: () => void
+}
 
 export interface VideoCardProps {
   item: UnifiedVideoItem
   layout?: "grid" | "row"
   progressSeconds?: number
+  meta?: string
+  actions?: CardAction[]
+  zoomKey?: string
   onSelect: (item: UnifiedVideoItem) => void
   onOpenChannel?: (provider: Provider, authorId: string, authorName: string, avatarUrl?: string) => void
 }
 
-function accentColor(provider: Provider) {
-  return provider === "bili" ? "rgba(251,114,153,1)" : "rgba(255,46,77,1)"
-}
+const ROW_THUMB_WIDTH: number = 164
 
-const ROW_THUMB_WIDTH: number = 148
-const ROW_THUMB_HEIGHT: number = 84
-const GRID_THUMB_HEIGHT: number = 202
-
-async function addToPlaylistFlow(item: UnifiedVideoItem): Promise<void> {
+export async function addToPlaylistFlow(item: UnifiedVideoItem): Promise<void> {
   const playlists = getPlaylists()
   const labels: string[] = playlists.map(playlist => playlist.name)
   labels.push("＋ 新增播放清單")
@@ -57,60 +59,20 @@ async function addToPlaylistFlow(item: UnifiedVideoItem): Promise<void> {
   addVideoToPlaylist(created.id, item)
 }
 
-function platformBadge(provider: Provider): VirtualNode {
-  return (
-    <Text
-      font={9}
-      fontWeight="bold"
-      foregroundStyle="white"
-      padding={{ horizontal: 5, vertical: 2 }}
-      background={accentColor(provider)}
-      clipShape={{ type: "rect", cornerRadius: 4 }}
-    >
-      {providerBadgeLabel(provider)}
-    </Text>
-  )
-}
-
-function durationBadge(item: UnifiedVideoItem): VirtualNode {
-  return (
-    <Text
-      font={10}
-      monospaced
-      foregroundStyle="white"
-      padding={{ horizontal: 5, vertical: 2 }}
-      background="rgba(0,0,0,0.75)"
-      clipShape={{ type: "rect", cornerRadius: 4 }}
-    >
-      {item.isLive ? "LIVE" : formatDuration(item.duration)}
-    </Text>
-  )
-}
-
 function watchedRatio(item: UnifiedVideoItem, progressSeconds?: number): number {
   if (!progressSeconds || progressSeconds <= 0 || item.duration <= 0) return 0
   return Math.min(1, progressSeconds / item.duration)
 }
 
-function progressBar(provider: Provider, width: number, ratio: number): VirtualNode {
+function cardMenu(item: UnifiedVideoItem, actions?: CardAction[]): VirtualNode {
   return (
-    <HStack
-      spacing={0}
-      frame={{ width, height: 3 }}
-      background="rgba(255,255,255,0.28)"
+    <Menu
+      label={
+        <HStack spacing={0} frame={{ width: 28, height: 28 }} contentShape="rect">
+          <Image systemName="ellipsis" font={15} fontWeight="semibold" foregroundStyle="secondaryLabel" />
+        </HStack>
+      }
     >
-      <HStack
-        spacing={0}
-        frame={{ width: Math.max(0, width * ratio), height: 3 }}
-        background={accentColor(provider)}
-      />
-    </HStack>
-  )
-}
-
-function cardMenu(item: UnifiedVideoItem): VirtualNode {
-  return (
-    <Menu label={<HStack spacing={0}><Image systemName="ellipsis" font={14} foregroundStyle="secondaryLabel" /></HStack>}>
       <Button
         title="加入稍後觀看"
         systemImage="bookmark"
@@ -132,104 +94,72 @@ function cardMenu(item: UnifiedVideoItem): VirtualNode {
           void Pasteboard.setString(getVideoShareUrl(item))
         }}
       />
+      {(actions ?? []).map((action: CardAction) => (
+        <Button
+          key={`act-${action.label}`}
+          title={action.label}
+          systemImage={action.icon}
+          role={action.destructive ? "destructive" : undefined}
+          action={action.onTap}
+        />
+      ))}
     </Menu>
   )
 }
 
 function metaText(item: UnifiedVideoItem): string {
-  const base: string = `${formatCount(item.viewCount)}觀看`
-  return item.publishedText ? `${base} • ${item.publishedText}` : base
+  const base: string = `${formatCount(item.viewCount)} 次觀看`
+  return item.publishedText ? `${base} · ${item.publishedText}` : base
 }
 
-function avatarView(provider: Provider, name: string, avatarUrl: string | undefined, size: number): VirtualNode {
-  if (avatarUrl) {
-    return (
-      <Image
-        imageUrl={avatarUrl}
-        resizable
-        scaleToFill
-        frame={{ width: size, height: size }}
-        clipShape="circle"
-      />
-    )
-  }
-  const initial: string = (name.trim().charAt(0) || "?").toUpperCase()
-  return (
-    <VStack
-      frame={{ width: size, height: size }}
-      background={accentColor(provider)}
-      clipShape="circle"
-    >
-      <Text font={Math.round(size * 0.42)} fontWeight="semibold" foregroundStyle="white">{initial}</Text>
-    </VStack>
-  )
+function zoomIDOf(props: VideoCardProps): string {
+  return props.zoomKey ?? `card:${props.item.id}`
+}
+
+function selectCard(props: VideoCardProps): void {
+  markZoomSource(zoomIDOf(props))
+  props.onSelect(props.item)
 }
 
 function RowCard(props: VideoCardProps): VirtualNode {
   const item: UnifiedVideoItem = props.item
-  const ratio: number = watchedRatio(item, props.progressSeconds)
 
   return (
     <HStack
       alignment="top"
-      spacing={10}
-      padding={{ horizontal: 12, vertical: 8 }}
+      spacing={12}
+      padding={{ horizontal: space.page, vertical: 8 }}
       frame={{ maxWidth: "infinity" }}
-      onTapGesture={() => props.onSelect(item)}
+      contentShape="rect"
+      onTapGesture={() => selectCard(props)}
     >
-      <ZStack
-        frame={{ width: ROW_THUMB_WIDTH, height: ROW_THUMB_HEIGHT }}
-        background="#1c1c1e"
-        clipShape={{ type: "rect", cornerRadius: 10 }}
-        clipped
-      >
-        {item.thumbnailUrl ? (
-          <Image
-            imageUrl={item.thumbnailUrl}
-            resizable
-            scaleToFill
-            frame={{ width: ROW_THUMB_WIDTH, height: ROW_THUMB_HEIGHT }}
-          />
-        ) : (
-          <VStack frame={{ width: ROW_THUMB_WIDTH, height: ROW_THUMB_HEIGHT }} background="#1c1c1e">
-            <Image systemName="play.rectangle.fill" font={26} foregroundStyle="rgba(255,255,255,0.55)" />
-          </VStack>
-        )}
-        <VStack
-          spacing={0}
-          frame={{ width: ROW_THUMB_WIDTH, height: ROW_THUMB_HEIGHT }}
-          padding={6}
-          allowsHitTesting={false}
-        >
-          <HStack spacing={0} frame={{ maxWidth: "infinity" }}>
-            {platformBadge(item.provider)}
-            <Spacer />
-          </HStack>
-          <Spacer />
-          <HStack spacing={0} frame={{ maxWidth: "infinity" }}>
-            <Spacer />
-            {durationBadge(item)}
-          </HStack>
-        </VStack>
-        {ratio > 0
-          ? (
-            <VStack spacing={0} frame={{ width: ROW_THUMB_WIDTH, height: ROW_THUMB_HEIGHT }} allowsHitTesting={false}>
-              <Spacer />
-              {progressBar(item.provider, ROW_THUMB_WIDTH, ratio)}
-            </VStack>
-          )
-          : null}
-      </ZStack>
+      <Thumbnail
+        url={item.thumbnailUrl}
+        zoomID={zoomIDOf(props)}
+        width={ROW_THUMB_WIDTH}
+        cornerRadius={radius.sm}
+        provider={item.provider}
+        duration={item.duration}
+        isLive={item.isLive}
+        progress={watchedRatio(item, props.progressSeconds)}
+      />
 
-      <VStack alignment="leading" spacing={4} frame={{ maxWidth: "infinity" }}>
-        <Text font={14} fontWeight="medium" foregroundStyle="label" lineLimit={2} multilineTextAlignment="leading">
+      <VStack alignment="leading" spacing={4} frame={{ maxWidth: "infinity", alignment: "leading" }}>
+        <Text
+          font={type.body}
+          fontWeight="semibold"
+          foregroundStyle="label"
+          lineLimit={2}
+          multilineTextAlignment="leading"
+        >
           {item.title}
         </Text>
-        <Text font={12} foregroundStyle="secondaryLabel" lineLimit={1}>{item.authorName}</Text>
-        <HStack spacing={4} frame={{ maxWidth: "infinity" }}>
-          <Text font={11} foregroundStyle="tertiaryLabel" lineLimit={1}>{metaText(item)}</Text>
-          <Spacer />
-          {cardMenu(item)}
+        <Text font={type.meta} foregroundStyle="secondaryLabel" lineLimit={1}>{item.authorName}</Text>
+        <HStack spacing={4} frame={{ maxWidth: "infinity", alignment: "leading" }}>
+          <Text font={type.caption} foregroundStyle="tertiaryLabel" lineLimit={1} frame={{ maxWidth: "infinity", alignment: "leading" }}>
+            {props.meta ?? metaText(item)}
+          </Text>
+          {cardMenu(item, props.actions)}
         </HStack>
       </VStack>
     </HStack>
@@ -238,78 +168,53 @@ function RowCard(props: VideoCardProps): VirtualNode {
 
 function GridCard(props: VideoCardProps): VirtualNode {
   const item: UnifiedVideoItem = props.item
-  const ratio: number = watchedRatio(item, props.progressSeconds)
-  const fullWidth: number = Device.screen.width
+  const select = (): void => selectCard(props)
   const openChannel = (): void => {
     props.onOpenChannel?.(item.provider, item.authorId, item.authorName, item.authorAvatar)
   }
 
   return (
-    <VStack spacing={0} frame={{ maxWidth: "infinity" }}>
-      <ZStack
-        frame={{ maxWidth: "infinity", height: GRID_THUMB_HEIGHT }}
-        background="#1c1c1e"
-        clipped
-        onTapGesture={() => props.onSelect(item)}
-      >
-        {item.thumbnailUrl ? (
-          <Image
-            imageUrl={item.thumbnailUrl}
-            resizable
-            scaleToFill
-            frame={{ maxWidth: "infinity", height: GRID_THUMB_HEIGHT }}
-          />
-        ) : (
-          <VStack frame={{ maxWidth: "infinity", height: GRID_THUMB_HEIGHT }} background="#1c1c1e">
-            <Image systemName="play.rectangle.fill" font={34} foregroundStyle="rgba(255,255,255,0.55)" />
-          </VStack>
-        )}
-        <VStack spacing={0} frame={{ maxWidth: "infinity", height: GRID_THUMB_HEIGHT }} padding={8} allowsHitTesting={false}>
-          <HStack spacing={0} frame={{ maxWidth: "infinity" }}>
-            {platformBadge(item.provider)}
-            <Spacer />
-          </HStack>
-          <Spacer />
-          <HStack spacing={0} frame={{ maxWidth: "infinity" }}>
-            <Spacer />
-            {durationBadge(item)}
-          </HStack>
-        </VStack>
-        {ratio > 0
-          ? (
-            <VStack spacing={0} frame={{ maxWidth: "infinity", height: GRID_THUMB_HEIGHT }} allowsHitTesting={false}>
-              <Spacer />
-              {progressBar(item.provider, fullWidth, ratio)}
-            </VStack>
-          )
-          : null}
-      </ZStack>
+    <VStack spacing={12} padding={{ horizontal: space.page }} frame={{ maxWidth: "infinity" }}>
+      <Thumbnail
+        url={item.thumbnailUrl}
+        zoomID={zoomIDOf(props)}
+        cornerRadius={radius.lg}
+        provider={item.provider}
+        duration={item.duration}
+        isLive={item.isLive}
+        progress={watchedRatio(item, props.progressSeconds)}
+        onTap={select}
+      />
 
-      <HStack alignment="top" spacing={10} padding={{ horizontal: 4, vertical: 8 }}>
-        <HStack spacing={0} onTapGesture={openChannel}>
-          {avatarView(item.provider, item.authorName, item.authorAvatar, 36)}
-        </HStack>
-        <VStack alignment="leading" spacing={3} frame={{ maxWidth: "infinity" }}>
+      <HStack alignment="top" spacing={12} frame={{ maxWidth: "infinity" }}>
+        <Avatar
+          url={item.authorAvatar}
+          name={item.authorName}
+          size={38}
+          provider={item.provider}
+          onTap={openChannel}
+        />
+        <VStack
+          alignment="leading"
+          spacing={4}
+          frame={{ maxWidth: "infinity", alignment: "leading" }}
+          contentShape="rect"
+          onTapGesture={select}
+        >
           <Text
-            font={15}
+            font={type.cardTitle + 1}
             fontWeight="semibold"
             foregroundStyle="label"
             lineLimit={2}
             multilineTextAlignment="leading"
-            onTapGesture={() => props.onSelect(item)}
           >
             {item.title}
           </Text>
-          <Text
-            font={12}
-            foregroundStyle="secondaryLabel"
-            lineLimit={1}
-            onTapGesture={() => props.onSelect(item)}
-          >
-            {`${item.authorName} • ${metaText(item)}`}
+          <Text font={type.meta + 1} foregroundStyle="secondaryLabel" lineLimit={1}>
+            {`${item.authorName} · ${props.meta ?? metaText(item)}`}
           </Text>
         </VStack>
-        {cardMenu(item)}
+        {cardMenu(item, props.actions)}
       </HStack>
     </VStack>
   )
@@ -318,4 +223,39 @@ function GridCard(props: VideoCardProps): VirtualNode {
 export function VideoCard(props: VideoCardProps): VirtualNode {
   if (props.layout === "row") return <RowCard {...props} />
   return <GridCard {...props} />
+}
+
+export function VideoCardSkeleton(props: { layout: "grid" | "row"; count?: number }): VirtualNode {
+  if (props.layout === "row") {
+    return (
+      <VStack spacing={16} padding={{ horizontal: space.page, vertical: 8 }}>
+        {Array.from({ length: props.count ?? 6 }, (_, index: number) => (
+          <HStack key={`sk-row-${index}`} spacing={12} alignment="top">
+            <Skeleton width={ROW_THUMB_WIDTH} height={thumbHeight(ROW_THUMB_WIDTH)} cornerRadius={radius.sm} />
+            <VStack alignment="leading" spacing={8} frame={{ maxWidth: "infinity", alignment: "leading" }}>
+              <Skeleton height={13} />
+              <Skeleton width={110} height={13} />
+              <Skeleton width={70} height={10} />
+            </VStack>
+          </HStack>
+        ))}
+      </VStack>
+    )
+  }
+  return (
+    <VStack spacing={space.cardGap} padding={{ horizontal: space.page }}>
+      {Array.from({ length: props.count ?? 2 }, (_, index: number) => (
+        <VStack key={`sk-grid-${index}`} spacing={12}>
+          <Skeleton height={thumbHeight(pageContentWidth())} cornerRadius={radius.lg} />
+          <HStack spacing={12} alignment="top">
+            <Skeleton width={38} height={38} cornerRadius={19} />
+            <VStack alignment="leading" spacing={8} frame={{ maxWidth: "infinity", alignment: "leading" }}>
+              <Skeleton height={14} />
+              <Skeleton width={160} height={11} />
+            </VStack>
+          </HStack>
+        </VStack>
+      ))}
+    </VStack>
+  )
 }

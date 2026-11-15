@@ -38,14 +38,6 @@ export function providerFullName(provider: Provider): string {
   return provider === "bili" ? "BiliBili" : "YouTube"
 }
 
-export function providerAccentColor(provider: Provider): Color {
-  return provider === "bili" ? "rgba(251,114,153,1)" : "rgba(255,46,77,1)"
-}
-
-export function providerSoftBgColor(provider: Provider): Color {
-  return provider === "bili" ? "rgba(251,114,153,0.16)" : "rgba(255,46,77,0.16)"
-}
-
 export const SPONSOR_CATEGORY_LABELS: Record<SponsorCategory, string> = {
   sponsor: "業配廣告",
   selfpromo: "自我宣傳",

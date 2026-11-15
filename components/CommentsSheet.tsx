@@ -1,7 +1,9 @@
-import { Button, HStack, Image, ProgressView, Spacer, Text, VStack, useState } from "scripting"
+import { HStack, Image, Text, VStack, useState } from "scripting"
 import type { VirtualNode } from "scripting"
 import type { CommentItem } from "../types"
 import { formatCount } from "../utils/format"
+import { Avatar, EmptyState, Skeleton } from "../ui/primitives"
+import { palette, space, type } from "../ui/theme"
 
 export interface CommentsSheetProps {
   comments: CommentItem[]
@@ -9,100 +11,88 @@ export interface CommentsSheetProps {
   onRefresh?: () => void
 }
 
-function avatarView(comment: CommentItem, size: number): VirtualNode {
-  if (comment.authorAvatar) {
-    return (
-      <Image
-        imageUrl={comment.authorAvatar}
-        resizable
-        scaleToFill
-        frame={{ width: size, height: size }}
-        clipShape="circle"
-      />
-    )
-  }
-  return <Image systemName="person.circle.fill" font={size} foregroundStyle="tertiaryLabel" />
-}
-
-function replyRow(reply: CommentItem): VirtualNode {
+function CommentBody(props: { comment: CommentItem; avatarSize: number; footer?: VirtualNode }): VirtualNode {
+  const comment: CommentItem = props.comment
   return (
-    <HStack alignment="top" spacing={8} padding={{ horizontal: 10, vertical: 8 }}>
-      {avatarView(reply, 24)}
-      <VStack alignment="leading" spacing={4} frame={{ maxWidth: "infinity" }}>
+    <HStack alignment="top" spacing={12} frame={{ maxWidth: "infinity", alignment: "leading" }}>
+      <Avatar url={comment.authorAvatar || undefined} name={comment.authorName} size={props.avatarSize} />
+      <VStack alignment="leading" spacing={5} frame={{ maxWidth: "infinity", alignment: "leading" }}>
         <HStack spacing={6}>
-          <Text font={12} fontWeight="semibold" foregroundStyle="secondaryLabel" lineLimit={1}>
-            {reply.authorName}
+          <Text font={type.meta + 1} fontWeight="semibold" foregroundStyle="secondaryLabel" lineLimit={1}>
+            {comment.authorName}
           </Text>
-          <Text font={10} foregroundStyle="tertiaryLabel" lineLimit={1}>{reply.publishedText}</Text>
-          <Spacer />
-          <HStack spacing={3}>
-            <Image systemName="hand.thumbsup" font={10} foregroundStyle="tertiaryLabel" />
-            <Text font={10} foregroundStyle="tertiaryLabel">{formatCount(reply.likeCount)}</Text>
-          </HStack>
+          {comment.publishedText ? (
+            <Text font={type.meta} foregroundStyle="tertiaryLabel" lineLimit={1}>{comment.publishedText}</Text>
+          ) : null}
         </HStack>
-        <Text font={13} foregroundStyle="label" lineSpacing={2}>{reply.content}</Text>
+        <Text
+          font={type.cardTitle}
+          foregroundStyle="label"
+          lineSpacing={3}
+          multilineTextAlignment="leading"
+          frame={{ maxWidth: "infinity", alignment: "leading" }}
+        >
+          {comment.content}
+        </Text>
+        <HStack spacing={18}>
+          <HStack spacing={5}>
+            <Image systemName="hand.thumbsup" font={13} foregroundStyle="secondaryLabel" />
+            {comment.likeCount > 0 ? (
+              <Text font={type.meta} monospacedDigit foregroundStyle="secondaryLabel">{formatCount(comment.likeCount)}</Text>
+            ) : null}
+          </HStack>
+          {props.footer ?? null}
+        </HStack>
       </VStack>
     </HStack>
   )
 }
 
-function commentRow(comment: CommentItem, expanded: boolean, onToggle: () => void): VirtualNode {
-  const replies: CommentItem[] = comment.replies ?? []
-
+function CommentThread(props: { comment: CommentItem; expanded: boolean; onToggle: () => void }): VirtualNode {
+  const replies: CommentItem[] = props.comment.replies ?? []
   return (
-    <VStack alignment="leading" spacing={6} padding={{ horizontal: 14, vertical: 10 }}>
-      <HStack spacing={10}>
-        {avatarView(comment, 32)}
-        <VStack alignment="leading" spacing={2} frame={{ maxWidth: "infinity" }}>
-          <Text font={13} fontWeight="semibold" foregroundStyle="secondaryLabel" lineLimit={1}>
-            {comment.authorName}
-          </Text>
-          <Text font={11} foregroundStyle="tertiaryLabel" lineLimit={1}>{comment.publishedText}</Text>
-        </VStack>
-        <Spacer />
-        <HStack spacing={4}>
-          <Image systemName="hand.thumbsup" font={11} foregroundStyle="secondaryLabel" />
-          <Text font={11} foregroundStyle="secondaryLabel">{formatCount(comment.likeCount)}</Text>
-        </HStack>
-      </HStack>
-
-      <Text font={14} foregroundStyle="label" lineSpacing={2}>{comment.content}</Text>
-
-      {replies.length > 0
-        ? (
-          <VStack alignment="leading" spacing={6}>
-            <Button
-              title={expanded ? `收合 ${replies.length} 則回覆` : `查看 ${replies.length} 則回覆`}
-              font={12}
-              foregroundStyle="rgba(10,132,255,1)"
-              buttonStyle="plain"
-              action={onToggle}
+    <VStack alignment="leading" spacing={14} padding={{ horizontal: space.page, vertical: 12 }} frame={{ maxWidth: "infinity", alignment: "leading" }}>
+      <CommentBody
+        comment={props.comment}
+        avatarSize={34}
+        footer={replies.length > 0 ? (
+          <HStack spacing={4} contentShape="rect" onTapGesture={props.onToggle}>
+            <Text font={type.meta + 1} fontWeight="semibold" foregroundStyle={palette.brand}>
+              {`${replies.length} 則回覆`}
+            </Text>
+            <Image
+              systemName={props.expanded ? "chevron.up" : "chevron.down"}
+              font={10}
+              fontWeight="bold"
+              foregroundStyle={palette.brand}
             />
-            {expanded
-              ? (
-                <VStack
-                  spacing={0}
-                  frame={{ maxWidth: "infinity" }}
-                  padding={{ leading: 28, trailing: 4, vertical: 4 }}
-                >
-                  <VStack
-                    spacing={0}
-                    frame={{ maxWidth: "infinity" }}
-                    background="tertiarySystemFill"
-                    clipShape={{ type: "rect", cornerRadius: 8 }}
-                  >
-                    {replies.map((reply: CommentItem) => (
-                      <VStack key={reply.id} spacing={0} frame={{ maxWidth: "infinity" }}>
-                        {replyRow(reply)}
-                      </VStack>
-                    ))}
-                  </VStack>
-                </VStack>
-              )
-              : null}
+          </HStack>
+        ) : undefined}
+      />
+      {props.expanded ? (
+        <VStack alignment="leading" spacing={14} padding={{ leading: 46 }} frame={{ maxWidth: "infinity", alignment: "leading" }}>
+          {replies.map((reply: CommentItem) => (
+            <CommentBody key={reply.id} comment={reply} avatarSize={24} />
+          ))}
+        </VStack>
+      ) : null}
+    </VStack>
+  )
+}
+
+function CommentsSkeleton(): VirtualNode {
+  return (
+    <VStack spacing={22} padding={{ horizontal: space.page, vertical: 12 }}>
+      {[0, 1, 2, 3].map((index: number) => (
+        <HStack key={`sk-c-${index}`} alignment="top" spacing={12}>
+          <Skeleton width={34} height={34} cornerRadius={17} />
+          <VStack alignment="leading" spacing={8} frame={{ maxWidth: "infinity", alignment: "leading" }}>
+            <Skeleton width={120} height={11} />
+            <Skeleton height={13} />
+            <Skeleton width={200} height={13} />
           </VStack>
-        )
-        : null}
+        </HStack>
+      ))}
     </VStack>
   )
 }
@@ -110,21 +100,16 @@ function commentRow(comment: CommentItem, expanded: boolean, onToggle: () => voi
 export function CommentsSheet(props: CommentsSheetProps): VirtualNode {
   const [expandedIds, setExpandedIds] = useState<Record<string, boolean>>({})
 
-  if (props.loading) {
-    return (
-      <VStack spacing={10} padding={{ vertical: 42 }} frame={{ maxWidth: "infinity" }}>
-        <ProgressView />
-        <Text font={12} foregroundStyle="secondaryLabel">正在載入留言…</Text>
-      </VStack>
-    )
-  }
+  if (props.loading) return <CommentsSkeleton />
 
   if (props.comments.length === 0) {
     return (
-      <VStack spacing={10} padding={{ vertical: 42 }} frame={{ maxWidth: "infinity" }}>
-        <Image systemName="bubble.left.and.bubble.right" font={30} foregroundStyle="tertiaryLabel" />
-        <Text font={13} foregroundStyle="secondaryLabel">目前尚無留言</Text>
-      </VStack>
+      <EmptyState
+        icon="bubble.left.and.bubble.right"
+        title="還沒有留言"
+        actionLabel={props.onRefresh ? "重新載入" : undefined}
+        onAction={props.onRefresh}
+      />
     )
   }
 
@@ -134,25 +119,13 @@ export function CommentsSheet(props: CommentsSheetProps): VirtualNode {
 
   return (
     <VStack spacing={0} frame={{ maxWidth: "infinity" }}>
-      {props.onRefresh
-        ? (
-          <HStack spacing={0} padding={{ horizontal: 14, vertical: 4 }} frame={{ maxWidth: "infinity" }}>
-            <Spacer />
-            <Button
-              title="重新整理"
-              systemImage="arrow.clockwise"
-              font={11}
-              foregroundStyle="secondaryLabel"
-              buttonStyle="plain"
-              action={props.onRefresh}
-            />
-          </HStack>
-        )
-        : null}
       {props.comments.map((comment: CommentItem) => (
-        <VStack key={comment.id} spacing={0} frame={{ maxWidth: "infinity" }}>
-          {commentRow(comment, expandedIds[comment.id] === true, () => toggle(comment.id))}
-        </VStack>
+        <CommentThread
+          key={comment.id}
+          comment={comment}
+          expanded={expandedIds[comment.id] === true}
+          onToggle={() => toggle(comment.id)}
+        />
       ))}
     </VStack>
   )

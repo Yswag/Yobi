@@ -1,19 +1,16 @@
 import {
-  Button,
   HStack,
-  Image,
-  ProgressView,
+  LazyVStack,
   ScrollView,
-  Spacer,
   Text,
   VStack,
-  ZStack,
   useEffect,
+  useRef,
   useState,
 } from "scripting"
-import type { Color, VirtualNode } from "scripting"
+import type { VirtualNode } from "scripting"
 import type { Provider, UnifiedVideoItem, WatchHistoryEntry } from "../types"
-import { VideoCard } from "../components/VideoCard"
+import { VideoCard, VideoCardSkeleton } from "../components/VideoCard"
 import type { DetectedInputLink, FeedFilter } from "../services"
 import {
   detectInputLink,
@@ -25,159 +22,63 @@ import {
 } from "../services"
 import { formatDuration, providerFullName } from "../utils/format"
 import { openVideo } from "../state/playerStore"
+import {
+  ChipBar,
+  EmptyState,
+  GlassIconButton,
+  LayoutToggle,
+  PageHeader,
+  PROVIDER_FILTERS,
+  SectionHeader,
+  Thumbnail,
+} from "../ui/primitives"
+import { radius, space, type } from "../ui/theme"
+import { markZoomSource } from "../ui/zoom"
 
 export interface HomeViewProps {
-  onOpenSearch?: () => void
   onOpenChannel?: (provider: Provider, authorId: string, authorName: string, avatarUrl?: string) => void
-  onExitApp?: () => void
+  onOpenSettings?: () => void
 }
 
 type LayoutMode = "grid" | "row"
 
-const LINK_BLUE: Color = "rgba(10,132,255,1)"
-const YT_RED: Color = "rgba(255,46,77,1)"
-const BILI_PINK: Color = "rgba(251,114,153,1)"
-const CONTINUE_CARD_WIDTH: number = 180
-const CONTINUE_THUMB_HEIGHT: number = 101
-
-function accentColor(provider: Provider): Color {
-  return provider === "bili" ? BILI_PINK : YT_RED
-}
-
-function FilterChip(props: {
-  label: string
-  active: boolean
-  activeColor: Color
-  onTap: () => void
-}): VirtualNode {
-  return (
-    <HStack
-      spacing={0}
-      padding={{ horizontal: 13, vertical: 6 }}
-      background={props.active ? props.activeColor : "tertiarySystemFill"}
-      clipShape="capsule"
-      onTapGesture={props.onTap}
-    >
-      <Text
-        font={12}
-        fontWeight={props.active ? "semibold" : "medium"}
-        foregroundStyle={props.active ? "white" : "label"}
-        lineLimit={1}
-      >
-        {props.label}
-      </Text>
-    </HStack>
-  )
-}
-
-function CircleIconButton(props: { icon: string; size: number; onTap: () => void }): VirtualNode {
-  return (
-    <VStack
-      frame={{ width: props.size, height: props.size }}
-      background="tertiarySystemFill"
-      clipShape="circle"
-      onTapGesture={props.onTap}
-    >
-      <Image systemName={props.icon} font={Math.round(props.size * 0.44)} foregroundStyle="label" />
-    </VStack>
-  )
-}
-
-function platformBadge(provider: Provider): VirtualNode {
-  return (
-    <Text
-      font={9}
-      fontWeight="bold"
-      foregroundStyle="white"
-      padding={{ horizontal: 5, vertical: 2 }}
-      background={accentColor(provider)}
-      clipShape={{ type: "rect", cornerRadius: 4 }}
-    >
-      {provider === "bili" ? "BILI" : "YT"}
-    </Text>
-  )
-}
+const CONTINUE_CARD_WIDTH: number = 220
 
 function ContinueCard(props: { entry: WatchHistoryEntry; onSelect: () => void }): VirtualNode {
   const entry: WatchHistoryEntry = props.entry
   const total: number = entry.duration || entry.item.duration || 0
-  const ratio: number = total > 0 ? Math.min(1, Math.max(0, entry.position / total)) : 0
+  const ratio: number = total > 0 ? entry.position / total : 0
+  const remaining: number = Math.max(0, total - entry.position)
+  const zoomID: string = `continue:${entry.item.id}-${entry.cid ?? entry.page ?? 0}`
 
   return (
-    <VStack spacing={5} frame={{ width: CONTINUE_CARD_WIDTH }}>
-      <ZStack
-        frame={{ width: CONTINUE_CARD_WIDTH, height: CONTINUE_THUMB_HEIGHT }}
-        background="#1c1c1e"
-        clipShape={{ type: "rect", cornerRadius: 10 }}
-        clipped
-        onTapGesture={props.onSelect}
-      >
-        {entry.item.thumbnailUrl
-          ? (
-            <Image
-              imageUrl={entry.item.thumbnailUrl}
-              resizable
-              scaleToFill
-              frame={{ width: CONTINUE_CARD_WIDTH, height: CONTINUE_THUMB_HEIGHT }}
-            />
-          )
-          : (
-            <VStack
-              frame={{ width: CONTINUE_CARD_WIDTH, height: CONTINUE_THUMB_HEIGHT }}
-              background="#1c1c1e"
-            >
-              <Image systemName="play.rectangle.fill" font={24} foregroundStyle="rgba(255,255,255,0.55)" />
-            </VStack>
-          )}
-
-        <VStack
-          spacing={0}
-          frame={{ width: CONTINUE_CARD_WIDTH, height: CONTINUE_THUMB_HEIGHT }}
-          padding={6}
-          allowsHitTesting={false}
-        >
-          <HStack spacing={0} frame={{ maxWidth: "infinity" }}>
-            {platformBadge(entry.item.provider)}
-            <Spacer />
-          </HStack>
-          <Spacer />
-          <HStack spacing={0} frame={{ maxWidth: "infinity" }}>
-            <Spacer />
-            <Text
-              font={9}
-              monospaced
-              foregroundStyle="white"
-              padding={{ horizontal: 4, vertical: 2 }}
-              background="rgba(0,0,0,0.75)"
-              clipShape={{ type: "rect", cornerRadius: 3 }}
-            >
-              {`${formatDuration(entry.position)} / ${formatDuration(total)}`}
-            </Text>
-          </HStack>
-        </VStack>
-
-        <VStack
-          spacing={0}
-          frame={{ width: CONTINUE_CARD_WIDTH, height: CONTINUE_THUMB_HEIGHT }}
-          allowsHitTesting={false}
-        >
-          <Spacer />
-          <HStack spacing={0} frame={{ width: CONTINUE_CARD_WIDTH, height: 3 }} background="rgba(255,255,255,0.28)">
-            <HStack
-              spacing={0}
-              frame={{ width: CONTINUE_CARD_WIDTH * ratio, height: 3 }}
-              background={accentColor(entry.item.provider)}
-            />
-          </HStack>
-        </VStack>
-      </ZStack>
-
-      <Text font={12} fontWeight="medium" foregroundStyle="label" lineLimit={1}>
-        {entry.item.title}
-      </Text>
-      <Text font={11} foregroundStyle="secondaryLabel" lineLimit={1}>
-        {entry.item.authorName}
-      </Text>
+    <VStack
+      alignment="leading"
+      spacing={8}
+      frame={{ width: CONTINUE_CARD_WIDTH }}
+      contentShape="rect"
+      onTapGesture={() => {
+        markZoomSource(zoomID)
+        props.onSelect()
+      }}
+    >
+      <Thumbnail
+        url={entry.item.thumbnailUrl}
+        zoomID={zoomID}
+        width={CONTINUE_CARD_WIDTH}
+        cornerRadius={radius.md}
+        provider={entry.item.provider}
+        durationText={total > 0 ? `剩 ${formatDuration(remaining)}` : undefined}
+        progress={ratio}
+      />
+      <VStack alignment="leading" spacing={2} frame={{ maxWidth: "infinity", alignment: "leading" }}>
+        <Text font={type.body - 1} fontWeight="semibold" foregroundStyle="label" lineLimit={1}>
+          {entry.item.title}
+        </Text>
+        <Text font={type.meta} foregroundStyle="secondaryLabel" lineLimit={1}>
+          {entry.item.authorName}
+        </Text>
+      </VStack>
     </VStack>
   )
 }
@@ -241,29 +142,28 @@ export function HomeView(props: HomeViewProps): VirtualNode {
   const [items, setItems] = useState<UnifiedVideoItem[]>([])
   const [loading, setLoading] = useState<boolean>(true)
   const [errorText, setErrorText] = useState<string | null>(null)
-  const [refreshSeq, setRefreshSeq] = useState<number>(0)
   const [history, setHistory] = useState<WatchHistoryEntry[]>(() => getWatchHistory())
+  const requestSeq = useRef<number>(0)
 
-  useEffect(() => {
-    let cancelled: boolean = false
+  const loadFeed = async (target: FeedFilter): Promise<void> => {
+    const seq: number = ++requestSeq.current
     setLoading(true)
     setErrorText(null)
-    getHomeFeed(filter)
-      .then((list: UnifiedVideoItem[]) => {
-        if (cancelled) return
-        setItems(list)
-        setLoading(false)
-      })
-      .catch(() => {
-        if (cancelled) return
-        setItems([])
-        setErrorText("載入失敗，請檢查網路連線")
-        setLoading(false)
-      })
-    return () => {
-      cancelled = true
+    try {
+      const list: UnifiedVideoItem[] = await getHomeFeed(target)
+      if (seq !== requestSeq.current) return
+      setItems(list)
+    } catch {
+      if (seq !== requestSeq.current) return
+      setItems([])
+      setErrorText("載入失敗，請檢查網路連線")
     }
-  }, [filter, refreshSeq])
+    if (seq === requestSeq.current) setLoading(false)
+  }
+
+  useEffect(() => {
+    void loadFeed(filter)
+  }, [filter])
 
   useEffect(() => {
     setHistory(getWatchHistory())
@@ -276,10 +176,6 @@ export function HomeView(props: HomeViewProps): VirtualNode {
     .filter((entry: WatchHistoryEntry): boolean => entry.position > 5)
     .slice(0, 8)
 
-  const reload = (): void => {
-    setRefreshSeq((seq: number): number => seq + 1)
-  }
-
   const handleSelect = (item: UnifiedVideoItem): void => {
     void openVideo(item, { queue: items })
   }
@@ -289,95 +185,34 @@ export function HomeView(props: HomeViewProps): VirtualNode {
   }
 
   const header: VirtualNode = (
-    <VStack spacing={10} padding={{ horizontal: 12, vertical: 10 }}>
-      <HStack spacing={10} frame={{ maxWidth: "infinity" }}>
-        <HStack spacing={8}>
-          <ZStack
-            frame={{ width: 28, height: 28 }}
-            background={YT_RED}
-            clipShape={{ type: "rect", cornerRadius: 8 }}
-          >
-            <Image systemName="play.rectangle.fill" font={15} foregroundStyle="white" />
-          </ZStack>
-          <Text font={20} fontWeight="bold" foregroundStyle="label">Yobi</Text>
-        </HStack>
-
-        <Spacer />
-
-        <HStack spacing={8}>
-          <HStack
-            spacing={5}
-            padding={{ horizontal: 10, vertical: 6 }}
-            background="tertiarySystemFill"
-            clipShape="capsule"
-            onTapGesture={() => {
-              void openLinkFlow()
-            }}
-          >
-            <Image systemName="link.badge.plus" font={12} foregroundStyle="secondaryLabel" />
-            <Text font={12} fontWeight="medium" foregroundStyle="label" lineLimit={1}>開啟連結</Text>
-          </HStack>
-          <CircleIconButton
-            icon="magnifyingglass"
-            size={32}
-            onTap={() => props.onOpenSearch?.()}
-          />
-          {props.onExitApp ? (
-            <CircleIconButton
-              icon="xmark"
-              size={32}
-              onTap={() => props.onExitApp?.()}
-            />
+    <PageHeader
+      title="Yobi"
+      trailing={
+        <HStack spacing={10}>
+          <GlassIconButton icon="link" onTap={() => void openLinkFlow()} />
+          {props.onOpenSettings ? (
+            <GlassIconButton icon="gearshape" onTap={() => props.onOpenSettings?.()} />
           ) : null}
         </HStack>
-      </HStack>
+      }
+    />
+  )
 
-      <HStack spacing={8} frame={{ maxWidth: "infinity" }}>
-        <HStack spacing={6}>
-          <FilterChip
-            label="全部"
-            active={filter === "all"}
-            activeColor={LINK_BLUE}
-            onTap={() => setFilter("all")}
-          />
-          <FilterChip
-            label="YouTube"
-            active={filter === "yt"}
-            activeColor={YT_RED}
-            onTap={() => setFilter("yt")}
-          />
-          <FilterChip
-            label="BiliBili"
-            active={filter === "bili"}
-            activeColor={BILI_PINK}
-            onTap={() => setFilter("bili")}
-          />
-        </HStack>
-
-        <Spacer />
-
-        <HStack spacing={8}>
-          <CircleIconButton
-            icon={layoutMode === "grid" ? "rectangle.grid.1x2" : "list.bullet"}
-            size={30}
-            onTap={() => setLayoutMode(layoutMode === "grid" ? "row" : "grid")}
-          />
-          <CircleIconButton icon="arrow.clockwise" size={30} onTap={reload} />
-        </HStack>
-      </HStack>
-    </VStack>
+  const filterBar: VirtualNode = (
+    <ChipBar
+      options={PROVIDER_FILTERS}
+      value={filter}
+      onChange={setFilter}
+      trailing={<LayoutToggle layout={layoutMode} onChange={setLayoutMode} />}
+    />
   )
 
   const continueSection: VirtualNode | null = continueEntries.length > 0
     ? (
-      <VStack spacing={8} alignment="leading" frame={{ maxWidth: "infinity" }}>
-        <HStack spacing={6} padding={{ horizontal: 14 }}>
-          <Text font={15} fontWeight="semibold" foregroundStyle="label">繼續觀看</Text>
-          <Spacer />
-          <Text font={11} foregroundStyle="secondaryLabel">{`${continueEntries.length} 部`}</Text>
-        </HStack>
+      <VStack spacing={12} alignment="leading" frame={{ maxWidth: "infinity", alignment: "leading" }}>
+        <SectionHeader title="繼續觀看" detail={`${continueEntries.length} 部`} />
         <ScrollView axes="horizontal" scrollIndicator="hidden">
-          <HStack spacing={10} padding={{ horizontal: 14 }}>
+          <HStack spacing={14} alignment="top" padding={{ horizontal: space.page }}>
             {continueEntries.map((entry: WatchHistoryEntry) => (
               <ContinueCard
                 key={`${entry.item.id}-${entry.cid ?? entry.page ?? 0}`}
@@ -395,35 +230,20 @@ export function HomeView(props: HomeViewProps): VirtualNode {
 
   let feedContent: VirtualNode
   if (loading && items.length === 0) {
-    feedContent = (
-      <VStack spacing={10} frame={{ maxWidth: "infinity", minHeight: 220 }}>
-        <ProgressView />
-        <Text font={13} foregroundStyle="secondaryLabel">正在載入跨平台熱門影片...</Text>
-      </VStack>
-    )
+    feedContent = <VideoCardSkeleton layout={layoutMode} />
   } else if (!loading && items.length === 0) {
     feedContent = (
-      <VStack spacing={10} frame={{ maxWidth: "infinity", minHeight: 220 }}>
-        <Image
-          systemName={errorText ? "wifi.exclamationmark" : "tray"}
-          font={30}
-          foregroundStyle="tertiaryLabel"
-        />
-        <Text font={13} foregroundStyle="secondaryLabel">
-          {errorText ?? "目前沒有推薦影片"}
-        </Text>
-        <Button
-          title="重試"
-          action={reload}
-          buttonStyle="borderedProminent"
-          controlSize="small"
-          tint={LINK_BLUE}
-        />
-      </VStack>
+      <EmptyState
+        icon={errorText ? "wifi.exclamationmark" : "sparkles.tv"}
+        title={errorText ? "連不上伺服器" : "目前沒有推薦影片"}
+        message={errorText ?? "下拉即可重新整理"}
+        actionLabel="重試"
+        onAction={() => void loadFeed(filter)}
+      />
     )
   } else {
     feedContent = (
-      <VStack spacing={layoutMode === "grid" ? 18 : 0} frame={{ maxWidth: "infinity" }}>
+      <LazyVStack spacing={layoutMode === "grid" ? space.cardGap : 4} frame={{ maxWidth: "infinity" }}>
         {items.map((item: UnifiedVideoItem) => (
           <VideoCard
             key={item.id}
@@ -434,26 +254,28 @@ export function HomeView(props: HomeViewProps): VirtualNode {
             onOpenChannel={handleOpenChannel}
           />
         ))}
-      </VStack>
+      </LazyVStack>
     )
   }
 
   return (
-    <VStack spacing={0} frame={{ maxWidth: "infinity", maxHeight: "infinity" }}>
-      {header}
-      <ScrollView
-        axes="vertical"
-        scrollIndicator="automatic"
-        frame={{ maxWidth: "infinity", maxHeight: "infinity" }}
-      >
-        <VStack spacing={14} alignment="leading" frame={{ maxWidth: "infinity" }} padding={{ top: 4 }}>
-          {continueSection}
-          <VStack spacing={0} frame={{ maxWidth: "infinity" }} padding={{ horizontal: layoutMode === "grid" ? 12 : 0 }}>
-            {feedContent}
-          </VStack>
-          <Spacer frame={{ height: 96 }} />
+    <ScrollView
+      axes="vertical"
+      scrollIndicator="hidden"
+      frame={{ maxWidth: "infinity", maxHeight: "infinity" }}
+      refreshable={() => loadFeed(filter)}
+    >
+      <VStack spacing={space.section - 8} alignment="leading" frame={{ maxWidth: "infinity", alignment: "leading" }} padding={{ bottom: 16 }}>
+        <VStack spacing={4} frame={{ maxWidth: "infinity" }}>
+          {header}
+          {filterBar}
         </VStack>
-      </ScrollView>
-    </VStack>
+        {continueSection}
+        <VStack spacing={12} frame={{ maxWidth: "infinity" }}>
+          {continueSection ? <SectionHeader title="熱門" /> : null}
+          {feedContent}
+        </VStack>
+      </VStack>
+    </ScrollView>
   )
 }

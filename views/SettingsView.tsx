@@ -1,17 +1,21 @@
 import {
   Button,
+  Form,
   HStack,
   Image,
-  ScrollView,
+  LabeledContent,
+  Menu,
+  Picker,
+  Script,
+  Section,
   Spacer,
   Text,
   Toggle,
   VStack,
-  ZStack,
   useEffect,
   useState,
 } from "scripting"
-import type { Color, VirtualNode } from "scripting"
+import type { VirtualNode } from "scripting"
 import type {
   PlayerSettings,
   Provider,
@@ -36,61 +40,58 @@ import {
   subscribeStorageChanges,
   updateSettings,
 } from "../services/index"
-import {
-  SPONSOR_CATEGORY_LABELS,
-  providerAccentColor,
-  providerFullName,
-} from "../utils/format"
+import { SPONSOR_CATEGORY_LABELS, providerBadgeLabel, providerFullName } from "../utils/format"
+import { palette, providerColor } from "../ui/theme"
 
 export interface SettingsViewProps {
-  onClose?: () => void
   onExitApp?: () => void
 }
 
-const LINK_BLUE: Color = "rgba(10,132,255,1)"
-const YT_RED: Color = "rgba(255,46,77,1)"
-const BILI_PINK: Color = "rgba(251,114,153,1)"
+interface Option<T> {
+  label: string
+  value: T
+}
 
-const STREAM_MODE_OPTIONS: { label: string; value: YoutubeStreamPreference }[] = [
-  { label: "Auto (HLS+SABR)", value: "auto" },
+const STREAM_MODE_OPTIONS: Option<YoutubeStreamPreference>[] = [
+  { label: "自動", value: "auto" },
   { label: "HLS 優先", value: "hls" },
   { label: "SABR 優先", value: "sabr" },
 ]
 
-const QUALITY_OPTIONS: { label: string; value: number }[] = [
-  { label: "4K (2160p)", value: 2160 },
+const QUALITY_OPTIONS: Option<number>[] = [
+  { label: "4K", value: 2160 },
   { label: "1080p", value: 1080 },
   { label: "720p", value: 720 },
   { label: "480p", value: 480 },
 ]
 
-const RATE_OPTIONS: { label: string; value: number }[] = [
-  { label: "0.75x", value: 0.75 },
-  { label: "1.0x", value: 1.0 },
-  { label: "1.25x", value: 1.25 },
-  { label: "1.5x", value: 1.5 },
-  { label: "2.0x", value: 2.0 },
+const RATE_OPTIONS: Option<number>[] = [
+  { label: "0.75×", value: 0.75 },
+  { label: "1×", value: 1.0 },
+  { label: "1.25×", value: 1.25 },
+  { label: "1.5×", value: 1.5 },
+  { label: "2×", value: 2.0 },
 ]
 
-const AREA_OPTIONS: { label: string; value: number }[] = [
+const AREA_OPTIONS: Option<number>[] = [
   { label: "1/4 螢幕", value: 0.25 },
   { label: "半螢幕", value: 0.5 },
   { label: "3/4 螢幕", value: 0.75 },
   { label: "全螢幕", value: 1.0 },
 ]
 
-const OPACITY_OPTIONS: { label: string; value: number }[] = [
+const OPACITY_OPTIONS: Option<number>[] = [
   { label: "50%", value: 0.5 },
   { label: "70%", value: 0.7 },
   { label: "90%", value: 0.9 },
   { label: "100%", value: 1.0 },
 ]
 
-const SPEED_OPTIONS: { label: string; value: number }[] = [
-  { label: "慢 (0.75x)", value: 0.75 },
-  { label: "標準 (1.0x)", value: 1.0 },
-  { label: "快 (1.25x)", value: 1.25 },
-  { label: "極快 (1.5x)", value: 1.5 },
+const SPEED_OPTIONS: Option<number>[] = [
+  { label: "慢", value: 0.75 },
+  { label: "標準", value: 1.0 },
+  { label: "快", value: 1.25 },
+  { label: "極快", value: 1.5 },
 ]
 
 const ALL_SPONSOR_CATEGORIES: SponsorCategory[] = [
@@ -120,50 +121,76 @@ function parseCookieString(raw: string): Record<string, string> {
   return result
 }
 
-function SectionCard(props: { title: string; icon: string; children?: VirtualNode | VirtualNode[] }): VirtualNode {
+// Stored values may predate the option list; snap to the closest so the picker always shows a selection.
+function nearest(options: Option<number>[], value: number): number {
+  let best: number = options[0].value
+  for (const option of options) {
+    if (Math.abs(option.value - value) < Math.abs(best - value)) best = option.value
+  }
+  return best
+}
+
+function NumberPicker(props: {
+  title: string
+  options: Option<number>[]
+  value: number
+  onChange: (value: number) => void
+}): VirtualNode {
   return (
-    <VStack
-      alignment="leading"
-      spacing={12}
-      padding={14}
-      frame={{ maxWidth: "infinity", alignment: "leading" }}
-      background="secondarySystemGroupedBackground"
-      clipShape={{ type: "rect", cornerRadius: 14 }}
+    <Picker
+      title={props.title}
+      value={nearest(props.options, props.value)}
+      onChanged={props.onChange}
+      pickerStyle="menu"
     >
-      <HStack spacing={8}>
-        <Image systemName={props.icon} font={14} foregroundStyle={LINK_BLUE} />
-        <Text font={14} fontWeight="bold" foregroundStyle="label">
-          {props.title}
-        </Text>
-      </HStack>
-      {props.children}
-    </VStack>
+      {props.options.map((option: Option<number>) => (
+        <Text key={`${props.title}-${option.value}`} tag={option.value}>{option.label}</Text>
+      ))}
+    </Picker>
   )
 }
 
-function OptionPill(props: {
-  label: string
-  active: boolean
-  activeColor?: Color
-  onTap: () => void
+function AccountRow(props: {
+  provider: Provider
+  state: ProviderAuthState
+  onWebLogin: () => void
+  onPasteCookies: () => void
+  onLogout: () => void
 }): VirtualNode {
-  const color: Color = props.activeColor ?? LINK_BLUE
+  const cookieCount: number = Object.keys(props.state.cookies).length
+  const statusText: string = props.state.loggedIn
+    ? props.state.username ? props.state.username : "已登入"
+    : cookieCount > 0 ? `已儲存 ${cookieCount} 個 Cookie` : "未登入"
+
   return (
-    <HStack
-      spacing={0}
-      padding={{ horizontal: 11, vertical: 6 }}
-      background={props.active ? color : "tertiarySystemFill"}
-      clipShape="capsule"
-      onTapGesture={props.onTap}
+    <Menu
+      label={
+        <HStack spacing={12} frame={{ maxWidth: "infinity" }} contentShape="rect">
+          <VStack
+            frame={{ width: 36, height: 36 }}
+            background={{ style: providerColor(props.provider), shape: { type: "rect", cornerRadius: 18 } }}
+          >
+            <Text font={11} fontWeight="heavy" foregroundStyle={palette.onMedia}>
+              {providerBadgeLabel(props.provider)}
+            </Text>
+          </VStack>
+          <VStack alignment="leading" spacing={2}>
+            <Text font={16} foregroundStyle="label">{providerFullName(props.provider)}</Text>
+            <Text font={13} foregroundStyle={props.state.loggedIn ? palette.success : "secondaryLabel"}>
+              {statusText}
+            </Text>
+          </VStack>
+          <Spacer />
+          <Image systemName="chevron.up.chevron.down" font={13} fontWeight="semibold" foregroundStyle="tertiaryLabel" />
+        </HStack>
+      }
     >
-      <Text
-        font={12}
-        fontWeight={props.active ? "semibold" : "regular"}
-        foregroundStyle={props.active ? "white" : "label"}
-      >
-        {props.label}
-      </Text>
-    </HStack>
+      <Button title="網頁登入" systemImage="globe" action={props.onWebLogin} />
+      <Button title="貼上 Cookie" systemImage="doc.on.clipboard" action={props.onPasteCookies} />
+      {cookieCount > 0 ? (
+        <Button title="清除 Cookie" systemImage="trash" role="destructive" action={props.onLogout} />
+      ) : null}
+    </Menu>
   )
 }
 
@@ -204,9 +231,6 @@ export function SettingsView(props: SettingsViewProps): VirtualNode {
 
   const showToast = (msg: string): void => {
     setStatusMessage(msg)
-    setTimeout(() => {
-      setStatusMessage(null)
-    }, 2400)
   }
 
   const patchSettings = (patch: Partial<PlayerSettings>): void => {
@@ -214,21 +238,25 @@ export function SettingsView(props: SettingsViewProps): VirtualNode {
     setSettings(next)
   }
 
+  const setAuth = (provider: Provider, next: ProviderAuthState): void => {
+    if (provider === "bili") {
+      setBiliAuth(next)
+    } else {
+      setYtAuth(next)
+    }
+  }
+
   const handleWebLogin = async (provider: Provider): Promise<void> => {
     try {
       const next: ProviderAuthState = await loginWithWebView(provider)
-      if (provider === "bili") {
-        setBiliAuth(next)
-      } else {
-        setYtAuth(next)
-      }
+      setAuth(provider, next)
       showToast(
         next.loggedIn
           ? `${providerFullName(provider)} 登入成功`
-          : `已更新 ${providerFullName(provider)} Cookie (${Object.keys(next.cookies).length} 項)`,
+          : `已更新 ${providerFullName(provider)} Cookie（${Object.keys(next.cookies).length} 項）`,
       )
     } catch (err: unknown) {
-      showToast(err instanceof Error ? err.message : "WebView 登入失敗")
+      showToast(err instanceof Error ? err.message : "網頁登入失敗")
     }
   }
 
@@ -253,12 +281,7 @@ export function SettingsView(props: SettingsViewProps): VirtualNode {
       })
       return
     }
-    const next: ProviderAuthState = setAuthCookies(provider, parsed)
-    if (provider === "bili") {
-      setBiliAuth(next)
-    } else {
-      setYtAuth(next)
-    }
+    setAuth(provider, setAuthCookies(provider, parsed))
     showToast(`已儲存 ${Object.keys(parsed).length} 個 ${providerFullName(provider)} Cookie`)
   }
 
@@ -270,20 +293,15 @@ export function SettingsView(props: SettingsViewProps): VirtualNode {
     })
     if (!confirmed) return
     clearAuth(provider)
-    if (provider === "bili") {
-      setBiliAuth(getAuthState("bili"))
-    } else {
-      setYtAuth(getAuthState("yt"))
-    }
+    setAuth(provider, getAuthState(provider))
     showToast(`已清除 ${providerFullName(provider)} 登入狀態`)
   }
 
-  const toggleSponsorCategory = (category: SponsorCategory): void => {
+  const toggleSponsorCategory = (category: SponsorCategory, enabled: boolean): void => {
     const current: SponsorCategory[] = settings.sponsorBlockCategories
-    const exists: boolean = current.includes(category)
-    const next: SponsorCategory[] = exists
-      ? current.filter((item: SponsorCategory): boolean => item !== category)
-      : [...current, category]
+    const next: SponsorCategory[] = enabled
+      ? [...current.filter((item: SponsorCategory): boolean => item !== category), category]
+      : current.filter((item: SponsorCategory): boolean => item !== category)
     patchSettings({ sponsorBlockCategories: next })
   }
 
@@ -311,14 +329,14 @@ export function SettingsView(props: SettingsViewProps): VirtualNode {
   const handleExportClipboard = async (): Promise<void> => {
     const json: string = exportAllData()
     await Pasteboard.setString(json)
-    showToast("已將完整備份 JSON 複製到剪貼簿")
+    showToast("備份已複製到剪貼簿")
   }
 
   const handleImportClipboard = async (): Promise<void> => {
     const clip: string = (await Pasteboard.getString()) ?? ""
     const input: string | null = await Dialog.prompt({
-      title: "匯入備份 JSON",
-      message: "貼上先前匯出的 Yobi JSON 備份內容",
+      title: "匯入備份",
+      message: "貼上先前匯出的 Yobi 備份內容",
       defaultValue: clip.trim().startsWith("{") ? clip : "",
       placeholder: "{\"version\":1,...}",
       confirmLabel: "匯入",
@@ -327,7 +345,7 @@ export function SettingsView(props: SettingsViewProps): VirtualNode {
     const ok: boolean = importAllData(input)
     if (ok) {
       refreshAll()
-      showToast("備份資料匯入成功")
+      showToast("備份已匯入")
     } else {
       await Dialog.alert({
         title: "匯入失敗",
@@ -336,457 +354,187 @@ export function SettingsView(props: SettingsViewProps): VirtualNode {
     }
   }
 
-  const renderAccountRow = (provider: Provider, state: ProviderAuthState): VirtualNode => {
-    const accent: Color = provider === "bili" ? BILI_PINK : YT_RED
-    const cookieCount: number = Object.keys(state.cookies).length
-    const statusText: string = state.loggedIn
-      ? state.username
-        ? `已登入：${state.username}`
-        : `已登入 (${cookieCount} Cookies)`
-      : cookieCount > 0
-        ? `已儲存 ${cookieCount} 個 Cookie`
-        : "未登入"
-
-    return (
-      <VStack
-        alignment="leading"
-        spacing={10}
-        padding={12}
-        frame={{ maxWidth: "infinity", alignment: "leading" }}
-        background="tertiarySystemFill"
-        clipShape={{ type: "rect", cornerRadius: 12 }}
-      >
-        <HStack spacing={10} frame={{ maxWidth: "infinity" }}>
-          <ZStack
-            frame={{ width: 36, height: 36 }}
-            background={accent}
-            clipShape="circle"
-          >
-            <Text font={12} fontWeight="bold" foregroundStyle="white">
-              {provider === "bili" ? "BILI" : "YT"}
-            </Text>
-          </ZStack>
-
-          <VStack alignment="leading" spacing={2}>
-            <Text font={14} fontWeight="semibold" foregroundStyle="label">
-              {providerFullName(provider)}
-            </Text>
-            <Text
-              font={12}
-              foregroundStyle={state.loggedIn ? "rgba(48,209,88,1)" : "secondaryLabel"}
-            >
-              {statusText}
-            </Text>
-          </VStack>
-
-          <Spacer />
-
-          <HStack
-            spacing={4}
-            padding={{ horizontal: 12, vertical: 6 }}
-            background={accent}
-            clipShape="capsule"
-            onTapGesture={() => {
-              void handleWebLogin(provider)
-            }}
-          >
-            <Image systemName="globe" font={12} foregroundStyle="white" />
-            <Text font={12} fontWeight="semibold" foregroundStyle="white">
-              網頁登入
-            </Text>
-          </HStack>
-        </HStack>
-
-        <HStack spacing={8}>
-          <HStack
-            spacing={4}
-            padding={{ horizontal: 10, vertical: 5 }}
-            background="quaternarySystemFill"
-            clipShape="capsule"
-            onTapGesture={() => {
-              void handlePasteCookies(provider)
-            }}
-          >
-            <Image systemName="doc.on.clipboard" font={11} foregroundStyle="secondaryLabel" />
-            <Text font={11} foregroundStyle="label">
-              貼上 Cookie
-            </Text>
-          </HStack>
-
-          {cookieCount > 0 ? (
-            <HStack
-              spacing={4}
-              padding={{ horizontal: 10, vertical: 5 }}
-              background="quaternarySystemFill"
-              clipShape="capsule"
-              onTapGesture={() => {
-                void handleLogout(provider)
-              }}
-            >
-              <Image systemName="trash" font={11} foregroundStyle="rgba(255,59,48,1)" />
-              <Text font={11} foregroundStyle="rgba(255,59,48,1)">
-                清除 Cookie
-              </Text>
-            </HStack>
-          ) : null}
-        </HStack>
-      </VStack>
-    )
+  const handleClearHistory = async (): Promise<void> => {
+    const ok: boolean = await Dialog.confirm({
+      title: "清空觀看紀錄",
+      message: "確定要清除所有本機觀看紀錄嗎？",
+      confirmLabel: "清空",
+    })
+    if (!ok) return
+    clearWatchHistory()
+    showToast("已清空觀看紀錄")
   }
 
   return (
-    <VStack
-      spacing={0}
-      frame={{ maxWidth: "infinity", maxHeight: "infinity" }}
-      background="systemGroupedBackground"
+    <Form
+      formStyle="grouped"
+      tint={palette.brand}
+      navigationTitle="設定"
+      navigationBarTitleDisplayMode="large"
+      toast={{
+        message: statusMessage ?? "",
+        position: "bottom",
+        isPresented: statusMessage !== null,
+        onChanged: (presented: boolean) => {
+          if (!presented) setStatusMessage(null)
+        },
+      }}
     >
-      <HStack
-        spacing={10}
-        padding={{ horizontal: 16, vertical: 12 }}
-        frame={{ maxWidth: "infinity" }}
-        background="secondarySystemGroupedBackground"
+      <Section
+        header={<Text>帳號</Text>}
+        footer={<Text>登入 BiliBili 可解鎖 1080P 以上畫質與完整彈幕；YouTube 不登入也能播放。</Text>}
       >
-        {props.onClose ? (
-          <HStack
-            spacing={4}
-            padding={{ horizontal: 10, vertical: 6 }}
-            background="tertiarySystemFill"
-            clipShape="capsule"
-            onTapGesture={props.onClose}
-          >
-            <Image systemName="chevron.left" font={12} foregroundStyle="label" />
-            <Text font={13} fontWeight="medium" foregroundStyle="label">
-              返回
-            </Text>
-          </HStack>
-        ) : null}
+        <AccountRow
+          provider="yt"
+          state={ytAuth}
+          onWebLogin={() => void handleWebLogin("yt")}
+          onPasteCookies={() => void handlePasteCookies("yt")}
+          onLogout={() => void handleLogout("yt")}
+        />
+        <AccountRow
+          provider="bili"
+          state={biliAuth}
+          onWebLogin={() => void handleWebLogin("bili")}
+          onPasteCookies={() => void handlePasteCookies("bili")}
+          onLogout={() => void handleLogout("bili")}
+        />
+      </Section>
 
-        <Text font={20} fontWeight="bold" foregroundStyle="label">
-          設定與帳號
-        </Text>
-
-        <Spacer />
-
-        {props.onExitApp ? (
-          <HStack
-            spacing={5}
-            padding={{ horizontal: 12, vertical: 6 }}
-            background="rgba(255,59,48,0.14)"
-            clipShape="capsule"
-            onTapGesture={props.onExitApp}
-          >
-            <Image systemName="power" font={12} foregroundStyle="rgba(255,59,48,1)" />
-            <Text font={12} fontWeight="semibold" foregroundStyle="rgba(255,59,48,1)">
-              關閉腳本
-            </Text>
-          </HStack>
-        ) : null}
-      </HStack>
-
-      {statusMessage ? (
-        <HStack
-          spacing={6}
-          padding={{ horizontal: 14, vertical: 8 }}
-          frame={{ maxWidth: "infinity" }}
-          background="rgba(10,132,255,0.15)"
+      <Section title="播放">
+        <Picker
+          title="YouTube 串流模式"
+          value={settings.youtubeStreamMode}
+          onChanged={(value: string) => patchSettings({ youtubeStreamMode: value as YoutubeStreamPreference })}
+          pickerStyle="menu"
         >
-          <Image systemName="checkmark.circle.fill" font={13} foregroundStyle={LINK_BLUE} />
-          <Text font={12} fontWeight="medium" foregroundStyle={LINK_BLUE}>
-            {statusMessage}
-          </Text>
-          <Spacer />
-        </HStack>
+          {STREAM_MODE_OPTIONS.map((option: Option<YoutubeStreamPreference>) => (
+            <Text key={`stream-${option.value}`} tag={option.value}>{option.label}</Text>
+          ))}
+        </Picker>
+        <NumberPicker
+          title="偏好畫質"
+          options={QUALITY_OPTIONS}
+          value={settings.preferredQualityHeight}
+          onChange={(value: number) => patchSettings({ preferredQualityHeight: value })}
+        />
+        <NumberPicker
+          title="播放速度"
+          options={RATE_OPTIONS}
+          value={settings.defaultPlaybackRate}
+          onChange={(value: number) => patchSettings({ defaultPlaybackRate: value })}
+        />
+        <Toggle
+          title="背景與鎖定畫面播放"
+          value={settings.backgroundAudioEnabled}
+          onChanged={(value: boolean) => patchSettings({ backgroundAudioEnabled: value })}
+        />
+      </Section>
+
+      <Section
+        header={<Text>SponsorBlock</Text>}
+        footer={<Text>只作用於 YouTube。關閉自動跳過時，片段開始會顯示跳過按鈕。</Text>}
+      >
+        <Toggle
+          title="啟用"
+          value={settings.sponsorBlockEnabled}
+          onChanged={(value: boolean) => patchSettings({ sponsorBlockEnabled: value })}
+        />
+        {settings.sponsorBlockEnabled ? (
+          <Toggle
+            title="自動跳過"
+            value={settings.sponsorBlockAutoSkip}
+            onChanged={(value: boolean) => patchSettings({ sponsorBlockAutoSkip: value })}
+          />
+        ) : null}
+      </Section>
+
+      {settings.sponsorBlockEnabled ? (
+        <Section title="要跳過的片段">
+          {ALL_SPONSOR_CATEGORIES.map((category: SponsorCategory) => (
+            <Toggle
+              key={`sb-${category}`}
+              title={SPONSOR_CATEGORY_LABELS[category]}
+              value={settings.sponsorBlockCategories.includes(category)}
+              onChanged={(value: boolean) => toggleSponsorCategory(category, value)}
+            />
+          ))}
+        </Section>
       ) : null}
 
-      <ScrollView axes="vertical" scrollIndicator="automatic">
-        <VStack spacing={14} padding={14} frame={{ maxWidth: "infinity" }}>
-          <SectionCard title="平台帳號與 Cookie" icon="person.crop.circle.badge.checkmark">
-            {renderAccountRow("yt", ytAuth)}
-            {renderAccountRow("bili", biliAuth)}
-            <Text font={11} foregroundStyle="secondaryLabel">
-              登入 BiliBili 可解鎖 1080P+ 高畫質與完整彈幕；YouTube 預設免登入即可透過雙引擎播放。
-            </Text>
-          </SectionCard>
+      <Section title="BiliBili 彈幕">
+        <Toggle
+          title="預設開啟彈幕"
+          value={settings.danmakuEnabled}
+          onChanged={(value: boolean) => patchSettings({ danmakuEnabled: value })}
+        />
+        <NumberPicker
+          title="顯示區域"
+          options={AREA_OPTIONS}
+          value={settings.danmakuArea}
+          onChange={(value: number) => patchSettings({ danmakuArea: value })}
+        />
+        <NumberPicker
+          title="不透明度"
+          options={OPACITY_OPTIONS}
+          value={settings.danmakuOpacity}
+          onChange={(value: number) => patchSettings({ danmakuOpacity: value })}
+        />
+        <NumberPicker
+          title="速度"
+          options={SPEED_OPTIONS}
+          value={settings.danmakuSpeed}
+          onChange={(value: number) => patchSettings({ danmakuSpeed: value })}
+        />
+      </Section>
 
-          <SectionCard title="播放與串流引擎" icon="play.tv.fill">
-            <VStack alignment="leading" spacing={6} frame={{ maxWidth: "infinity", alignment: "leading" }}>
-              <Text font={12} foregroundStyle="secondaryLabel">
-                YouTube 串流模式
-              </Text>
-              <ScrollView axes="horizontal" scrollIndicator="hidden">
-                <HStack spacing={6}>
-                  {STREAM_MODE_OPTIONS.map(opt => (
-                    <OptionPill
-                      key={`stream-${opt.value}`}
-                      label={opt.label}
-                      active={settings.youtubeStreamMode === opt.value}
-                      activeColor={YT_RED}
-                      onTap={() => patchSettings({ youtubeStreamMode: opt.value })}
-                    />
-                  ))}
-                </HStack>
-              </ScrollView>
-            </VStack>
-
-            <VStack alignment="leading" spacing={6} frame={{ maxWidth: "infinity", alignment: "leading" }}>
-              <Text font={12} foregroundStyle="secondaryLabel">
-                預設偏好畫質
-              </Text>
-              <ScrollView axes="horizontal" scrollIndicator="hidden">
-                <HStack spacing={6}>
-                  {QUALITY_OPTIONS.map(opt => (
-                    <OptionPill
-                      key={`q-${opt.value}`}
-                      label={opt.label}
-                      active={settings.preferredQualityHeight === opt.value}
-                      onTap={() => patchSettings({ preferredQualityHeight: opt.value })}
-                    />
-                  ))}
-                </HStack>
-              </ScrollView>
-            </VStack>
-
-            <VStack alignment="leading" spacing={6} frame={{ maxWidth: "infinity", alignment: "leading" }}>
-              <Text font={12} foregroundStyle="secondaryLabel">
-                預設播放速度
-              </Text>
-              <ScrollView axes="horizontal" scrollIndicator="hidden">
-                <HStack spacing={6}>
-                  {RATE_OPTIONS.map(opt => (
-                    <OptionPill
-                      key={`rate-${opt.value}`}
-                      label={opt.label}
-                      active={settings.defaultPlaybackRate === opt.value}
-                      onTap={() => patchSettings({ defaultPlaybackRate: opt.value })}
-                    />
-                  ))}
-                </HStack>
-              </ScrollView>
-            </VStack>
-
-            <Toggle
-              title="允許背景與鎖屏音訊播放"
-              value={settings.backgroundAudioEnabled}
-              onChanged={(val: boolean) => patchSettings({ backgroundAudioEnabled: val })}
-            />
-          </SectionCard>
-
-          <SectionCard title="SponsorBlock 片段跳過" icon="forward.end.alt.fill">
-            <Toggle
-              title="啟用 SponsorBlock (YouTube)"
-              value={settings.sponsorBlockEnabled}
-              onChanged={(val: boolean) => patchSettings({ sponsorBlockEnabled: val })}
-            />
-            <Toggle
-              title="自動跳過片段（關閉則顯示跳過提示按鈕）"
-              value={settings.sponsorBlockAutoSkip}
-              onChanged={(val: boolean) => patchSettings({ sponsorBlockAutoSkip: val })}
-            />
-            <VStack alignment="leading" spacing={6} frame={{ maxWidth: "infinity", alignment: "leading" }}>
-              <Text font={12} foregroundStyle="secondaryLabel">
-                偵測類別
-              </Text>
-              <ScrollView axes="horizontal" scrollIndicator="hidden">
-                <HStack spacing={6}>
-                  {ALL_SPONSOR_CATEGORIES.map((cat: SponsorCategory) => (
-                    <OptionPill
-                      key={`sb-${cat}`}
-                      label={SPONSOR_CATEGORY_LABELS[cat]}
-                      active={settings.sponsorBlockCategories.includes(cat)}
-                      onTap={() => toggleSponsorCategory(cat)}
-                    />
-                  ))}
-                </HStack>
-              </ScrollView>
-            </VStack>
-          </SectionCard>
-
-          <SectionCard title="BiliBili 彈幕設定" icon="bubble.left.and.bubble.right.fill">
-            <Toggle
-              title="預設開啟彈幕"
-              value={settings.danmakuEnabled}
-              onChanged={(val: boolean) => patchSettings({ danmakuEnabled: val })}
-            />
-
-            <VStack alignment="leading" spacing={6} frame={{ maxWidth: "infinity", alignment: "leading" }}>
-              <Text font={12} foregroundStyle="secondaryLabel">
-                顯示區域
-              </Text>
-              <ScrollView axes="horizontal" scrollIndicator="hidden">
-                <HStack spacing={6}>
-                  {AREA_OPTIONS.map(opt => (
-                    <OptionPill
-                      key={`area-${opt.value}`}
-                      label={opt.label}
-                      active={settings.danmakuArea === opt.value}
-                      activeColor={BILI_PINK}
-                      onTap={() => patchSettings({ danmakuArea: opt.value })}
-                    />
-                  ))}
-                </HStack>
-              </ScrollView>
-            </VStack>
-
-            <VStack alignment="leading" spacing={6} frame={{ maxWidth: "infinity", alignment: "leading" }}>
-              <Text font={12} foregroundStyle="secondaryLabel">
-                不透明度
-              </Text>
-              <ScrollView axes="horizontal" scrollIndicator="hidden">
-                <HStack spacing={6}>
-                  {OPACITY_OPTIONS.map(opt => (
-                    <OptionPill
-                      key={`op-${opt.value}`}
-                      label={opt.label}
-                      active={Math.abs(settings.danmakuOpacity - opt.value) < 0.05}
-                      activeColor={BILI_PINK}
-                      onTap={() => patchSettings({ danmakuOpacity: opt.value })}
-                    />
-                  ))}
-                </HStack>
-              </ScrollView>
-            </VStack>
-
-            <VStack alignment="leading" spacing={6} frame={{ maxWidth: "infinity", alignment: "leading" }}>
-              <Text font={12} foregroundStyle="secondaryLabel">
-                彈幕速度
-              </Text>
-              <ScrollView axes="horizontal" scrollIndicator="hidden">
-                <HStack spacing={6}>
-                  {SPEED_OPTIONS.map(opt => (
-                    <OptionPill
-                      key={`spd-${opt.value}`}
-                      label={opt.label}
-                      active={Math.abs(settings.danmakuSpeed - opt.value) < 0.05}
-                      activeColor={BILI_PINK}
-                      onTap={() => patchSettings({ danmakuSpeed: opt.value })}
-                    />
-                  ))}
-                </HStack>
-              </ScrollView>
-            </VStack>
-
-            <VStack alignment="leading" spacing={6} frame={{ maxWidth: "infinity", alignment: "leading" }}>
-              <HStack spacing={8} frame={{ maxWidth: "infinity" }}>
-                <Text font={12} foregroundStyle="secondaryLabel">
-                  彈幕屏蔽詞 ({settings.danmakuBlockedWords.length})
-                </Text>
-                <Spacer />
-                <HStack
-                  spacing={4}
-                  padding={{ horizontal: 10, vertical: 4 }}
-                  background="tertiarySystemFill"
-                  clipShape="capsule"
-                  onTapGesture={() => {
-                    void handleAddBlockedWord()
-                  }}
-                >
-                  <Image systemName="plus" font={10} foregroundStyle={LINK_BLUE} />
-                  <Text font={11} fontWeight="medium" foregroundStyle={LINK_BLUE}>
-                    新增
-                  </Text>
-                </HStack>
-              </HStack>
-
-              {settings.danmakuBlockedWords.length > 0 ? (
-                <ScrollView axes="horizontal" scrollIndicator="hidden">
-                  <HStack spacing={6}>
-                    {settings.danmakuBlockedWords.map((word: string) => (
-                      <HStack
-                        key={`bw-${word}`}
-                        spacing={4}
-                        padding={{ horizontal: 10, vertical: 5 }}
-                        background="tertiarySystemFill"
-                        clipShape="capsule"
-                        onTapGesture={() => handleRemoveBlockedWord(word)}
-                      >
-                        <Text font={11} foregroundStyle="label">
-                          {word}
-                        </Text>
-                        <Image systemName="xmark.circle.fill" font={11} foregroundStyle="secondaryLabel" />
-                      </HStack>
-                    ))}
-                  </HStack>
-                </ScrollView>
-              ) : (
-                <Text font={11} foregroundStyle="tertiaryLabel">
-                  尚未設定屏蔽關鍵字
-                </Text>
-              )}
-            </VStack>
-          </SectionCard>
-
-          <SectionCard title="本機資料與備份" icon="externaldrive.fill.badge.icloud">
-            <Text font={12} foregroundStyle="secondaryLabel">
-              {`已訂閱 ${stats.subscriptions} 頻道 · 歷史 ${stats.history} 筆 · 稍後觀看 ${stats.watchLater} 部 · 清單 ${stats.playlists} 個`}
-            </Text>
-
-            <HStack spacing={8}>
-              <HStack
-                spacing={6}
-                padding={{ horizontal: 12, vertical: 8 }}
-                background={LINK_BLUE}
-                clipShape="capsule"
-                onTapGesture={() => {
-                  void handleExportClipboard()
-                }}
-              >
-                <Image systemName="doc.on.doc.fill" font={12} foregroundStyle="white" />
-                <Text font={12} fontWeight="semibold" foregroundStyle="white">
-                  匯出備份至剪貼簿
-                </Text>
-              </HStack>
-
-              <HStack
-                spacing={6}
-                padding={{ horizontal: 12, vertical: 8 }}
-                background="tertiarySystemFill"
-                clipShape="capsule"
-                onTapGesture={() => {
-                  void handleImportClipboard()
-                }}
-              >
-                <Image systemName="square.and.arrow.down" font={12} foregroundStyle="label" />
-                <Text font={12} fontWeight="medium" foregroundStyle="label">
-                  從剪貼簿匯入
-                </Text>
-              </HStack>
+      <Section
+        header={<Text>{`屏蔽詞 ${settings.danmakuBlockedWords.length}`}</Text>}
+        footer={<Text>包含這些關鍵字的彈幕會自動隱藏。</Text>}
+      >
+        {settings.danmakuBlockedWords.map((word: string) => (
+          <Button key={`bw-${word}`} action={() => handleRemoveBlockedWord(word)}>
+            <HStack frame={{ maxWidth: "infinity" }} contentShape="rect">
+              <Text foregroundStyle="label">{word}</Text>
+              <Spacer />
+              <Image systemName="xmark.circle.fill" foregroundStyle="tertiaryLabel" />
             </HStack>
+          </Button>
+        ))}
+        <Button title="新增屏蔽詞" systemImage="plus" action={() => void handleAddBlockedWord()} />
+      </Section>
 
-            <HStack spacing={8}>
-              <Button
-                title="清空觀看歷史"
-                role="destructive"
-                buttonStyle="bordered"
-                controlSize="small"
-                action={() => {
-                  void Dialog.confirm({
-                    title: "清空觀看歷史",
-                    message: "確定要清除所有本機觀看紀錄嗎？",
-                    confirmLabel: "清空",
-                  }).then((ok: boolean) => {
-                    if (ok) {
-                      clearWatchHistory()
-                      showToast("已清空觀看歷史")
-                    }
-                  })
-                }}
-              />
-              <Button
-                title="清空搜尋紀錄"
-                role="destructive"
-                buttonStyle="bordered"
-                controlSize="small"
-                action={() => {
-                  clearSearchHistory()
-                  showToast("已清空搜尋紀錄")
-                }}
-              />
-            </HStack>
-          </SectionCard>
+      <Section title="本機資料">
+        <LabeledContent title="訂閱頻道" value={`${stats.subscriptions}`} />
+        <LabeledContent title="觀看紀錄" value={`${stats.history}`} />
+        <LabeledContent title="稍後觀看" value={`${stats.watchLater}`} />
+        <LabeledContent title="播放清單" value={`${stats.playlists}`} />
+        <Button title="匯出備份到剪貼簿" systemImage="square.and.arrow.up" action={() => void handleExportClipboard()} />
+        <Button title="從剪貼簿匯入備份" systemImage="square.and.arrow.down" action={() => void handleImportClipboard()} />
+      </Section>
 
-          <Spacer frame={{ height: 96 }} />
-        </VStack>
-      </ScrollView>
-    </VStack>
+      <Section>
+        <Button
+          title="清空觀看紀錄"
+          role="destructive"
+          foregroundStyle={palette.danger}
+          action={() => void handleClearHistory()}
+        />
+        <Button
+          title="清空搜尋紀錄"
+          role="destructive"
+          foregroundStyle={palette.danger}
+          action={() => {
+            clearSearchHistory()
+            showToast("已清空搜尋紀錄")
+          }}
+        />
+      </Section>
+
+      {props.onExitApp ? (
+        <Section footer={<Text>{`Yobi ${Script.metadata.version}`}</Text>}>
+          <Button title="結束 Yobi" systemImage="power" foregroundStyle={palette.danger} action={props.onExitApp} />
+        </Section>
+      ) : null}
+    </Form>
   )
 }

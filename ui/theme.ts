@@ -1,0 +1,54 @@
+import type { Color } from "scripting"
+import type { Provider } from "../types"
+
+export const palette = {
+  brand: "rgba(255,55,95,1)" as Color,
+  brandSoft: "rgba(255,55,95,0.14)" as Color,
+  yt: "rgba(255,46,77,1)" as Color,
+  bili: "rgba(251,114,153,1)" as Color,
+  success: "rgba(48,209,88,1)" as Color,
+  danger: "rgba(255,59,48,1)" as Color,
+  dangerSoft: "rgba(255,59,48,0.14)" as Color,
+  scrim: "rgba(0,0,0,0.62)" as Color,
+  onMedia: "rgba(255,255,255,1)" as Color,
+  onMediaDim: "rgba(255,255,255,0.7)" as Color,
+  track: "rgba(255,255,255,0.3)" as Color,
+  trackOnSurface: "rgba(120,120,128,0.24)" as Color,
+}
+
+export const radius = {
+  xs: 6,
+  sm: 10,
+  md: 14,
+  lg: 20,
+  xl: 28,
+}
+
+export const space = {
+  page: 16,
+  section: 28,
+  cardGap: 24,
+}
+
+export const type = {
+  largeTitle: 32,
+  title: 22,
+  section: 19,
+  cardTitle: 15,
+  body: 14,
+  meta: 12,
+  caption: 11,
+  micro: 10,
+}
+
+export function providerColor(provider: Provider): Color {
+  return provider === "bili" ? palette.bili : palette.yt
+}
+
+export function thumbHeight(width: number): number {
+  return Math.round((width * 9) / 16)
+}
+
+export function pageContentWidth(): number {
+  return Math.max(1, Device.screen.width - space.page * 2)
+}
