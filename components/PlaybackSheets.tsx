@@ -15,6 +15,7 @@ import {
 import type { VirtualNode } from "scripting"
 import type { VideoQualityTrack, YoutubeStreamPreference } from "../types"
 import {
+  getPlayerController,
   selectQuality,
   selectYoutubeStreamMode,
   updateDanmakuSettings,
@@ -43,6 +44,27 @@ function nearestArea(value: number): number {
   return best
 }
 
+function formatBitrate(bitsPerSecond: number | undefined): string | null {
+  if (!bitsPerSecond || bitsPerSecond <= 0) return null
+  const mbps: number = bitsPerSecond / 1_000_000
+  return mbps >= 10 ? `${Math.round(mbps)} Mbps` : `${mbps.toFixed(1)} Mbps`
+}
+
+/** 播放器實際回報的解碼器與硬體加速，加上目前畫質的標稱碼率。 */
+function decoderSummary(selected: VideoQualityTrack | undefined): string | null {
+  let info: VideoPlaybackInfo | null = null
+  try {
+    info = getPlayerController().mediaInfo
+  } catch {
+    info = null
+  }
+  const acceleration: string | null =
+    info?.hardwareAccelerated === true ? "硬體解碼" : info?.hardwareAccelerated === false ? "軟體解碼" : null
+  const parts: string[] = [info?.videoDecoder ?? null, acceleration, formatBitrate(selected?.bitrate)]
+    .filter((part: string | null): part is string => Boolean(part))
+  return parts.length > 0 ? parts.join(" · ") : null
+}
+
 function SheetShell(props: { title: string; onDone: () => void; children: (VirtualNode | null)[] | VirtualNode }): VirtualNode {
   return (
     <NavigationStack presentationDetents={["medium", "large"]} presentationDragIndicator="visible">
@@ -63,6 +85,9 @@ export function QualitySheet(props: { onDone: () => void }): VirtualNode {
   const store = usePlayerStore()
   const qualities: VideoQualityTrack[] = store.manifest?.qualities ?? []
   const isYoutube: boolean = store.currentItem?.provider === "yt"
+  const summary: string | null = decoderSummary(
+    qualities.find((quality: VideoQualityTrack): boolean => quality.id === store.selectedQualityId),
+  )
 
   return (
     <SheetShell title="畫質" onDone={props.onDone}>
@@ -81,12 +106,14 @@ export function QualitySheet(props: { onDone: () => void }): VirtualNode {
         </Section>
       ) : null}
 
-      <Section title="畫質">
+      <Section header={<Text>畫質</Text>} footer={summary ? <Text>{summary}</Text> : undefined}>
         {qualities.length === 0 ? (
           <Text foregroundStyle="secondaryLabel">尚無可用畫質</Text>
         ) : qualities.map((quality: VideoQualityTrack) => {
           const selected: boolean = quality.id === store.selectedQualityId
-          const detail: string = [quality.delivery.toUpperCase(), quality.codec].filter(Boolean).join(" · ")
+          const detail: string = [quality.delivery.toUpperCase(), quality.codec, formatBitrate(quality.bitrate)]
+            .filter(Boolean)
+            .join(" · ")
           return (
             <Button
               key={`quality-${quality.id}`}
