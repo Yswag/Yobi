@@ -35,6 +35,7 @@ import {
 } from "./bilibili"
 
 export { parseYoutubeInput } from "./youtube"
+export { disposeYoutubePageMinter, warmYoutubePageMinter } from "./youtube/pageMinter"
 export { parseBiliInput, fetchBiliDanmakuXml, resolveBiliShortUrl } from "./bilibili"
 export * from "./storage"
 export * from "./auth"

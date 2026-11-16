@@ -26,7 +26,8 @@ import {
   type JsonObject,
 } from "./innertube"
 import { decipherStreamingUrl } from "./nsig"
-import { getYoutubePoTokens, WEB_USER_AGENT, type YoutubePoTokens } from "./potoken"
+import { getYoutubePageTokens, refreshYoutubePageToken } from "./pageMinter"
+import { getYoutubePoTokens, type YoutubePoTokens } from "./potoken"
 import {
   extractVideoItems,
   parseChannelDetail,
@@ -39,6 +40,7 @@ import { resolveHlsManifest } from "./hls"
 import {
   audioTrackOf,
   createSabrQualitySession,
+  makeClientPlaybackNonce,
   parseAdaptiveFormats,
   pickBestAudioFormat,
   pickVideoFormats,
@@ -263,24 +265,33 @@ interface SabrPlayerInfo {
   clientVersion?: string
   visitorData?: string
   userAgent?: string
+  /** Client playback nonce shared with the player request. */
+  cpn?: string
 }
 
 /**
- * WEB client over SABR with on-device PO tokens, the route upstream TypeType uses.
- * IOS direct URLs ignore `pot` and get 403 past roughly the first minute.
+ * WEB or MWEB client over SABR with PO tokens. MWEB takes its tokens and web config from the
+ * m.youtube.com page player (`pageMinter`), the only tokens the server accepts past the first minute;
+ * WEB_SABR mints its own. IOS direct URLs ignore `pot` and get 403 past roughly the first minute.
  */
-export async function loadWebSabrPlayer(videoId: string): Promise<SabrPlayerInfo> {
-  const tokens: YoutubePoTokens = await getYoutubePoTokens(videoId)
-  const base: JsonObject = INNERTUBE_CLIENTS.WEB_SABR.context
+export async function loadWebSabrPlayer(
+  videoId: string,
+  clientKey: Extract<InnertubeClientKey, "WEB_SABR" | "MWEB"> = "WEB_SABR",
+): Promise<SabrPlayerInfo> {
+  const tokens: YoutubePoTokens =
+    clientKey === "MWEB" ? await getYoutubePageTokens(videoId) : await getYoutubePoTokens(videoId, "WEB")
+  const base: JsonObject = INNERTUBE_CLIENTS[clientKey].context
   const context: JsonObject = {
     ...base,
     client: { ...base["client"], clientVersion: tokens.clientVersion, visitorData: tokens.visitorData },
   }
+  const cpn: string = makeClientPlaybackNonce()
   const player: JsonObject = await innertubePost(
     "player",
     {
       context,
       videoId,
+      cpn,
       playbackContext: {
         contentPlaybackContext: {
           vis: 0,
@@ -294,9 +305,9 @@ export async function loadWebSabrPlayer(videoId: string): Promise<SabrPlayerInfo
       serviceIntegrityDimensions: { poToken: tokens.videoBoundPoToken },
     },
     {
-      client: "WEB_SABR",
+      client: clientKey,
       visitorData: tokens.visitorData,
-      headers: { "X-YouTube-Client-Version": tokens.clientVersion, "User-Agent": WEB_USER_AGENT },
+      headers: { "X-YouTube-Client-Version": tokens.clientVersion, "User-Agent": tokens.userAgent },
     },
   )
   const failure: string | null = playabilityFailure(player)
@@ -313,7 +324,7 @@ export async function loadWebSabrPlayer(videoId: string): Promise<SabrPlayerInfo
   const formats: SabrFormat[] = parseAdaptiveFormats(asArray(streamingData?.["adaptiveFormats"]))
   if (formats.length === 0) throw new Error("WEB player 沒有可用格式")
   return {
-    clientKey: "WEB_SABR",
+    clientKey,
     serverAbrStreamingUrl: await decipherStreamingUrl(rawUrl, tokens.jsUrl),
     ustreamerConfig,
     formats,
@@ -321,7 +332,8 @@ export async function loadWebSabrPlayer(videoId: string): Promise<SabrPlayerInfo
     poToken: tokens.visitorBoundPoToken,
     clientVersion: tokens.clientVersion,
     visitorData: tokens.visitorData,
-    userAgent: WEB_USER_AGENT,
+    userAgent: tokens.userAgent,
+    cpn,
   }
 }
 
@@ -443,15 +455,21 @@ export async function resolveYoutubeStream(
 
   if (wantSabr) {
     try {
-      // WEB SABR (loadWebSabrPlayer) stays off until YouTube accepts the on-device PO token:
-      // its stream protection status stays pending and far segments are refused.
-      const info: SabrPlayerInfo | null = await loadSabrPlayer(videoId)
-      const indexUrls: Record<number, string> = info ? directUrlsMatching(info.formats, info.player) : {}
+      // MWEB SABR with page-minted tokens; IOS direct URLs are the fallback. The IOS player also
+      // supplies direct URLs for the init and index ranges of the MWEB formats.
+      const iosPlayer: Promise<JsonObject | null> = fetchPlayerResponse(videoId, "IOS").catch(() => null)
+      const web: SabrPlayerInfo | null = await loadWebSabrPlayer(videoId, "MWEB").catch(() => null)
+      const info: SabrPlayerInfo | null = web ?? (await loadSabrPlayer(videoId))
+      const indexUrls: Record<number, string> = info
+        ? directUrlsMatching(info.formats, web ? await iosPlayer : info.player)
+        : {}
       if (info) {
         const videoFormats: SabrFormat[] = pickVideoFormats(info.formats, true)
         const audio: SabrFormat | undefined = pickBestAudioFormat(info.formats)
         if (audio) {
-          sabrFormatsForAudio = info.formats.filter((format: SabrFormat): boolean => format.isAudio)
+          sabrFormatsForAudio = info.formats.filter(
+            (format: SabrFormat): boolean => format.isAudio && format.mimeType.startsWith("audio/mp4"),
+          )
           const config: SabrSessionConfig = {
             videoId,
             serverAbrStreamingUrl: info.serverAbrStreamingUrl,
@@ -462,7 +480,11 @@ export async function resolveYoutubeStream(
             clientVersion: info.clientVersion,
             visitorData: info.visitorData,
             userAgent: info.userAgent,
+            cpn: info.cpn,
             indexUrls,
+            refreshPoToken: web
+              ? (staleToken: string): Promise<string> => refreshYoutubePageToken(videoId, staleToken)
+              : undefined,
           }
 
           for (const video of videoFormats) {

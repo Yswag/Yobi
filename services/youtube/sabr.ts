@@ -21,8 +21,7 @@ import {
   type SabrProxyUrls,
 } from "../localProxy"
 
-export const UMP_PART = {
-  MEDIA_HEADER: 20,
+export const UMP_PART = {  MEDIA_HEADER: 20,
   MEDIA: 21,
   MEDIA_END: 22,
   NEXT_REQUEST_POLICY: 35,
@@ -148,10 +147,10 @@ export function pickBestAudioFormat(formats: SabrFormat[]): SabrFormat | undefin
   return audios.sort((a: SabrFormat, b: SabrFormat): number => score(b) - score(a))[0]
 }
 
-/** 視訊軌（可切換畫質清單）。 */
+/** 視訊軌（可切換畫質清單）。只取 MP4：時間軸靠 sidx，webm 的 Cues 不支援。 */
 export function pickVideoFormats(formats: SabrFormat[], includeAv1: boolean = true): SabrFormat[] {
   const videos: SabrFormat[] = formats.filter((format: SabrFormat): boolean => {
-    if (!format.isVideo) return false
+    if (!format.isVideo || !format.mimeType.startsWith("video/mp4")) return false
     if (!includeAv1 && format.mimeType.includes("av01")) return false
     return true
   })
@@ -556,11 +555,14 @@ export interface SabrSessionConfig {
    */
   indexUrls?: Record<number, string>
   /** The video/audio pair this session plays; SABR responses carry both tracks. */
+  /** Session nonce; also sent in the player request so the SABR URL and the player agree. */
+  cpn?: string
   pairedItags?: { video: number; audio: number }
+  /** Replacement token when the server answers "attestation required" (stream protection 3) without media. */
+  refreshPoToken?: (staleToken: string) => Promise<string>
 }
 
-/** Accepts URL-safe base64 without padding, which is how ustreamer configs and PO tokens arrive. */
-function base64ToBytes(value: string): Uint8Array | null {
+/** Accepts URL-safe base64 without padding, which is how ustreamer configs and PO tokens arrive. */function base64ToBytes(value: string): Uint8Array | null {
   if (!value) return null
   let normalized: string = value.replace(/-/g, "+").replace(/_/g, "/").replace(/\./g, "=")
   while (normalized.length % 4 !== 0) normalized += "="
@@ -580,6 +582,14 @@ function concatBytes(chunks: Uint8Array[]): Uint8Array {
   return out
 }
 
+/** 16-char client playback nonce (`cpn`), same alphabet the player uses. */
+export function makeClientPlaybackNonce(): string {
+  const alphabet: string = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-"
+  let nonce: string = ""
+  for (let i = 0; i < 16; i++) nonce += alphabet[Math.floor(Math.random() * alphabet.length)]
+  return nonce
+}
+
 export class SabrSession {
   readonly videoId: string
   private readonly config: SabrSessionConfig
@@ -597,10 +607,19 @@ export class SabrSession {
   private contextChanged: boolean = false
   private backoffMs: number = 0
   private nextRequestAt: number = 0
+  private tokenRefreshed: boolean = false
+  /** Client playback nonce, sent as `cpn` the way the official player does. */
+  private readonly cpn: string
+  /** Last `StreamProtectionStatus.status`: 1 = ok, 2 = attestation pending, 3 = attestation required. */
+  lastProtectionStatus?: number
+  /** UMP part ids and segment keys of the most recent response, for diagnostics. */
+  lastParts: number[] = []
+  lastKeys: string[] = []
   lastError?: string
 
   constructor(config: SabrSessionConfig) {
     this.config = config
+    this.cpn = config.cpn ?? makeClientPlaybackNonce()
     this.videoId = config.videoId
     this.streamingUrl = config.serverAbrStreamingUrl
     for (const format of config.formats) this.formatsByItag.set(format.itag, format)
@@ -666,9 +685,22 @@ export class SabrSession {
     })
   }
 
+  /** `NextRequestPolicy` readahead the server asked for, reported back as `rbuf`. */
+  private readaheadMs: number = 0
   private endpoint(): string {
     const separator: string = this.streamingUrl.includes("?") ? "&" : "?"
-    return `${this.streamingUrl}${separator}rn=${this.requestNumber}`
+    // Query params the official player puts on the SABR URL (mweb player: rn/rbuf/ump/srfvp/alr/pot).
+    const params: string[] = [
+      `rn=${this.requestNumber}`,
+      `rbuf=${this.readaheadMs}`,
+      `cpn=${this.cpn}`,
+      `cver=${encodeURIComponent(String(this.config.clientVersion ?? ""))}`,
+      "ump=1",
+      "srfvp=1",
+      "alr=yes",
+    ]
+    if (this.config.poToken) params.push(`pot=${encodeURIComponent(this.config.poToken)}`)
+    return `${this.streamingUrl}${separator}${params.join("&")}`
   }
 
   private formatIdMessage(format: SabrFormat): ProtoWriter {
@@ -707,6 +739,58 @@ export class SabrSession {
     return { video, audio }
   }
 
+  /**
+   * Same adaptation set as the target: container and codec family (the server otherwise switches
+   * e.g. avc1 to av01, or mp4a to opus), plus the audio track for audio.
+   */
+  private preferredFormats(target: SabrFormat): SabrFormat[] {
+    const family = (format: SabrFormat): string => {
+      const [container, codecs] = format.mimeType.split(";")
+      return `${container}|${(/codecs="?([a-z0-9]{4})/i.exec(codecs ?? "")?.[1] ?? "").toLowerCase()}`
+    }
+    const targetFamily: string = family(target)
+    const result: SabrFormat[] = []
+    for (const format of this.formatsByItag.values()) {
+      if (target.isVideo !== format.isVideo) continue
+      if (family(format) !== targetFamily) continue
+      if (target.isAudio && target.audioTrackId && format.audioTrackId !== target.audioTrackId) continue
+      result.push(format)
+    }
+    return result
+  }
+
+  private abrStateMessage(format: SabrFormat, playerTimeMs: number): ProtoWriter {
+    const { video, audio } = this.pairedFormats(format)
+    const abrState: ProtoWriter = new ProtoWriter().int64(28, playerTimeMs)
+    abrState.int64(29, 0).uint32(34, 1).float(35, 1).int64(39, 0)
+    // enabledTrackTypesBitfield: 0 = audio and video, 1 = audio only, 2 = video only.
+    abrState.uint32(40, video && audio ? 0 : format.isAudio ? 1 : 2)
+    // Playback capabilities the server weighs in its ABR decisions.
+    abrState.uint32(22, 0).uint32(46, 0).int64(68, 0)
+    const target: SabrFormat | undefined = format.isAudio ? audio : video
+    if (target?.bitrate) abrState.int64(23, target.bitrate)
+    if (target?.isVideo && target.height) abrState.uint32(21, target.height).uint32(16, target.height)
+    if (audio?.audioTrackId) abrState.string(69, audio.audioTrackId)
+    return abrState
+  }
+
+  private streamerContextMessage(): ProtoWriter {
+    const context: ProtoWriter = new ProtoWriter().message(1, this.clientInfoMessage())
+    if (this.config.poToken) {
+      const tokenBytes: Uint8Array | null = base64ToBytes(this.config.poToken)
+      context.bytes(2, tokenBytes ?? new TextEncoder().encode(this.config.poToken))
+    }
+    if (this.playbackCookie) context.bytes(3, this.playbackCookie)
+    for (const type of this.activeContextTypes) {
+      const value: Uint8Array | undefined = this.sabrContexts.get(type)
+      if (value) context.message(5, new ProtoWriter().uint32(1, type).bytes(2, value))
+    }
+    for (const type of this.sabrContexts.keys()) {
+      if (!this.activeContextTypes.has(type)) context.uint32(6, type)
+    }
+    return context
+  }
+
   private buildRequestBody(format: SabrFormat, sequence: number | "init"): Uint8Array {
     const ustreamerConfig: Uint8Array | null = base64ToBytes(this.config.videoPlaybackUstreamerConfig)
     const playerTimeMs: number = sequence === "init"
@@ -714,39 +798,17 @@ export class SabrSession {
       : Math.max(0, Math.floor(this.segmentTiming(format.itag, sequence).startMs))
     const { video, audio } = this.pairedFormats(format)
 
-    const abrState: ProtoWriter = new ProtoWriter().int64(28, playerTimeMs)
-    abrState.int64(29, 0).uint32(34, 1).float(35, 1).int64(39, 0)
-    // enabledTrackTypesBitfield: 0 = audio and video, 1 = audio only, 2 = video only.
-    abrState.uint32(40, video && audio ? 0 : format.isAudio ? 1 : 2)
-
-    const streamerContext: ProtoWriter = new ProtoWriter().message(1, this.clientInfoMessage())
-    if (this.config.poToken) {
-      const tokenBytes: Uint8Array | null = base64ToBytes(this.config.poToken)
-      const tokenRaw: Uint8Array = tokenBytes ?? new TextEncoder().encode(this.config.poToken)
-      streamerContext.bytes(2, tokenRaw)
-    }
-    if (this.playbackCookie) streamerContext.bytes(3, this.playbackCookie)
-    for (const type of this.activeContextTypes) {
-      const value: Uint8Array | undefined = this.sabrContexts.get(type)
-      if (value) streamerContext.message(5, new ProtoWriter().uint32(1, type).bytes(2, value))
-    }
-    for (const type of this.sabrContexts.keys()) {
-      if (!this.activeContextTypes.has(type)) streamerContext.uint32(6, type)
-    }
-
-    const request: ProtoWriter = new ProtoWriter().message(1, abrState)
-
-    // selectedFormatIds lists formats the client already has init for; the server sends init for the rest.
+    // VideoPlaybackAbrRequest as the mweb player serializes it (`Lja`).
+    const request: ProtoWriter = new ProtoWriter().message(1, this.abrStateMessage(format, playerTimeMs))
+    // Formats the client already has init for; the server sends init for the rest.
     for (const selected of [video, audio]) {
       if (selected && this.initCache.has(selected.itag)) request.message(2, this.formatIdMessage(selected))
     }
-
     request.int64(4, playerTimeMs)
     if (ustreamerConfig) request.bytes(5, ustreamerConfig)
-    if (audio) request.message(16, this.formatIdMessage(audio))
-    if (video) request.message(17, this.formatIdMessage(video))
-    request.message(19, streamerContext)
-    request.int64(22, 0)
+    for (const preferred of video ? this.preferredFormats(video) : []) request.message(17, this.formatIdMessage(preferred))
+    for (const preferred of audio ? this.preferredFormats(audio) : []) request.message(16, this.formatIdMessage(preferred))
+    request.message(19, this.streamerContextMessage())
     return request.finish()
   }
 
@@ -789,6 +851,7 @@ export class SabrSession {
 
     const buffer: ArrayBuffer = await response.arrayBuffer()
     const parts: UmpPart[] = parseUmpParts(new Uint8Array(buffer))
+    this.lastParts = parts.map((part: UmpPart): number => part.type)
     const headers: Map<number, SabrMediaHeader> = new Map()
     const chunks: Map<number, Uint8Array[]> = new Map()
     const finished: Set<number> = new Set()
@@ -825,6 +888,7 @@ export class SabrSession {
       } else if (part.type === UMP_PART.NEXT_REQUEST_POLICY) {
         const policy: SabrNextRequestPolicy = decodeNextRequestPolicy(part.data)
         if (policy.playbackCookie && policy.playbackCookie.length > 0) this.playbackCookie = policy.playbackCookie
+        this.readaheadMs = policy.targetVideoReadaheadMs ?? policy.targetAudioReadaheadMs ?? this.readaheadMs
         this.backoffMs = policy.backoffTimeMs ?? 0
         this.nextRequestAt = Date.now() + this.backoffMs
       } else if (part.type === UMP_PART.SABR_REDIRECT) {
@@ -832,6 +896,8 @@ export class SabrSession {
         if (redirect && /^https?:/i.test(redirect)) this.streamingUrl = redirect
       } else if (part.type === UMP_PART.SABR_ERROR) {
         this.lastError = decodeSabrError(part.data)
+      } else if (part.type === UMP_PART.STREAM_PROTECTION_STATUS) {
+        this.lastProtectionStatus = protoNumber(decodeProto(part.data), 1)
       } else if (part.type === UMP_PART.SABR_CONTEXT_UPDATE) {
         this.applyContextUpdate(part.data)
       } else if (part.type === UMP_PART.SABR_CONTEXT_SENDING_POLICY) {
@@ -843,6 +909,7 @@ export class SabrSession {
     }
 
     void finished
+    this.lastKeys = [...segments.keys()]
     return segments
   }
 
@@ -867,9 +934,22 @@ export class SabrSession {
       this.contextChanged = false
       segments = await this.requestOnce(format, sequence)
       if (segments.has(key) || this.segmentCache.has(key) || this.initCache.has(format.itag) && sequence === "init") break
+      if (this.lastProtectionStatus === 3 && (await this.refreshToken())) continue
       if (!this.contextChanged && this.backoffMs <= 0) break
     }
     return segments
+  }
+
+  /** Swaps in a fresh PO token once per session. */
+  private async refreshToken(): Promise<boolean> {
+    if (this.tokenRefreshed || !this.config.refreshPoToken) return false
+    this.tokenRefreshed = true
+    try {
+      this.config.poToken = await this.config.refreshPoToken(this.config.poToken ?? "")
+      return true
+    } catch (_error) {
+      return false
+    }
   }
 
   /** 初始化切片。 */
@@ -893,9 +973,9 @@ export class SabrSession {
       const media: Uint8Array | undefined = segments.get(`${itag}:init`) ?? this.initCache.get(itag)
       return media ?? null
     } catch (error) {
-      if (format.url && format.initRange) {
+      if (indexUrl && format.initRange) {
         const direct: Uint8Array | null = await fetchRange(
-          format.url,
+          indexUrl,
           format.initRange.start,
           format.initRange.end,
           this.headers(),
@@ -926,8 +1006,9 @@ export class SabrSession {
     return this.segmentCache.get(key) ?? null
   }
 
+  /** `indexUrls` win: a SABR client's own `url` still needs `n` decoding and a PO token. */
   private indexUrlFor(format: SabrFormat): string | undefined {
-    return format.url ?? this.config.indexUrls?.[format.itag]
+    return this.config.indexUrls?.[format.itag] ?? format.url
   }
 
   private async sidxFor(format: SabrFormat): Promise<SidxIndex | null> {

@@ -7,7 +7,7 @@ import {
   useObservable,
 } from "scripting"
 import type { VirtualNode } from "scripting"
-import { stopLocalProxy } from "./services/index"
+import { disposeYoutubePageMinter, stopLocalProxy, warmYoutubePageMinter } from "./services/index"
 import { closePlayer, getPlayerStoreSnapshot, minimizeToMiniPlayer, usePlayerStore } from "./state/playerStore"
 import { MINI_PLAYER_RESERVED_HEIGHT, PlayerHost } from "./components/PlayerHost"
 import { channelRoute, SETTINGS_ROUTE, TabStack } from "./components/TabStack"
@@ -103,6 +103,7 @@ function YobiRootView(): VirtualNode {
 }
 
 async function run(): Promise<void> {
+  warmYoutubePageMinter()
   try {
     await Navigation.present({
       element: <YobiRootView />,
@@ -112,6 +113,7 @@ async function run(): Promise<void> {
   } finally {
     await closePlayer()
     stopLocalProxy()
+    disposeYoutubePageMinter()
     Script.exit()
   }
 }
