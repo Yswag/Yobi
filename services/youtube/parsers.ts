@@ -57,14 +57,15 @@ export function readText(node: unknown): string {
 function readThumbnailUrl(node: unknown): string {
   const object: JsonObject | null = asObject(node)
   if (!object) return ""
-  const thumbnails: unknown[] = asArray(object["thumbnails"])
+  // Renderers list `thumbnails`; view models (lockupViewModel) list `sources`.
+  const thumbnails: unknown[] = asArray(object["thumbnails"] ?? object["sources"])
   let best: JsonObject | null = null
   let bestWidth: number = -1
   for (const entry of thumbnails) {
     const thumbnail: JsonObject | null = asObject(entry)
     if (!thumbnail) continue
     const url: string = typeof thumbnail["url"] === "string" ? thumbnail["url"] : ""
-    if (!url.startsWith("http")) continue
+    if (!url.startsWith("http") && !url.startsWith("//")) continue
     const width: number = Number(thumbnail["width"] ?? 0)
     if (width >= bestWidth) {
       best = thumbnail
