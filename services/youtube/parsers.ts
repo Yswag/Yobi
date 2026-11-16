@@ -679,6 +679,28 @@ export function parseComments(next: JsonObject): CommentItem[] {
   return comments
 }
 
+/** 播放頁的頻道區塊：next 的 videoSecondaryInfoRenderer.owner.videoOwnerRenderer。 */
+interface VideoOwnerInfo {
+  avatar: string
+  subscriberText: string
+}
+
+function parseVideoOwner(next: JsonObject): VideoOwnerInfo | null {
+  const results: JsonObject | null = asObject(
+    asObject(asObject(asObject(next["contents"])?.["twoColumnWatchNextResults"])?.["results"])?.["results"],
+  )
+  for (const entry of asArray(results?.["contents"])) {
+    const secondary: JsonObject | null = asObject(asObject(entry)?.["videoSecondaryInfoRenderer"])
+    const owner: JsonObject | null = asObject(asObject(secondary?.["owner"])?.["videoOwnerRenderer"])
+    if (!owner) continue
+    return {
+      avatar: readThumbnailUrl(owner["thumbnail"]),
+      subscriberText: readText(owner["subscriberCountText"]),
+    }
+  }
+  return null
+}
+
 /** 解析 player + next 成 VideoDetail。 */
 export function parseVideoDetail(videoId: string, player: JsonObject, next: JsonObject | null): VideoDetail {
   const details: JsonObject = asObject(player["videoDetails"]) ?? {}
@@ -713,6 +735,9 @@ export function parseVideoDetail(videoId: string, player: JsonObject, next: Json
 
   const chapters: VideoChapter[] = next ? parseChapters(next) : []
   if (chapters.length > 0) item.chapters = chapters
+  const owner: VideoOwnerInfo | null = next ? parseVideoOwner(next) : null
+  if (owner?.avatar) item.authorAvatar = owner.avatar
+  if (owner?.subscriberText) item.subscriberCountText = owner.subscriberText
   return item
 }
 

@@ -6,6 +6,7 @@ import {
   Picker,
   Rectangle,
   ScrollView,
+  TabView,
   Text,
   VStack,
   useEffect,
@@ -51,7 +52,8 @@ export interface WatchViewProps {
   onOpenDanmakuSheet: () => void
 }
 
-type InfoTab = "related" | "comments"
+const TAB_RELATED: number = 0
+const TAB_COMMENTS: number = 1
 
 const SEGMENT_CARD_WIDTH: number = 156
 
@@ -108,12 +110,34 @@ function SegmentCard(props: { caption: string; title: string; active: boolean; o
   )
 }
 
+// 只有這塊跟著播放進度重繪，整頁不要訂閱 progress。
+function ChaptersSection(props: { chapters: VideoChapter[] }): VirtualNode {
+  const progress = usePlayerProgress()
+  return (
+    <VStack alignment="leading" spacing={10}>
+      <SectionHeader title="章節" />
+      <ScrollView axes="horizontal" scrollIndicator="hidden">
+        <HStack spacing={8} padding={{ horizontal: space.page }}>
+          {props.chapters.map((chapter: VideoChapter, index: number) => (
+            <SegmentCard
+              key={`chapter-${index}-${chapter.startTime}`}
+              caption={formatDuration(chapter.startTime)}
+              title={chapter.title}
+              active={progress.position >= chapter.startTime && progress.position < chapter.endTime}
+              onTap={() => void seekTo(chapter.startTime)}
+            />
+          ))}
+        </HStack>
+      </ScrollView>
+    </VStack>
+  )
+}
+
 export function WatchView(props: WatchViewProps): VirtualNode {
   const store = usePlayerStore()
-  const progress = usePlayerProgress()
 
   const [showDescription, setShowDescription] = useState(false)
-  const [tab, setTab] = useState<InfoTab>("related")
+  const [tab, setTab] = useState<number>(TAB_RELATED)
   const [watchLaterOn, setWatchLaterOn] = useState(false)
   const [subscribed, setSubscribed] = useState(false)
   const [offlineSaved, setOfflineSaved] = useState(false)
@@ -361,46 +385,29 @@ export function WatchView(props: WatchViewProps): VirtualNode {
     : null
 
   const chaptersSection: VirtualNode | null = detail?.chapters && detail.chapters.length > 0
-    ? (
-      <VStack alignment="leading" spacing={10}>
-        <SectionHeader title="章節" />
-        <ScrollView axes="horizontal" scrollIndicator="hidden">
-          <HStack spacing={8} padding={{ horizontal: space.page }}>
-            {detail.chapters.map((chapter: VideoChapter, index: number) => (
-              <SegmentCard
-                key={`chapter-${index}-${chapter.startTime}`}
-                caption={formatDuration(chapter.startTime)}
-                title={chapter.title}
-                active={progress.position >= chapter.startTime && progress.position < chapter.endTime}
-                onTap={() => void seekTo(chapter.startTime)}
-              />
-            ))}
-          </HStack>
-        </ScrollView>
-      </VStack>
-    )
+    ? <ChaptersSection chapters={detail.chapters} />
     : null
 
-  const tabContent: VirtualNode = tab === "related"
-    ? related.length === 0
-      ? <EmptyState icon="rectangle.stack" title="沒有相關影片" />
-      : (
-        <LazyVStack spacing={4} frame={{ maxWidth: "infinity" }}>
-          {related.map((video: UnifiedVideoItem) => (
-            <VideoCard
-              key={`related-${video.id}`}
-              item={video}
-              layout="row"
-              onSelect={(selected: UnifiedVideoItem) => {
-                void openVideo(selected, { queue: detail?.relatedVideos })
-              }}
-              onOpenChannel={props.onOpenChannel}
-            />
-          ))}
-        </LazyVStack>
-      )
+  const relatedList: VirtualNode = related.length === 0
+    ? <EmptyState icon="rectangle.stack" title="沒有相關影片" />
     : (
-      <CommentsSheet
+      <LazyVStack spacing={4} frame={{ maxWidth: "infinity" }}>
+        {related.map((video: UnifiedVideoItem) => (
+          <VideoCard
+            key={`related-${video.id}`}
+            item={video}
+            layout="row"
+            onSelect={(selected: UnifiedVideoItem) => {
+              void openVideo(selected, { queue: detail?.relatedVideos })
+            }}
+            onOpenChannel={props.onOpenChannel}
+          />
+        ))}
+      </LazyVStack>
+    )
+
+  const commentsList: VirtualNode = (
+    <CommentsSheet
         comments={store.comments}
         loading={store.commentsLoading}
         loadingMore={store.commentsLoadingMore}
@@ -423,10 +430,9 @@ export function WatchView(props: WatchViewProps): VirtualNode {
     )
 
   return (
-    <ScrollView
-      axes="vertical"
-      scrollIndicator="hidden"
-      frame={{ maxWidth: "infinity", maxHeight: "infinity" }}
+    <VStack
+      spacing={8}
+      frame={{ maxWidth: "infinity", maxHeight: "infinity", alignment: "top" }}
       toast={{
         message: toast ?? "",
         position: "bottom",
@@ -436,25 +442,40 @@ export function WatchView(props: WatchViewProps): VirtualNode {
         },
       }}
     >
-      <VStack spacing={20} frame={{ maxWidth: "infinity" }} padding={{ bottom: 24 }}>
-        {infoBlock}
-        {actionBar}
-        {pagesSection}
-        {chaptersSection}
-        <VStack spacing={8} frame={{ maxWidth: "infinity" }}>
-          <Picker
-            title="內容"
-            value={tab}
-            onChanged={(next: string) => setTab(next as InfoTab)}
-            pickerStyle="segmented"
-            padding={{ horizontal: space.page }}
-          >
-            <Text tag="related">{related.length > 0 ? `相關影片 ${related.length}` : "相關影片"}</Text>
-            <Text tag="comments">{store.comments.length > 0 ? `留言 ${store.comments.length}` : "留言"}</Text>
-          </Picker>
-          {tabContent}
-        </VStack>
-      </VStack>
-    </ScrollView>
+      <Picker
+        title="內容"
+        value={tab}
+        onChanged={(next: number) => withAnimation(() => setTab(next))}
+        pickerStyle="segmented"
+        padding={{ horizontal: space.page, top: 10 }}
+      >
+        <Text tag={TAB_RELATED}>詳情</Text>
+        <Text tag={TAB_COMMENTS}>留言</Text>
+      </Picker>
+      <TabView
+        tabIndex={tab}
+        onTabIndexChanged={setTab}
+        tabViewStyle="pageNeverDisplayIndex"
+        frame={{ maxWidth: "infinity", maxHeight: "infinity" }}
+      >
+        <ScrollView axes="vertical" scrollIndicator="hidden" tag={TAB_RELATED}>
+          <VStack spacing={20} frame={{ maxWidth: "infinity" }} padding={{ bottom: 24 }}>
+            {infoBlock}
+            {actionBar}
+            {pagesSection}
+            {chaptersSection}
+            <VStack spacing={10} frame={{ maxWidth: "infinity" }}>
+              <SectionHeader title="相關影片" />
+              {relatedList}
+            </VStack>
+          </VStack>
+        </ScrollView>
+        <ScrollView axes="vertical" scrollIndicator="hidden" tag={TAB_COMMENTS}>
+          <VStack spacing={0} frame={{ maxWidth: "infinity" }} padding={{ top: 6, bottom: 24 }}>
+            {commentsList}
+          </VStack>
+        </ScrollView>
+      </TabView>
+    </VStack>
   )
 }

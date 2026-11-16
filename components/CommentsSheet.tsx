@@ -1,4 +1,4 @@
-import { HStack, Image, Text, VStack, useState } from "scripting"
+import { HStack, Image, LazyVStack, ProgressView, Text, VStack, useState } from "scripting"
 import type { VirtualNode } from "scripting"
 import type { CommentItem, CommentSort } from "../types"
 import { formatCount } from "../utils/format"
@@ -178,28 +178,30 @@ export function CommentsSheet(props: CommentsSheetProps): VirtualNode {
     if (willExpand && loaded === 0 && comment.replyCursor) props.onLoadReplies(comment.id)
   }
 
-  const footer: VirtualNode = props.hasMore
-    ? (
-      <VStack padding={{ horizontal: space.page, vertical: 14 }} frame={{ maxWidth: "infinity" }}>
-        <PillButton
-          label={props.loadingMore ? "載入中…" : "載入更多留言"}
-          icon={props.loadingMore ? "arrow.triangle.2.circlepath" : "chevron.down"}
-          onTap={() => {
-            if (!props.loadingMore) props.onLoadMore()
-          }}
-        />
-      </VStack>
-    )
-    : (
-      <Text font={type.meta} foregroundStyle="tertiaryLabel" padding={{ vertical: 14 }}>
-        沒有更多留言
-      </Text>
-    )
+  // 放在 Lazy 列表裡才會捲到才出現；key 跟著筆數變，載完一頁若還在畫面內會再觸發一次。
+  const footer: VirtualNode = (
+    <VStack
+      key={`comments-footer-${props.comments.length}`}
+      padding={{ horizontal: space.page, vertical: 14 }}
+      frame={{ maxWidth: "infinity" }}
+      onAppear={() => {
+        if (props.hasMore && !props.loadingMore) props.onLoadMore()
+      }}
+    >
+      {props.loadingMore ? (
+        <ProgressView />
+      ) : props.hasMore ? (
+        <PillButton label="載入更多留言" icon="chevron.down" onTap={props.onLoadMore} />
+      ) : (
+        <Text font={type.meta} foregroundStyle="tertiaryLabel">沒有更多留言</Text>
+      )}
+    </VStack>
+  )
 
   return (
     <VStack spacing={0} frame={{ maxWidth: "infinity" }}>
       {sortBar}
-      <VStack spacing={0} padding={{ top: 4 }} frame={{ maxWidth: "infinity" }}>
+      <LazyVStack spacing={0} padding={{ top: 4 }} frame={{ maxWidth: "infinity" }}>
         {props.comments.map((comment: CommentItem) => (
           <CommentThread
             key={comment.id}
@@ -210,8 +212,8 @@ export function CommentsSheet(props: CommentsSheetProps): VirtualNode {
             onLoadMore={() => props.onLoadReplies(comment.id)}
           />
         ))}
-      </VStack>
-      {footer}
+        {footer}
+      </LazyVStack>
     </VStack>
   )
 }

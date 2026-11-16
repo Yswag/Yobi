@@ -4,6 +4,7 @@ import {
   VideoPlaybackView,
   VStack,
   ZStack,
+  useCallback,
   useEffect,
   useRef,
   useState,
@@ -73,6 +74,18 @@ export function PlayerHost(props: {
   const progress: PlayerProgressSnapshot = usePlayerProgress()
   const [showQualitySheet, setShowQualitySheet] = useState<boolean>(false)
   const [showDanmakuSheet, setShowDanmakuSheet] = useState<boolean>(false)
+
+  // 這個元件隨播放進度重繪；給 WatchView 的回呼要固定，不然整個播放頁跟著重繪。
+  const onOpenChannelRef = useRef(props.onOpenChannel)
+  onOpenChannelRef.current = props.onOpenChannel
+  const openChannel = useCallback(
+    (provider: Provider, authorId: string, authorName: string, avatarUrl?: string): void => {
+      onOpenChannelRef.current(provider, authorId, authorName, avatarUrl)
+    },
+    [],
+  )
+  const openQualitySheet = useCallback((): void => setShowQualitySheet(true), [])
+  const openDanmakuSheet = useCallback((): void => setShowDanmakuSheet(true), [])
 
   // Keep drawing the last video while the card slides away after closing.
   const lastItemRef = useRef<UnifiedVideoItem | null>(null)
@@ -263,9 +276,9 @@ export function PlayerHost(props: {
                 allowsHitTesting={isExpanded}
               >
                 <WatchView
-                  onOpenChannel={props.onOpenChannel}
-                  onOpenQualitySheet={() => setShowQualitySheet(true)}
-                  onOpenDanmakuSheet={() => setShowDanmakuSheet(true)}
+                  onOpenChannel={openChannel}
+                  onOpenQualitySheet={openQualitySheet}
+                  onOpenDanmakuSheet={openDanmakuSheet}
                 />
               </ZStack>
             )}
