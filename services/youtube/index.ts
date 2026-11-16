@@ -293,6 +293,7 @@ export async function loadWebSabrPlayer(
       videoId,
       cpn,
       playbackContext: {
+        adPlaybackContext: { pyv: true },
         contentPlaybackContext: {
           vis: 0,
           splay: false,
@@ -400,164 +401,108 @@ function closestQuality(qualities: VideoQualityTrack[], preferredHeight: number)
   return best
 }
 
+/** One playable route: its primary URL, switchable qualities and the player response for metadata. */
+interface ResolvedRoute {
+  delivery: "hls" | "sabr"
+  primaryUrl: string
+  qualities: VideoQualityTrack[]
+  audioTracks: AudioStreamTrack[]
+  player: JsonObject
+}
+
+/** VISIONOS HLS: no PO token and seekable; without visitorData some videos come back LOGIN_REQUIRED. */
+async function resolveHlsRoute(videoId: string): Promise<ResolvedRoute> {
+  const visitorData: string | undefined = getYoutubeAuth().visitorData ?? (await getAnonymousVisitorData())
+  const player: JsonObject = await fetchPlayerResponse(videoId, "VISIONOS", { visitorData })
+  const failure: string | null = playabilityFailure(player)
+  if (failure) throw new Error(`YouTube 無法播放：${failure}`)
+  const manifestUrl: string = String(asObject(player["streamingData"])?.["hlsManifestUrl"] ?? "")
+  if (!manifestUrl) throw new Error("YouTube 沒有 HLS 串流")
+  const resolved = await resolveHlsManifest(manifestUrl)
+  return { delivery: "hls", primaryUrl: resolved.primaryUrl, qualities: resolved.qualities, audioTracks: [], player }
+}
+
 /**
- * 解析可播放串流。
- *
- * mode:
- * - auto：HLS 優先，同時附上 SABR 高畫質軌（可切換）
- * - hls：只走 HLS
- * - sabr：只走 SABR（失敗才退回 HLS）
+ * MWEB SABR with page-minted tokens, IOS direct URLs as the fallback. The IOS player also supplies
+ * direct URLs for the init and index ranges of the MWEB formats.
  */
+async function resolveSabrRoute(videoId: string): Promise<ResolvedRoute> {
+  const iosPlayer: Promise<JsonObject | null> = fetchPlayerResponse(videoId, "IOS").catch(() => null)
+  const web: SabrPlayerInfo | null = await loadWebSabrPlayer(videoId, "MWEB").catch(() => null)
+  const info: SabrPlayerInfo | null = web ?? (await loadSabrPlayer(videoId))
+  if (!info) throw new Error("YouTube 沒有 SABR 串流")
+  const audio: SabrFormat | undefined = pickBestAudioFormat(info.formats)
+  if (!audio) throw new Error("YouTube SABR 沒有音訊軌")
+  const config: SabrSessionConfig = {
+    videoId,
+    serverAbrStreamingUrl: info.serverAbrStreamingUrl,
+    videoPlaybackUstreamerConfig: info.ustreamerConfig,
+    formats: info.formats,
+    clientKey: info.clientKey,
+    poToken: info.poToken,
+    clientVersion: info.clientVersion,
+    visitorData: info.visitorData,
+    userAgent: info.userAgent,
+    cpn: info.cpn,
+    indexUrls: directUrlsMatching(info.formats, web ? await iosPlayer : info.player),
+    refreshPoToken: web
+      ? (staleToken: string): Promise<string> => refreshYoutubePageToken(videoId, staleToken)
+      : undefined,
+  }
+  const qualities: VideoQualityTrack[] = pickVideoFormats(info.formats, true).map(
+    (video: SabrFormat): VideoQualityTrack => createSabrQualitySession(config, video, audio).quality,
+  )
+  if (qualities.length === 0) throw new Error("YouTube SABR 沒有影片軌")
+  const audioTracks: AudioStreamTrack[] = info.formats
+    .filter((format: SabrFormat): boolean => format.isAudio && format.mimeType.startsWith("audio/mp4"))
+    .map((format: SabrFormat): AudioStreamTrack => audioTrackOf(format))
+  return { delivery: "sabr", primaryUrl: qualities[0].url, qualities, audioTracks, player: info.player }
+}
+
+/** 解析可播放串流：只跑選定的路線，失敗才換另一條。auto 與 hls 先走 HLS，sabr 先走 SABR。 */
 export async function resolveYoutubeStream(
   videoId: string,
   mode: YoutubeStreamPreference = "auto",
   preferredHeight: number = 0,
 ): Promise<StreamManifest> {
-  const wantHls: boolean = mode !== "sabr"
-  const wantSabr: boolean = mode !== "hls"
-
-  let hlsPlayer: JsonObject | null = null
-  let hlsManifestUrl: string | null = null
-
-  if (wantHls || mode === "sabr") {
+  const routes: Array<(id: string) => Promise<ResolvedRoute>> =
+    mode === "sabr" ? [resolveSabrRoute, resolveHlsRoute] : [resolveHlsRoute, resolveSabrRoute]
+  let route: ResolvedRoute | null = null
+  let firstError: unknown = null
+  for (const resolve of routes) {
     try {
-      // VISIONOS HLS needs no PO token and stays seekable; without visitorData some videos come back LOGIN_REQUIRED.
-      const visitorData: string | undefined = getYoutubeAuth().visitorData ?? (await getAnonymousVisitorData())
-      hlsPlayer = await fetchPlayerResponse(videoId, "VISIONOS", { visitorData })
-      const failure: string | null = playabilityFailure(hlsPlayer)
-      if (failure && mode === "hls") throw new Error(`YouTube 無法播放：${failure}`)
-      if (!failure) {
-        const streamingData: JsonObject | null = asObject(hlsPlayer["streamingData"])
-        const value: string = String(streamingData?.["hlsManifestUrl"] ?? "")
-        if (value) hlsManifestUrl = value
-      }
+      route = await resolve(videoId)
+      break
     } catch (error) {
-      if (mode === "hls") throw error
+      if (firstError === null) firstError = error
     }
   }
-
-  const hlsQualities: VideoQualityTrack[] = []
-  let hlsPrimary: string | null = null
-  if (hlsManifestUrl) {
-    try {
-      const resolved = await resolveHlsManifest(hlsManifestUrl)
-      hlsPrimary = resolved.primaryUrl
-      hlsQualities.push(...resolved.qualities)
-    } catch (_error) {
-      hlsPrimary = null
-    }
+  if (!route) {
+    throw firstError instanceof Error ? firstError : new Error("找不到可播放的 YouTube 串流")
   }
 
-  const sabrQualities: VideoQualityTrack[] = []
-  const sabrAudioTracks: AudioStreamTrack[] = []
-  let sabrPrimary: string | null = null
-  let sabrFormatsForAudio: SabrFormat[] = []
-
-  if (wantSabr) {
-    try {
-      // MWEB SABR with page-minted tokens; IOS direct URLs are the fallback. The IOS player also
-      // supplies direct URLs for the init and index ranges of the MWEB formats.
-      const iosPlayer: Promise<JsonObject | null> = fetchPlayerResponse(videoId, "IOS").catch(() => null)
-      const web: SabrPlayerInfo | null = await loadWebSabrPlayer(videoId, "MWEB").catch(() => null)
-      const info: SabrPlayerInfo | null = web ?? (await loadSabrPlayer(videoId))
-      const indexUrls: Record<number, string> = info
-        ? directUrlsMatching(info.formats, web ? await iosPlayer : info.player)
-        : {}
-      if (info) {
-        const videoFormats: SabrFormat[] = pickVideoFormats(info.formats, true)
-        const audio: SabrFormat | undefined = pickBestAudioFormat(info.formats)
-        if (audio) {
-          sabrFormatsForAudio = info.formats.filter(
-            (format: SabrFormat): boolean => format.isAudio && format.mimeType.startsWith("audio/mp4"),
-          )
-          const config: SabrSessionConfig = {
-            videoId,
-            serverAbrStreamingUrl: info.serverAbrStreamingUrl,
-            videoPlaybackUstreamerConfig: info.ustreamerConfig,
-            formats: info.formats,
-            clientKey: info.clientKey,
-            poToken: info.poToken,
-            clientVersion: info.clientVersion,
-            visitorData: info.visitorData,
-            userAgent: info.userAgent,
-            cpn: info.cpn,
-            indexUrls,
-            refreshPoToken: web
-              ? (staleToken: string): Promise<string> => refreshYoutubePageToken(videoId, staleToken)
-              : undefined,
-          }
-
-          for (const video of videoFormats) {
-            const session = createSabrQualitySession(config, video, audio)
-            sabrQualities.push(session.quality)
-            if (!sabrPrimary) sabrPrimary = session.urls.hlsUrl
-          }
-          for (const audioFormat of sabrFormatsForAudio) {
-            sabrAudioTracks.push(audioTrackOf(audioFormat))
-          }
-        }
-      }
-    } catch (_error) {
-      // SABR 失敗時退回 HLS
-    }
-  }
-
-  const preferSabr: boolean = mode === "sabr"
-  const primaryUrl: string | null = preferSabr ? sabrPrimary ?? hlsPrimary : hlsPrimary ?? sabrPrimary
-  if (!primaryUrl) {
-    throw new Error("找不到可播放的 YouTube 串流")
-  }
-
-  // 合併畫質：偏好的來源優先，另一個補上沒有的高度。
-  const merged: VideoQualityTrack[] = []
-  const coveredHeights: Set<number> = new Set()
-  const [first, second] = preferSabr ? [sabrQualities, hlsQualities] : [hlsQualities, sabrQualities]
-  for (const quality of first) {
-    merged.push(quality)
-    if (quality.height > 0) coveredHeights.add(quality.height)
-  }
-  for (const quality of second) {
-    if (quality.height > 0 && coveredHeights.has(quality.height)) continue
-    merged.push(quality)
-  }
-  const qualities: VideoQualityTrack[] = merged.sort(
-    (a: VideoQualityTrack, b: VideoQualityTrack): number => b.height - a.height || (b.bitrate ?? 0) - (a.bitrate ?? 0),
-  )
-
-  const details: JsonObject = asObject((hlsPlayer ?? {})["videoDetails"]) ?? {}
-  const duration: number = Number(details["lengthSeconds"] ?? 0)
-  const isLive: boolean = Boolean(details["isLive"])
-  const subtitles = hlsPlayer ? parseSubtitleTracks(hlsPlayer) : []
-
+  const { primaryUrl, qualities } = route
+  const details: JsonObject = asObject(route.player["videoDetails"]) ?? {}
   const chosen: VideoQualityTrack | undefined = preferredHeight > 0 ? closestQuality(qualities, preferredHeight) : undefined
-  const startUrl: string = chosen?.url ?? primaryUrl
-  const delivery: "hls" | "sabr" = primaryUrl === sabrPrimary ? "sabr" : "hls"
 
-  const manifest: StreamManifest = {
+  return {
     provider: "yt",
     rawId: videoId,
-    delivery,
-    primaryUrl: startUrl,
+    delivery: route.delivery,
+    primaryUrl: chosen?.url ?? primaryUrl,
     backend: "auto",
     qualities,
-    audioTracks: sabrAudioTracks,
-    subtitles,
-    isLive,
-    duration,
+    audioTracks: route.audioTracks,
+    subtitles: parseSubtitleTracks(route.player),
+    isLive: Boolean(details["isLive"]),
+    duration: Number(details["lengthSeconds"] ?? 0),
     resolveQuality: async (
       qualityId: string,
     ): Promise<{ url: string; backend: "auto" | "native" | "system" | "remux" }> => {
-      if (qualityId === "auto" || qualityId === "hls-auto") {
-        return { url: primaryUrl, backend: "auto" }
-      }
       const quality: VideoQualityTrack | undefined = qualities.find(
         (entry: VideoQualityTrack): boolean => entry.id === qualityId,
       )
-      if (!quality) {
-        return { url: primaryUrl, backend: "auto" }
-      }
-      return { url: quality.url, backend: "auto" }
+      return { url: quality?.url ?? primaryUrl, backend: "auto" }
     },
   }
-  return manifest
 }
