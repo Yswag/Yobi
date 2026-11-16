@@ -11,6 +11,7 @@ import type {
   SubtitleTrackInfo,
   UnifiedVideoItem,
   VideoChapter,
+  VideoCollaborator,
   VideoDetail,
 } from "../../types"
 import type { JsonObject } from "./innertube"
@@ -681,8 +682,46 @@ export function parseComments(next: JsonObject): CommentItem[] {
 
 /** 播放頁的頻道區塊：next 的 videoSecondaryInfoRenderer.owner.videoOwnerRenderer。 */
 interface VideoOwnerInfo {
+  name: string
   avatar: string
   subscriberText: string
+  collaborators: VideoCollaborator[]
+}
+
+// 合作頻道的副標題長這樣：「‎⁨@handle⁩ • ⁨6.73M subscribers⁩」。
+function collaboratorSubscribers(subtitle: string): string {
+  const parts: string[] = subtitle.replace(/[\u200e\u200f\u2066-\u2069]/g, "").split("•")
+  return parts.length > 1 ? parts[parts.length - 1].trim() : ""
+}
+
+/** 合作影片：owner 點下去的 Collaborators 對話框列出每個頻道。 */
+function parseCollaborators(owner: JsonObject): VideoCollaborator[] {
+  const dialog: JsonObject | null = asObject(
+    asObject(asObject(asObject(owner["navigationEndpoint"])?.["showDialogCommand"])?.["panelLoadingStrategy"])?.["inlineContent"],
+  )
+  const list: JsonObject | null = asObject(
+    asObject(asObject(asObject(dialog?.["dialogViewModel"])?.["customContent"])?.["listViewModel"]),
+  )
+  const collaborators: VideoCollaborator[] = []
+  for (const entry of asArray(list?.["listItems"])) {
+    const item: JsonObject | null = asObject(asObject(entry)?.["listItemViewModel"])
+    if (!item) continue
+    const title: JsonObject | null = asObject(item["title"])
+    const name: string = readText(title)
+    const command: JsonObject | null = asObject(
+      asObject(asObject(asArray(title?.["commandRuns"])[0])?.["onTap"])?.["innertubeCommand"],
+    )
+    const id: string = String(asObject(command?.["browseEndpoint"])?.["browseId"] ?? "")
+    if (!name || !id) continue
+    const avatar: JsonObject | null = asObject(asObject(asObject(item["leadingAccessory"])?.["avatarViewModel"])?.["image"])
+    const collaborator: VideoCollaborator = { id, name }
+    const avatarUrl: string = readThumbnailUrl(avatar)
+    if (avatarUrl) collaborator.avatarUrl = avatarUrl
+    const subscribers: string = collaboratorSubscribers(readText(item["subtitle"]))
+    if (subscribers) collaborator.subscriberCountText = subscribers
+    collaborators.push(collaborator)
+  }
+  return collaborators
 }
 
 function parseVideoOwner(next: JsonObject): VideoOwnerInfo | null {
@@ -693,9 +732,12 @@ function parseVideoOwner(next: JsonObject): VideoOwnerInfo | null {
     const secondary: JsonObject | null = asObject(asObject(entry)?.["videoSecondaryInfoRenderer"])
     const owner: JsonObject | null = asObject(asObject(secondary?.["owner"])?.["videoOwnerRenderer"])
     if (!owner) continue
+    const collaborators: VideoCollaborator[] = parseCollaborators(owner)
     return {
-      avatar: readThumbnailUrl(owner["thumbnail"]),
+      name: readText(owner["attributedTitle"]) || readText(owner["title"]),
+      avatar: readThumbnailUrl(owner["thumbnail"]) || collaborators[0]?.avatarUrl || "",
       subscriberText: readText(owner["subscriberCountText"]),
+      collaborators,
     }
   }
   return null
@@ -738,6 +780,10 @@ export function parseVideoDetail(videoId: string, player: JsonObject, next: Json
   const owner: VideoOwnerInfo | null = next ? parseVideoOwner(next) : null
   if (owner?.avatar) item.authorAvatar = owner.avatar
   if (owner?.subscriberText) item.subscriberCountText = owner.subscriberText
+  if (owner && owner.collaborators.length > 1) {
+    item.collaborators = owner.collaborators
+    if (owner.name) item.authorName = owner.name
+  }
   return item
 }
 

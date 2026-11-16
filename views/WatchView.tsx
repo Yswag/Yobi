@@ -13,7 +13,7 @@ import {
   useState,
 } from "scripting"
 import type { VirtualNode } from "scripting"
-import type { Provider, UnifiedVideoItem, VideoChapter, VideoPagePart } from "../types"
+import type { Provider, UnifiedVideoItem, VideoChapter, VideoCollaborator, VideoPagePart } from "../types"
 import { CommentsSheet } from "../components/CommentsSheet"
 import { addToPlaylistFlow, VideoCard } from "../components/VideoCard"
 import {
@@ -149,11 +149,26 @@ export function WatchView(props: WatchViewProps): VirtualNode {
   const channelRawId: string = detail?.authorId || item?.authorId || ""
   const channelName: string = detail?.authorName || item?.authorName || ""
   const channelAvatar: string | undefined = detail?.authorAvatar || item?.authorAvatar
+  const collaborators: VideoCollaborator[] = detail?.collaborators ?? []
+  const isCollab: boolean = collaborators.length > 1
+
+  // 合作影片要每個頻道都訂了才算「已訂閱」。
+  const readSubscribed = (): boolean => {
+    if (!item) return false
+    if (isCollab) {
+      return collaborators.every((channel: VideoCollaborator): boolean => isSubscribed(`${item.provider}:${channel.id}`))
+    }
+    return isSubscribed(`${item.provider}:${channelRawId}`)
+  }
+
+  useEffect(() => {
+    setSubscribed(readSubscribed())
+  }, [detail?.collaborators?.length])
 
   useEffect(() => {
     if (!item) return
     setWatchLaterOn(isInWatchLater(item.id))
-    setSubscribed(isSubscribed(`${item.provider}:${channelRawId}`))
+    setSubscribed(readSubscribed())
     setOfflineSaved(findDownload(item.id, store.activeCid) !== null)
     setShowDescription(false)
   }, [item?.id, store.activeCid])
@@ -179,16 +194,36 @@ export function WatchView(props: WatchViewProps): VirtualNode {
     setToast(next ? "已加入稍後觀看" : "已移出稍後觀看")
   }
 
-  const handleSubscribe = (): void => {
-    const next: boolean = toggleSubscription({
-      id: `${item.provider}:${channelRawId}`,
+  const toggleChannel = (rawId: string, name: string, avatarUrl: string | undefined): void => {
+    toggleSubscription({
+      id: `${item.provider}:${rawId}`,
       provider: item.provider,
-      rawId: channelRawId,
-      name: channelName,
-      avatarUrl: channelAvatar ?? "",
+      rawId,
+      name,
+      avatarUrl: avatarUrl ?? "",
       subscribedAt: Date.now(),
     })
-    setSubscribed(next)
+    setSubscribed(readSubscribed())
+  }
+
+  const pickCollaborator = async (title: string, labelFor: (channel: VideoCollaborator) => string): Promise<VideoCollaborator | null> => {
+    const index: number | null | undefined = await Dialog.actionSheet({
+      title,
+      actions: collaborators.map((channel: VideoCollaborator) => ({ label: labelFor(channel) })),
+    })
+    return typeof index === "number" ? collaborators[index] ?? null : null
+  }
+
+  const handleSubscribe = (): void => {
+    if (!isCollab) {
+      toggleChannel(channelRawId, channelName, channelAvatar)
+      return
+    }
+    void pickCollaborator("訂閱頻道", (channel: VideoCollaborator) =>
+      `${isSubscribed(`${item.provider}:${channel.id}`) ? "取消訂閱" : "訂閱"} ${channel.name}`,
+    ).then((channel: VideoCollaborator | null) => {
+      if (channel) toggleChannel(channel.id, channel.name, channel.avatarUrl)
+    })
   }
 
   const handleShare = (): void => {
@@ -232,7 +267,13 @@ export function WatchView(props: WatchViewProps): VirtualNode {
   }
 
   const openChannel = (): void => {
-    props.onOpenChannel?.(item.provider, channelRawId, channelName, channelAvatar)
+    if (!isCollab) {
+      props.onOpenChannel?.(item.provider, channelRawId, channelName, channelAvatar)
+      return
+    }
+    void pickCollaborator("前往頻道", (channel: VideoCollaborator) => channel.name).then((channel: VideoCollaborator | null) => {
+      if (channel) props.onOpenChannel?.(item.provider, channel.id, channel.name, channel.avatarUrl)
+    })
   }
 
   const infoBlock: VirtualNode = (
@@ -309,7 +350,21 @@ export function WatchView(props: WatchViewProps): VirtualNode {
 
       <HStack spacing={12} frame={{ maxWidth: "infinity" }}>
         <HStack spacing={12} frame={{ maxWidth: "infinity", alignment: "leading" }} contentShape="rect" onTapGesture={openChannel}>
-          <Avatar url={channelAvatar} name={channelName} size={40} provider={item.provider} />
+          {isCollab ? (
+            <HStack spacing={-14}>
+              {collaborators.slice(0, 2).map((channel: VideoCollaborator) => (
+                <VStack
+                  key={`collab-${channel.id}`}
+                  padding={2}
+                  background={{ style: "systemBackground", shape: "circle" }}
+                >
+                  <Avatar url={channel.avatarUrl} name={channel.name} size={34} provider={item.provider} />
+                </VStack>
+              ))}
+            </HStack>
+          ) : (
+            <Avatar url={channelAvatar} name={channelName} size={40} provider={item.provider} />
+          )}
           <VStack alignment="leading" spacing={2}>
             <Text font={type.cardTitle} fontWeight="semibold" foregroundStyle="label" lineLimit={1}>{channelName}</Text>
             {detail?.subscriberCountText ? (

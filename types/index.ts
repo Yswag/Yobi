@@ -102,9 +102,18 @@ export interface StreamManifest {
   }>
 }
 
+export interface VideoCollaborator {
+  id: string
+  name: string
+  avatarUrl?: string
+  subscriberCountText?: string
+}
+
 export interface VideoDetail extends UnifiedVideoItem {
   description: string
   subscriberCountText?: string
+  /** 多頻道合作的影片；第一個是上傳者。 */
+  collaborators?: VideoCollaborator[]
   pages?: VideoPagePart[] // BiliBili multi-page (分P)
   chapters?: VideoChapter[]
   relatedVideos: UnifiedVideoItem[]
