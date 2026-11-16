@@ -42,11 +42,32 @@ export interface HomeViewProps {
 type LayoutMode = "grid" | "row"
 
 const CONTINUE_CARD_WIDTH: number = 220
+const CONTINUE_LIMIT: number = 8
+// 看到這個比例就算看完，不再放進繼續觀看。
+const FINISHED_RATIO: number = 0.95
+
+function entryRatio(entry: WatchHistoryEntry): number {
+  const total: number = entry.duration || entry.item.duration || 0
+  return total > 0 ? entry.position / total : 0
+}
+
+function continueEntriesOf(history: WatchHistoryEntry[]): WatchHistoryEntry[] {
+  return history
+    .filter((entry: WatchHistoryEntry): boolean => entry.position > 5 && entryRatio(entry) < FINISHED_RATIO)
+    .slice(0, CONTINUE_LIMIT)
+}
+
+// 播放中每幾秒就存一次進度；只在順序或進度條跨過 5% 時才重繪首頁。
+function continueSignature(entries: WatchHistoryEntry[]): string {
+  return entries
+    .map((entry: WatchHistoryEntry): string => `${entry.item.id}:${entry.cid ?? entry.page ?? 0}:${Math.floor(entryRatio(entry) * 20)}`)
+    .join("|")
+}
 
 function ContinueCard(props: { entry: WatchHistoryEntry; onSelect: () => void }): VirtualNode {
   const entry: WatchHistoryEntry = props.entry
   const total: number = entry.duration || entry.item.duration || 0
-  const ratio: number = total > 0 ? entry.position / total : 0
+  const ratio: number = entryRatio(entry)
   const remaining: number = Math.max(0, total - entry.position)
 
   return (
@@ -136,7 +157,8 @@ export function HomeView(props: HomeViewProps): VirtualNode {
   const [items, setItems] = useState<UnifiedVideoItem[]>([])
   const [loading, setLoading] = useState<boolean>(true)
   const [errorText, setErrorText] = useState<string | null>(null)
-  const [history, setHistory] = useState<WatchHistoryEntry[]>(() => getWatchHistory())
+  const [continueEntries, setContinueEntries] = useState<WatchHistoryEntry[]>(() => continueEntriesOf(getWatchHistory()))
+  const continueSigRef = useRef<string>(continueSignature(continueEntries))
   const requestSeq = useRef<number>(0)
 
   const loadFeed = async (target: FeedFilter): Promise<void> => {
@@ -160,15 +182,16 @@ export function HomeView(props: HomeViewProps): VirtualNode {
   }, [filter])
 
   useEffect(() => {
-    setHistory(getWatchHistory())
-    return subscribeStorageChanges(() => {
-      setHistory(getWatchHistory())
-    })
+    const sync = (): void => {
+      const next: WatchHistoryEntry[] = continueEntriesOf(getWatchHistory())
+      const signature: string = continueSignature(next)
+      if (signature === continueSigRef.current) return
+      continueSigRef.current = signature
+      setContinueEntries(next)
+    }
+    sync()
+    return subscribeStorageChanges(sync)
   }, [])
-
-  const continueEntries: WatchHistoryEntry[] = history
-    .filter((entry: WatchHistoryEntry): boolean => entry.position > 5)
-    .slice(0, 8)
 
   const handleSelect = (item: UnifiedVideoItem): void => {
     void openVideo(item, { queue: items })
@@ -204,7 +227,7 @@ export function HomeView(props: HomeViewProps): VirtualNode {
   const continueSection: VirtualNode | null = continueEntries.length > 0
     ? (
       <VStack spacing={12} alignment="leading" frame={{ maxWidth: "infinity", alignment: "leading" }}>
-        <SectionHeader title="繼續觀看" detail={`${continueEntries.length} 部`} />
+        <SectionHeader title="繼續觀看" />
         <ScrollView axes="horizontal" scrollIndicator="hidden">
           <HStack spacing={14} alignment="top" padding={{ horizontal: space.page }}>
             {continueEntries.map((entry: WatchHistoryEntry) => (

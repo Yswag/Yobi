@@ -6,6 +6,7 @@ import {
   Menu,
   Picker,
   ScrollView,
+  TabView,
   Text,
   VStack,
   useEffect,
@@ -47,6 +48,8 @@ export interface LibraryViewProps {
 
 type LibraryFilter = "all" | Provider
 type LibraryTab = "history" | "watchLater" | "playlists"
+
+const LIBRARY_TABS: LibraryTab[] = ["history", "watchLater", "playlists"]
 
 const PLAYLIST_COVER_WIDTH: number = 120
 
@@ -308,9 +311,8 @@ export function LibraryView(props: LibraryViewProps): VirtualNode {
     )
   }
 
-  let tabContent: VirtualNode
-  if (tab === "history") {
-    tabContent = (
+  const historyPage = (): VirtualNode => {
+    return (
       <VStack spacing={14} frame={{ maxWidth: "infinity" }}>
         {history.length > 0 ? (
           <VStack padding={{ horizontal: space.page }} frame={{ maxWidth: "infinity" }}>
@@ -364,8 +366,10 @@ export function LibraryView(props: LibraryViewProps): VirtualNode {
         )}
       </VStack>
     )
-  } else if (tab === "watchLater") {
-    tabContent = (
+  }
+
+  const watchLaterPage = (): VirtualNode => {
+    return (
       <VStack spacing={14} frame={{ maxWidth: "infinity" }}>
         {filteredWatchLater.length > 0 ? (
           <PlayActions
@@ -390,8 +394,10 @@ export function LibraryView(props: LibraryViewProps): VirtualNode {
         }])}
       </VStack>
     )
-  } else {
-    tabContent = (
+  }
+
+  const playlistsPage = (): VirtualNode => {
+    return (
       <VStack spacing={8} frame={{ maxWidth: "infinity" }}>
         <HStack
           spacing={12}
@@ -430,31 +436,41 @@ export function LibraryView(props: LibraryViewProps): VirtualNode {
     )
   }
 
-  return (
-    <ScrollView
-      axes="vertical"
-      scrollIndicator="hidden"
-      scrollDismissesKeyboard="immediately"
-      frame={{ maxWidth: "infinity", maxHeight: "infinity" }}
-    >
-      <VStack spacing={14} frame={{ maxWidth: "infinity" }} padding={{ bottom: 16 }}>
-        <PageHeader
-          title="媒體庫"
-          trailing={props.onOpenSettings ? <GlassIconButton icon="gearshape" onTap={props.onOpenSettings} /> : undefined}
-        />
-        <Picker
-          title="媒體庫分類"
-          value={tab}
-          onChanged={(next: string) => setTab(next as LibraryTab)}
-          pickerStyle="segmented"
-          padding={{ horizontal: space.page }}
-        >
-          <Text tag="history">{`觀看紀錄 ${history.length}`}</Text>
-          <Text tag="watchLater">{`稍後觀看 ${watchLater.length}`}</Text>
-          <Text tag="playlists">{`清單 ${playlists.length}`}</Text>
-        </Picker>
-        {tabContent}
+  const pageScroll = (content: VirtualNode, index: number): VirtualNode => (
+    <ScrollView axes="vertical" scrollIndicator="hidden" scrollDismissesKeyboard="immediately" tag={index}>
+      <VStack spacing={0} frame={{ maxWidth: "infinity" }} padding={{ top: 4, bottom: 16 }}>
+        {content}
       </VStack>
     </ScrollView>
+  )
+
+  return (
+    <VStack spacing={14} frame={{ maxWidth: "infinity", maxHeight: "infinity", alignment: "top" }}>
+      <PageHeader
+        title="媒體庫"
+        trailing={props.onOpenSettings ? <GlassIconButton icon="gearshape" onTap={props.onOpenSettings} /> : undefined}
+      />
+      <Picker
+        title="媒體庫分類"
+        value={tab}
+        onChanged={(next: string) => withAnimation(() => setTab(next as LibraryTab))}
+        pickerStyle="segmented"
+        padding={{ horizontal: space.page }}
+      >
+        <Text tag="history">觀看紀錄</Text>
+        <Text tag="watchLater">稍後觀看</Text>
+        <Text tag="playlists">清單</Text>
+      </Picker>
+      <TabView
+        tabIndex={LIBRARY_TABS.indexOf(tab)}
+        onTabIndexChanged={(index: number) => setTab(LIBRARY_TABS[index] ?? "history")}
+        tabViewStyle="pageNeverDisplayIndex"
+        frame={{ maxWidth: "infinity", maxHeight: "infinity" }}
+      >
+        {pageScroll(historyPage(), 0)}
+        {pageScroll(watchLaterPage(), 1)}
+        {pageScroll(playlistsPage(), 2)}
+      </TabView>
+    </VStack>
   )
 }
