@@ -10,8 +10,8 @@ interface Cue {
 const TIMING: RegExp = /((?:\d+:)?\d{1,2}:\d{2}[.,]\d{3})\s*-->\s*((?:\d+:)?\d{1,2}:\d{2}[.,]\d{3})/
 const MIN_CUE_SECONDS: number = 0.05
 
-// 照 YouTube 的 CC：無襯線、小字、約 65% 不透明的黑底（播放器只吃 hex）；預設字型是襯線體。
-const CUE_STYLE: string = "STYLE\n::cue {\n  background-color: #000000A6;\n  color: #FFFFFF;\n  font-family: sans-serif;\n  font-size: 60%;\n}"
+// 照 YouTube 的 CC：無襯線粗體、清晰字級、約 70% 不透明的深黑底（播放器只吃 hex）。
+const CUE_STYLE: string = "STYLE\n::cue {\n  background-color: #000000B3;\n  color: #FFFFFF;\n  font-family: PingFang SC;\n  font-weight: bold;\n  font-size: 70%;\n}"
 // 最後一行放在倒數第二行的位置，離底邊留一行；多行往上長。
 const CUE_SETTINGS: string = "line:-2"
 

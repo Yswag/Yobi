@@ -601,7 +601,7 @@ export async function openVideo(item: UnifiedVideoItem, options: OpenVideoOption
 
     ctrl.backgroundAudioEnabled = settings.backgroundAudioEnabled
     ctrl.playbackRate = settings.defaultPlaybackRate || 1
-    ctrl.danmakuEnabled = settings.danmakuEnabled && item.provider === "bili"
+    ctrl.danmakuEnabled = settings.danmakuEnabled && item.provider === "bili" && storeState.presentationMode !== "mini"
     ctrl.danmakuOpacity = settings.danmakuOpacity
     ctrl.setDanmakuStyle({
       speed: settings.danmakuSpeed,
@@ -980,18 +980,28 @@ export function toggleFullscreen(): void {
   setFullscreen(!storeState.isFullscreen)
 }
 
+// 迷你播放器只是監視窗，字幕與彈幕在那麼小的畫面裡只會糊成一團，收起時關掉、展開再依原本的選擇還原。
+function applyOverlayVisibility(visible: boolean): void {
+  const ctrl: VideoPlaybackController = getPlayerController()
+  const isBili: boolean = storeState.currentItem?.provider === "bili"
+  ctrl.subtitlesEnabled = visible && storeState.selectedSubtitleId !== null
+  if (isBili) ctrl.danmakuEnabled = visible && storeState.danmakuEnabled
+}
+
 export function minimizeToMiniPlayer(): void {
   if (storeState.isFullscreen) {
     setFullscreen(false)
   }
   if (!storeState.currentItem) return
   storeState.presentationMode = "mini"
+  applyOverlayVisibility(false)
   emitStore()
 }
 
 export function expandFromMiniPlayer(): void {
   if (!storeState.currentItem) return
   storeState.presentationMode = "expanded"
+  applyOverlayVisibility(true)
   emitStore()
 }
 

@@ -54,25 +54,41 @@ const TAP_HINT_MS: number = 650
 const PLAYBACK_RATES: number[] = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2]
 const EDGE_SCRIM_HEIGHT: number = 96
 const MINIMIZE_DRAG_DISTANCE: number = 70
+// 64pt 以下一律放大到 44pt 的觸控框（HIG 最小值），視覺尺寸不變。
+const MIN_HIT_SIZE: number = 44
 
 function GlassCircle(props: { icon: string; size: number; iconSize: number; onTap: () => void }): VirtualNode {
+  const hit: number = Math.max(MIN_HIT_SIZE, props.size)
   return (
     <Button action={props.onTap} buttonStyle="plain">
-      <VStack
-        frame={{ width: props.size, height: props.size }}
-        contentShape={{ type: "rect", cornerRadius: props.size / 2 }}
-        glassEffect={{
-          glass: UIGlass.clear().interactive(),
-          shape: { type: "rect", cornerRadius: props.size / 2 },
-        }}
-      >
-        <Image
-          systemName={props.icon}
-          font={props.iconSize}
-          fontWeight="semibold"
-          foregroundStyle={palette.onMedia}
-          contentTransition="symbolEffectReplace"
-        />
+      <VStack frame={{ width: hit, height: hit }}>
+        <VStack
+          frame={{ width: props.size, height: props.size }}
+          contentShape={{ type: "rect", cornerRadius: props.size / 2 }}
+          glassEffect={{
+            glass: UIGlass.clear().interactive(),
+            shape: { type: "rect", cornerRadius: props.size / 2 },
+          }}
+        >
+          <Image
+            systemName={props.icon}
+            font={props.iconSize}
+            fontWeight="semibold"
+            foregroundStyle={palette.onMedia}
+            contentTransition="symbolEffectReplace"
+          />
+        </VStack>
+      </VStack>
+    </Button>
+  )
+}
+
+// 頂列與底列的小圖示：畫多大隨人，吃點擊的一律 44×44。
+function IconControl(props: { icon: string; size: number; onTap: () => void }): VirtualNode {
+  return (
+    <Button action={props.onTap} buttonStyle="plain">
+      <VStack frame={{ width: MIN_HIT_SIZE, height: MIN_HIT_SIZE }} contentShape="rect">
+        <Image systemName={props.icon} font={props.size} foregroundStyle={palette.onMedia} />
       </VStack>
     </Button>
   )
@@ -283,38 +299,33 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
               {title}
             </Text>
             <Spacer />
-            <HStack spacing={14} fixedSize>
+            <HStack spacing={4} fixedSize>
               {provider === "bili" ? (
-                <Button action={() => toggleDanmaku()} buttonStyle="plain">
-                  <Image
-                    systemName={store.danmakuEnabled ? "text.bubble.fill" : "text.bubble"}
-                    font={17}
-                    foregroundStyle={palette.onMedia}
-                    frame={{ width: 30, height: 30 }}
-                  />
-                </Button>
+                <IconControl
+                  icon={store.danmakuEnabled ? "text.bubble.fill" : "text.bubble"}
+                  size={17}
+                  onTap={() => toggleDanmaku()}
+                />
               ) : null}
               {provider === "bili" ? (
-                <Button action={() => props.onOpenDanmakuSheet?.()} buttonStyle="plain">
-                  <Image systemName="slider.horizontal.3" font={17} foregroundStyle={palette.onMedia} frame={{ width: 30, height: 30 }} />
-                </Button>
+                <IconControl icon="slider.horizontal.3" size={17} onTap={() => props.onOpenDanmakuSheet?.()} />
               ) : null}
               <Button action={() => props.onOpenQualitySheet?.()} buttonStyle="plain">
-                <Text
-                  font={type.caption}
-                  fontWeight="bold"
-                  foregroundStyle={palette.onMedia}
-                  lineLimit={1}
-                  fixedSize
-                  padding={{ horizontal: 8, vertical: 4 }}
-                  background={{ style: "rgba(255,255,255,0.18)", shape: "capsule" }}
-                >
-                  {store.selectedQualityLabel}
-                </Text>
+                <VStack frame={{ height: MIN_HIT_SIZE }} contentShape="rect">
+                  <Text
+                    font={type.caption}
+                    fontWeight="bold"
+                    foregroundStyle={palette.onMedia}
+                    lineLimit={1}
+                    fixedSize
+                    padding={{ horizontal: 8, vertical: 4 }}
+                    background={{ style: "rgba(255,255,255,0.18)", shape: "capsule" }}
+                  >
+                    {store.selectedQualityLabel}
+                  </Text>
+                </VStack>
               </Button>
-              <Button action={() => void startPiP()} buttonStyle="plain">
-                <Image systemName="pip.enter" font={17} foregroundStyle={palette.onMedia} frame={{ width: 30, height: 30 }} contentShape="rect" />
-              </Button>
+              <IconControl icon="pip.enter" size={17} onTap={() => void startPiP()} />
             </HStack>
           </HStack>
 
@@ -335,7 +346,7 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
           <Spacer />
 
           <VStack spacing={2} padding={{ horizontal: edgeInset, bottom: store.isFullscreen ? 16 : 6 }}>
-            <HStack spacing={16} frame={{ width: trackWidth }}>
+            <HStack spacing={4} frame={{ width: trackWidth }}>
               <HStack spacing={4}>
                 <Text font={type.caption} fontWeight="semibold" monospacedDigit foregroundStyle={palette.onMedia}>
                   {formatDuration(isScrubbing ? scrubPreviewSec : progress.position)}
@@ -353,7 +364,7 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
               {hasSubtitles ? (
                 <Menu
                   label={
-                    <HStack spacing={0}>
+                    <HStack spacing={0} frame={{ width: MIN_HIT_SIZE, height: MIN_HIT_SIZE }} contentShape="rect">
                       <Image
                         systemName={store.selectedSubtitleId ? "captions.bubble.fill" : "captions.bubble"}
                         font={16}
@@ -379,7 +390,7 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
               ) : null}
               <Menu
                 label={
-                  <HStack spacing={0}>
+                  <HStack spacing={0} frame={{ width: MIN_HIT_SIZE, height: MIN_HIT_SIZE }} contentShape="rect">
                     <Text font={type.meta + 1} fontWeight="bold" monospacedDigit foregroundStyle={palette.onMedia}>
                       {rateLabel(store.playbackRate)}
                     </Text>
@@ -395,15 +406,11 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
                   />
                 ))}
               </Menu>
-              <Button action={() => toggleFullscreen()} buttonStyle="plain">
-                <Image
-                  systemName={store.isFullscreen ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right"}
-                  font={16}
-                  foregroundStyle={palette.onMedia}
-                  frame={{ width: 28, height: 28 }}
-                  contentShape="rect"
-                />
-              </Button>
+              <IconControl
+                icon={store.isFullscreen ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right"}
+                size={16}
+                onTap={() => toggleFullscreen()}
+              />
             </HStack>
             <ZStack alignment="leading" frame={{ width: trackWidth, height: 22, alignment: "leading" }}>
               <Slider
