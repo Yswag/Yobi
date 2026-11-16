@@ -185,7 +185,7 @@ export async function downloadVideo(item: UnifiedVideoItem, options: DownloadOpt
       track.headers ?? manifest.headers ?? undefined
 
     let succeeded: { mode: OfflineCacheMode; url: string; source: VideoPlaybackCachedSource } | null = null
-    let lastError: unknown = null
+    const failures: string[] = []
 
     for (const attempt of buildAttempts(manifest, track)) {
       try {
@@ -200,13 +200,14 @@ export async function downloadVideo(item: UnifiedVideoItem, options: DownloadOpt
         succeeded = { mode: attempt.mode, url: attempt.url, source }
         break
       } catch (error: unknown) {
-        lastError = error
+        const reason: string = error instanceof Error ? error.message : String(error)
+        const line: string = `${attempt.mode.toUpperCase()}：${reason}`
+        if (!failures.includes(line)) failures.push(line)
       }
     }
 
     if (!succeeded) {
-      const message: string = lastError instanceof Error ? lastError.message : "下載失敗"
-      throw new Error(message)
+      throw new Error(failures.length > 0 ? failures.join("\n") : "下載失敗")
     }
 
     const entry: OfflineDownload = {
