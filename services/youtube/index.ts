@@ -18,9 +18,15 @@ import {
   fetchNextResponse,
   fetchPlayerResponse,
   fetchSearchResponse,
+  getAnonymousVisitorData,
+  getYoutubeAuth,
+  INNERTUBE_CLIENTS,
+  innertubePost,
   type InnertubeClientKey,
   type JsonObject,
 } from "./innertube"
+import { decipherStreamingUrl } from "./nsig"
+import { getYoutubePoTokens, WEB_USER_AGENT, type YoutubePoTokens } from "./potoken"
 import {
   extractVideoItems,
   parseChannelDetail,
@@ -253,15 +259,92 @@ interface SabrPlayerInfo {
   ustreamerConfig: string
   formats: SabrFormat[]
   player: JsonObject
+  poToken?: string
+  clientVersion?: string
+  visitorData?: string
+  userAgent?: string
+}
+
+/**
+ * WEB client over SABR with on-device PO tokens, the route upstream TypeType uses.
+ * IOS direct URLs ignore `pot` and get 403 past roughly the first minute.
+ */
+export async function loadWebSabrPlayer(videoId: string): Promise<SabrPlayerInfo> {
+  const tokens: YoutubePoTokens = await getYoutubePoTokens(videoId)
+  const base: JsonObject = INNERTUBE_CLIENTS.WEB_SABR.context
+  const context: JsonObject = {
+    ...base,
+    client: { ...base["client"], clientVersion: tokens.clientVersion, visitorData: tokens.visitorData },
+  }
+  const player: JsonObject = await innertubePost(
+    "player",
+    {
+      context,
+      videoId,
+      playbackContext: {
+        contentPlaybackContext: {
+          vis: 0,
+          splay: false,
+          lactMilliseconds: "-1",
+          signatureTimestamp: tokens.signatureTimestamp,
+        },
+      },
+      contentCheckOk: true,
+      racyCheckOk: true,
+      serviceIntegrityDimensions: { poToken: tokens.videoBoundPoToken },
+    },
+    {
+      client: "WEB_SABR",
+      visitorData: tokens.visitorData,
+      headers: { "X-YouTube-Client-Version": tokens.clientVersion, "User-Agent": WEB_USER_AGENT },
+    },
+  )
+  const failure: string | null = playabilityFailure(player)
+  if (failure) throw new Error(`YouTube 無法播放：${failure}`)
+  const streamingData: JsonObject | null = asObject(player["streamingData"])
+  const rawUrl: string = String(streamingData?.["serverAbrStreamingUrl"] ?? "")
+  const playerConfig: JsonObject | null = asObject(player["playerConfig"])
+  const ustreamerConfig: string = String(
+    asObject(asObject(playerConfig?.["mediaCommonConfig"])?.["mediaUstreamerRequestConfig"])?.[
+      "videoPlaybackUstreamerConfig"
+    ] ?? "",
+  )
+  if (!rawUrl || !ustreamerConfig) throw new Error("WEB player 沒有 SABR 串流設定")
+  const formats: SabrFormat[] = parseAdaptiveFormats(asArray(streamingData?.["adaptiveFormats"]))
+  if (formats.length === 0) throw new Error("WEB player 沒有可用格式")
+  return {
+    clientKey: "WEB_SABR",
+    serverAbrStreamingUrl: await decipherStreamingUrl(rawUrl, tokens.jsUrl),
+    ustreamerConfig,
+    formats,
+    player,
+    poToken: tokens.visitorBoundPoToken,
+    clientVersion: tokens.clientVersion,
+    visitorData: tokens.visitorData,
+    userAgent: WEB_USER_AGENT,
+  }
+}
+
+/** Direct URLs of the same files (itag and lastModified) from another client, keyed by itag. */
+function directUrlsMatching(formats: SabrFormat[], player: JsonObject | null): Record<number, string> {
+  const urls: Record<number, string> = {}
+  if (!player) return urls
+  const direct: SabrFormat[] = parseAdaptiveFormats(asArray(asObject(player["streamingData"])?.["adaptiveFormats"]))
+  for (const format of formats) {
+    const match: SabrFormat | undefined = direct.find(
+      (candidate: SabrFormat): boolean => candidate.itag === format.itag && candidate.lastModified === format.lastModified,
+    )
+    if (match?.url) urls[format.itag] = match.url
+  }
+  return urls
 }
 
 const SABR_CLIENT_ORDER: InnertubeClientKey[] = ["IOS", "ANDROID_VR", "WEB_SABR", "MWEB"]
 
-async function loadSabrPlayer(videoId: string, existingIosPlayer?: JsonObject | null): Promise<SabrPlayerInfo | null> {
+async function loadSabrPlayer(videoId: string): Promise<SabrPlayerInfo | null> {
   for (const clientKey of SABR_CLIENT_ORDER) {
     try {
-      const player: JsonObject =
-        clientKey === "IOS" && existingIosPlayer ? existingIosPlayer : await fetchPlayerResponse(videoId, clientKey)
+      const player: JsonObject = await fetchPlayerResponse(videoId, clientKey)
       if (playabilityFailure(player)) continue
       const streamingData: JsonObject | null = asObject(player["streamingData"])
       if (!streamingData) continue
@@ -326,7 +409,9 @@ export async function resolveYoutubeStream(
 
   if (wantHls || mode === "sabr") {
     try {
-      hlsPlayer = await fetchPlayerResponse(videoId, "IOS")
+      // VISIONOS HLS needs no PO token and stays seekable; without visitorData some videos come back LOGIN_REQUIRED.
+      const visitorData: string | undefined = getYoutubeAuth().visitorData ?? (await getAnonymousVisitorData())
+      hlsPlayer = await fetchPlayerResponse(videoId, "VISIONOS", { visitorData })
       const failure: string | null = playabilityFailure(hlsPlayer)
       if (failure && mode === "hls") throw new Error(`YouTube 無法播放：${failure}`)
       if (!failure) {
@@ -358,7 +443,10 @@ export async function resolveYoutubeStream(
 
   if (wantSabr) {
     try {
-      const info: SabrPlayerInfo | null = await loadSabrPlayer(videoId, hlsPlayer)
+      // WEB SABR (loadWebSabrPlayer) stays off until YouTube accepts the on-device PO token:
+      // its stream protection status stays pending and far segments are refused.
+      const info: SabrPlayerInfo | null = await loadSabrPlayer(videoId)
+      const indexUrls: Record<number, string> = info ? directUrlsMatching(info.formats, info.player) : {}
       if (info) {
         const videoFormats: SabrFormat[] = pickVideoFormats(info.formats, true)
         const audio: SabrFormat | undefined = pickBestAudioFormat(info.formats)
@@ -370,9 +458,12 @@ export async function resolveYoutubeStream(
             videoPlaybackUstreamerConfig: info.ustreamerConfig,
             formats: info.formats,
             clientKey: info.clientKey,
+            poToken: info.poToken,
+            clientVersion: info.clientVersion,
+            visitorData: info.visitorData,
+            userAgent: info.userAgent,
+            indexUrls,
           }
-          const poToken: string | undefined = undefined
-          void poToken
 
           for (const video of videoFormats) {
             const session = createSabrQualitySession(config, video, audio)
@@ -389,19 +480,21 @@ export async function resolveYoutubeStream(
     }
   }
 
-  const primaryUrl: string | null = sabrPrimary ?? hlsPrimary
+  const preferSabr: boolean = mode === "sabr"
+  const primaryUrl: string | null = preferSabr ? sabrPrimary ?? hlsPrimary : hlsPrimary ?? sabrPrimary
   if (!primaryUrl) {
     throw new Error("找不到可播放的 YouTube 串流")
   }
 
-  // 合併畫質：SABR 優先，HLS 補上 SABR 沒有的高度。
+  // 合併畫質：偏好的來源優先，另一個補上沒有的高度。
   const merged: VideoQualityTrack[] = []
   const coveredHeights: Set<number> = new Set()
-  for (const quality of sabrQualities) {
+  const [first, second] = preferSabr ? [sabrQualities, hlsQualities] : [hlsQualities, sabrQualities]
+  for (const quality of first) {
     merged.push(quality)
     if (quality.height > 0) coveredHeights.add(quality.height)
   }
-  for (const quality of hlsQualities) {
+  for (const quality of second) {
     if (quality.height > 0 && coveredHeights.has(quality.height)) continue
     merged.push(quality)
   }
@@ -416,7 +509,7 @@ export async function resolveYoutubeStream(
 
   const chosen: VideoQualityTrack | undefined = preferredHeight > 0 ? closestQuality(qualities, preferredHeight) : undefined
   const startUrl: string = chosen?.url ?? primaryUrl
-  const delivery: "hls" | "sabr" = sabrPrimary && !hlsPrimary ? "sabr" : "hls"
+  const delivery: "hls" | "sabr" = primaryUrl === sabrPrimary ? "sabr" : "hls"
 
   const manifest: StreamManifest = {
     provider: "yt",

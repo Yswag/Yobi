@@ -25,9 +25,9 @@ export interface SabrProxySessionHandler {
   /** 產生 HLS Master `.m3u8` 內容（可含單一畫質 + 音訊群組） */
   hlsMasterPlaylist(): string
   /** 產生指定 itag 的 media playlist `.m3u8` 內容 */
-  mediaPlaylist(itag: number): string
+  mediaPlaylist(itag: number): string | Promise<string>
   /** 產生 DASH `.mpd` 內容 */
-  dashManifest(): string
+  dashManifest(): string | Promise<string>
   /** 取得初始化切片（fMP4 init segment） */
   initializationSegment(itag: number): Promise<Uint8Array | null>
   /** 取得第 seq 個媒體切片（seq 從 1 開始） */
@@ -198,7 +198,7 @@ function registerRoutes(target: HttpServer): void {
   target.registerAsyncHandler("/sabr/:sessionId/manifest.mpd", async (req: HttpRequest): Promise<HttpResponse> => {
     const handler: SabrProxySessionHandler | undefined = sabrSessions.get(req.params["sessionId"])
     if (!handler) return notFound("unknown session")
-    return textResponse(handler.dashManifest(), "application/dash+xml")
+    return textResponse(await handler.dashManifest(), "application/dash+xml")
   })
 
   target.registerAsyncHandler(
@@ -207,7 +207,7 @@ function registerRoutes(target: HttpServer): void {
       const handler: SabrProxySessionHandler | undefined = sabrSessions.get(req.params["sessionId"])
       const itag: number = Number(req.params["itag"])
       if (!handler || !Number.isFinite(itag)) return notFound("unknown session")
-      return textResponse(handler.mediaPlaylist(itag), "application/vnd.apple.mpegurl")
+      return textResponse(await handler.mediaPlaylist(itag), "application/vnd.apple.mpegurl")
     },
   )
 

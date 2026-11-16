@@ -2,7 +2,8 @@
  * YouTube Innertube API 客戶端（純 fetch）。
  *
  * 多種 client context：
- * - IOS：免簽名即可拿到 `streamingData.hlsManifestUrl` 與 adaptiveFormats。
+ * - VISIONOS：免 PoToken 的 `hlsManifestUrl`（影音合併、可任意 seek，最高 4K），需要 visitorData。
+ * - IOS：影片詳情，以及 SABR 備援的直連 adaptiveFormats。
  * - WEB：搜尋、browse、next、留言。
  * - WEB_SABR / MWEB / ANDROID_VR：取得 serverAbrStreamingUrl + ustreamerConfig。
  */
@@ -10,7 +11,7 @@
 import { fetch } from "scripting"
 import { getAuthState } from "../auth"
 
-export type InnertubeClientKey = "IOS" | "WEB" | "WEB_SABR" | "MWEB" | "ANDROID_VR" | "TVHTML5"
+export type InnertubeClientKey = "IOS" | "VISIONOS" | "WEB" | "WEB_SABR" | "MWEB" | "ANDROID_VR" | "TVHTML5"
 
 /** 鬆散 JSON 型別，對應 Innertube 的巢狀回應。 */
 export type JsonObject = Record<string, any>
@@ -32,6 +33,8 @@ export interface YoutubeAuthSnapshot {
 const IOS_UA: string = "com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_3_1 like Mac OS X;)"
 const WEB_UA: string =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36"
+const VISIONOS_UA: string =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15"
 const ANDROID_VR_UA: string =
   "com.google.android.apps.youtube.vr.oculus/1.62.27 (Linux; U; Android 12; en_US; Quest 3 Build/SQ3A.220605.009.A1) gzip"
 
@@ -108,6 +111,26 @@ export const INNERTUBE_CLIENTS: Record<InnertubeClientKey, InnertubeClientConfig
       request: { useSsl: true, internalExperimentFlags: [] },
     },
   },
+  VISIONOS: {
+    clientName: 101,
+    clientVersion: "1.02",
+    userAgent: VISIONOS_UA,
+    context: {
+      client: {
+        clientName: "VISIONOS",
+        clientVersion: "1.02",
+        hl: "en",
+        gl: "US",
+        userAgent: VISIONOS_UA,
+        deviceMake: "Apple",
+        deviceModel: "RealityDevice17,1",
+        osName: "visionOS",
+        osVersion: "26.5.23O471",
+      },
+      user: { lockedSafetyMode: false },
+      request: { useSsl: true, internalExperimentFlags: [] },
+    },
+  },
   TVHTML5: {
     clientName: 7,
     clientVersion: "7.20250205.10.00",
@@ -125,6 +148,28 @@ export const INNERTUBE_CLIENTS: Record<InnertubeClientKey, InnertubeClientConfig
       request: { useSsl: true },
     },
   },
+}
+
+let anonymousVisitorData: string | null = null
+
+/** visitorData for requests without a stored one; fetched once per run. */
+export async function getAnonymousVisitorData(): Promise<string | undefined> {
+  if (anonymousVisitorData) return anonymousVisitorData
+  try {
+    const response = await fetch("https://www.youtube.com/youtubei/v1/visitor_id?prettyPrint=false", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "User-Agent": WEB_UA },
+      body: JSON.stringify({ context: INNERTUBE_CLIENTS.WEB.context }),
+      timeout: 15,
+      debugLabel: "Yobi visitor_id",
+    })
+    const data = (await response.json()) as JsonObject
+    const value: unknown = data?.["responseContext"]?.["visitorData"]
+    if (typeof value === "string" && value) anonymousVisitorData = value
+  } catch (_error) {
+    return undefined
+  }
+  return anonymousVisitorData ?? undefined
 }
 
 let cachedAuth: YoutubeAuthSnapshot | null = null
@@ -212,6 +257,8 @@ export interface InnertubeRequestOptions {
   client?: InnertubeClientKey
   headers?: Record<string, string>
   timeoutSeconds?: number
+  /** Overrides the stored visitorData, e.g. to match the one a PO token was minted for. */
+  visitorData?: string
 }
 
 /** 呼叫 Innertube API。`endpoint` 例如 "player"、"search"、"browse"、"next"。 */
@@ -224,11 +271,13 @@ export async function innertubePost(
   const config: InnertubeClientConfig = INNERTUBE_CLIENTS[clientKey]
   const auth: YoutubeAuthSnapshot = getYoutubeAuth()
   const headers: Record<string, string> = { ...buildHeaders(clientKey, auth), ...(options.headers ?? {}) }
+  const visitorData: string | undefined = options.visitorData ?? auth.visitorData
+  if (options.visitorData) headers["X-Goog-Visitor-Id"] = options.visitorData
 
   const context: JsonObject = payload["context"] ?? config.context
   const body: JsonObject = { ...payload, context }
-  if (auth.visitorData) {
-    body["visitorData"] = auth.visitorData
+  if (visitorData) {
+    body["visitorData"] = visitorData
   }
 
   const url: string = `https://www.youtube.com/youtubei/v1/${endpoint}?prettyPrint=false`
@@ -254,9 +303,10 @@ export interface PlayerRequestOptions {
   poToken?: string
   signatureTimestamp?: number
   reloadPlaybackParamsToken?: string
+  visitorData?: string
 }
 
-/** 取得 player response（IOS 可直接拿到 hlsManifestUrl）。 */
+/** 取得 player response。 */
 export async function fetchPlayerResponse(
   videoId: string,
   clientKey: InnertubeClientKey,
@@ -283,7 +333,11 @@ export async function fetchPlayerResponse(
   if (options.poToken) {
     payload["serviceIntegrityDimensions"] = { poToken: options.poToken }
   }
-  return innertubePost("player", payload, { client: clientKey })
+  if (options.visitorData) {
+    const context: JsonObject = INNERTUBE_CLIENTS[clientKey].context
+    payload["context"] = { ...context, client: { ...context["client"], visitorData: options.visitorData } }
+  }
+  return innertubePost("player", payload, { client: clientKey, visitorData: options.visitorData })
 }
 
 /** 搜尋。 */

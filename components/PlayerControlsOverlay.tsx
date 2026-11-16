@@ -104,6 +104,7 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
   const [tapHint, setTapHint] = useState<"left" | "right" | null>(null)
 
   const lastTapAtRef = useRef<number | null>(null)
+  const scrubTargetRef = useRef<number | null>(null)
   const hideTimerRef = useRef<number | null>(null)
   const hintTimerRef = useRef<number | null>(null)
   const statusRef = useRef<string>(store.status)
@@ -195,9 +196,22 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
   }
 
   function handleSliderChanged(value: number): void {
+    // Seeking on every tick floods the local proxy with segment requests; seek once on release.
+    scrubTargetRef.current = value
     setScrubPreviewSec(value)
     setIsScrubbing(true)
-    void seekTo(value)
+  }
+
+  function handleSliderEditingChanged(editing: boolean): void {
+    if (editing) {
+      clearAutoHide()
+      return
+    }
+    const target: number | null = scrubTargetRef.current
+    scrubTargetRef.current = null
+    if (target !== null) void seekTo(target)
+    setIsScrubbing(false)
+    armAutoHide()
   }
 
   function renderSponsorBlocks(fullWidth: number, blockHeight: number): VirtualNode[] {
@@ -399,9 +413,7 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
                 value={sliderValue}
                 tint={palette.brand}
                 onChanged={handleSliderChanged}
-                onEditingChanged={(editing: boolean) => {
-                  if (!editing) setIsScrubbing(false)
-                }}
+                onEditingChanged={handleSliderEditingChanged}
               />
               <ZStack
                 alignment="leading"

@@ -31,7 +31,12 @@ export const UMP_PART = {
   SABR_ERROR: 44,
   SABR_CONTEXT_UPDATE: 57,
   STREAM_PROTECTION_STATUS: 58,
+  SABR_CONTEXT_SENDING_POLICY: 59,
 } as const
+
+const SABR_CONTEXT_KEEP_EXISTING: number = 2
+const SABR_MAX_ATTEMPTS: number = 4
+const SABR_MAX_BACKOFF_MS: number = 10_000
 
 const SEGMENT_DURATION_MS: number = 5000
 
@@ -370,6 +375,25 @@ function protoBytes(fields: Map<number, ProtoField[]>, field: number): Uint8Arra
   return entry.value
 }
 
+/** Repeated int32 values, packed or not. */
+function protoInts(fields: Map<number, ProtoField[]>, field: number): number[] {
+  const out: number[] = []
+  for (const entry of fields.get(field) ?? []) {
+    if (typeof entry.value === "number") {
+      out.push(entry.value)
+      continue
+    }
+    let offset: number = 0
+    while (offset < entry.value.length) {
+      const [value, next] = readProtoVarint(entry.value, offset)
+      if (next === offset) break
+      out.push(value)
+      offset = next
+    }
+  }
+  return out
+}
+
 function protoString(fields: Map<number, ProtoField[]>, field: number): string | undefined {
   const value: Uint8Array | undefined = protoBytes(fields, field)
   return value ? new TextDecoder().decode(value) : undefined
@@ -526,11 +550,21 @@ export interface SabrSessionConfig {
   clientVersion?: string
   cookie?: string
   userAgent?: string
+  /**
+   * Direct URLs (e.g. from the IOS player) used only to read init and index ranges, which sit at the
+   * start of the file and stay reachable without a PO token. SABR segments match the sidx entries.
+   */
+  indexUrls?: Record<number, string>
+  /** The video/audio pair this session plays; SABR responses carry both tracks. */
+  pairedItags?: { video: number; audio: number }
 }
 
+/** Accepts URL-safe base64 without padding, which is how ustreamer configs and PO tokens arrive. */
 function base64ToBytes(value: string): Uint8Array | null {
   if (!value) return null
-  const data: Data | null = Data.fromBase64String(value)
+  let normalized: string = value.replace(/-/g, "+").replace(/_/g, "/").replace(/\./g, "=")
+  while (normalized.length % 4 !== 0) normalized += "="
+  const data: Data | null = Data.fromBase64String(normalized)
   return data ? data.toUint8Array() : null
 }
 
@@ -557,6 +591,12 @@ export class SabrSession {
   private segmentCache: Map<string, Uint8Array> = new Map()
   private timings: Map<string, { startMs: number; durationMs: number }> = new Map()
   private sidxCache: Map<number, SidxIndex | null> = new Map()
+  private indexedCounts: Map<number, number> = new Map()
+  private sabrContexts: Map<number, Uint8Array> = new Map()
+  private activeContextTypes: Set<number> = new Set()
+  private contextChanged: boolean = false
+  private backoffMs: number = 0
+  private nextRequestAt: number = 0
   lastError?: string
 
   constructor(config: SabrSessionConfig) {
@@ -575,6 +615,8 @@ export class SabrSession {
   }
 
   segmentCount(itag: number): number {
+    const indexed: number | undefined = this.indexedCounts.get(itag)
+    if (indexed !== undefined) return indexed
     const durationMs: number = this.durationMs(itag)
     if (durationMs <= 0) return 1
     return Math.max(1, Math.ceil(durationMs / SEGMENT_DURATION_MS))
@@ -589,6 +631,30 @@ export class SabrSession {
     const remaining: number = Math.max(0, durationMs - startMs)
     const segmentMs: number = Math.min(SEGMENT_DURATION_MS, remaining > 0 ? remaining : SEGMENT_DURATION_MS)
     return { startMs, durationMs: segmentMs }
+  }
+
+  /**
+   * Load the segment index before a playlist is built so its count and durations match the media
+   * (same as upstream ingesting initialization data). Without it the 5 s grid points seeks at the wrong segments.
+   */
+  async prepareTimeline(itag: number): Promise<void> {
+    if (this.indexedCounts.has(itag)) return
+    const format: SabrFormat | undefined = this.formatsByItag.get(itag)
+    if (!format) return
+    let index: SidxIndex | null = null
+    try {
+      index = await this.sidxFor(format)
+    } catch {
+      index = null
+    }
+    if (!index || index.entries.length === 0) return
+    let startMs: number = 0
+    index.entries.forEach((entry: SidxEntry, i: number) => {
+      const durationMs: number = entry.durationUs / 1000
+      this.timings.set(`${itag}:${i + 1}`, { startMs, durationMs })
+      startMs += durationMs
+    })
+    this.indexedCounts.set(itag, index.entries.length)
   }
 
   private recordTiming(itag: number, header: SabrMediaHeader): void {
@@ -618,23 +684,40 @@ export class SabrSession {
     const clientKey: InnertubeClientKey = this.config.clientKey ?? "WEB_SABR"
     const profile = INNERTUBE_CLIENTS[clientKey]
     const client: JsonObject = asObject(profile.context["client"]) ?? {}
+    // Field numbers follow googlevideo's StreamerContext.ClientInfo.
     const result: ProtoWriter = new ProtoWriter()
     result.string(1, String(client["hl"] ?? "en"))
-    if (client["deviceMake"]) result.string(2, String(client["deviceMake"]))
-    if (client["deviceModel"]) result.string(3, String(client["deviceModel"]))
-    result.uint32(4, profile.clientName)
-    result.string(5, this.config.clientVersion ?? profile.clientVersion)
-    if (client["osName"]) result.string(6, String(client["osName"]))
-    if (client["osVersion"]) result.string(7, String(client["osVersion"]))
+    if (client["deviceMake"]) result.string(12, String(client["deviceMake"]))
+    if (client["deviceModel"]) result.string(13, String(client["deviceModel"]))
+    result.uint32(16, profile.clientName)
+    result.string(17, this.config.clientVersion ?? profile.clientVersion)
+    if (client["osName"]) result.string(18, String(client["osName"]))
+    if (client["osVersion"]) result.string(19, String(client["osVersion"]))
     return result
+  }
+
+  private pairedFormats(format: SabrFormat): { video?: SabrFormat; audio?: SabrFormat } {
+    const pair = this.config.pairedItags
+    const video: SabrFormat | undefined = format.isAudio
+      ? (pair ? this.formatsByItag.get(pair.video) : undefined)
+      : format
+    const audio: SabrFormat | undefined = format.isAudio
+      ? format
+      : (pair ? this.formatsByItag.get(pair.audio) : undefined)
+    return { video, audio }
   }
 
   private buildRequestBody(format: SabrFormat, sequence: number | "init"): Uint8Array {
     const ustreamerConfig: Uint8Array | null = base64ToBytes(this.config.videoPlaybackUstreamerConfig)
-    const playerTimeMs: number = sequence === "init" ? 0 : Math.max(0, (sequence - 1) * SEGMENT_DURATION_MS)
+    const playerTimeMs: number = sequence === "init"
+      ? 0
+      : Math.max(0, Math.floor(this.segmentTiming(format.itag, sequence).startMs))
+    const { video, audio } = this.pairedFormats(format)
 
     const abrState: ProtoWriter = new ProtoWriter().int64(28, playerTimeMs)
     abrState.int64(29, 0).uint32(34, 1).float(35, 1).int64(39, 0)
+    // enabledTrackTypesBitfield: 0 = audio and video, 1 = audio only, 2 = video only.
+    abrState.uint32(40, video && audio ? 0 : format.isAudio ? 1 : 2)
 
     const streamerContext: ProtoWriter = new ProtoWriter().message(1, this.clientInfoMessage())
     if (this.config.poToken) {
@@ -643,17 +726,25 @@ export class SabrSession {
       streamerContext.bytes(2, tokenRaw)
     }
     if (this.playbackCookie) streamerContext.bytes(3, this.playbackCookie)
+    for (const type of this.activeContextTypes) {
+      const value: Uint8Array | undefined = this.sabrContexts.get(type)
+      if (value) streamerContext.message(5, new ProtoWriter().uint32(1, type).bytes(2, value))
+    }
+    for (const type of this.sabrContexts.keys()) {
+      if (!this.activeContextTypes.has(type)) streamerContext.uint32(6, type)
+    }
 
     const request: ProtoWriter = new ProtoWriter().message(1, abrState)
 
-    if (sequence === "init") {
-      request.message(2, this.formatIdMessage(format))
+    // selectedFormatIds lists formats the client already has init for; the server sends init for the rest.
+    for (const selected of [video, audio]) {
+      if (selected && this.initCache.has(selected.itag)) request.message(2, this.formatIdMessage(selected))
     }
 
     request.int64(4, playerTimeMs)
     if (ustreamerConfig) request.bytes(5, ustreamerConfig)
-    if (format.isAudio) request.message(16, this.formatIdMessage(format))
-    else request.message(17, this.formatIdMessage(format))
+    if (audio) request.message(16, this.formatIdMessage(audio))
+    if (video) request.message(17, this.formatIdMessage(video))
     request.message(19, streamerContext)
     request.int64(22, 0)
     return request.finish()
@@ -677,6 +768,9 @@ export class SabrSession {
 
   /** 發送一次 ABR 請求，回傳本次收到的切片。 */
   private async requestOnce(format: SabrFormat, sequence: number | "init"): Promise<Map<string, Uint8Array>> {
+    const wait: number = this.nextRequestAt - Date.now()
+    if (wait > 0) await new Promise<void>((resolve) => setTimeout(resolve, Math.min(wait, SABR_MAX_BACKOFF_MS)))
+    this.backoffMs = 0
     const body: Uint8Array = this.buildRequestBody(format, sequence)
     const bodyData: Data | null = Data.fromUint8Array(body)
     const response = await fetch(this.endpoint(), {
@@ -730,16 +824,51 @@ export class SabrSession {
         }
       } else if (part.type === UMP_PART.NEXT_REQUEST_POLICY) {
         const policy: SabrNextRequestPolicy = decodeNextRequestPolicy(part.data)
-        if (policy.playbackCookie) this.playbackCookie = policy.playbackCookie
+        if (policy.playbackCookie && policy.playbackCookie.length > 0) this.playbackCookie = policy.playbackCookie
+        this.backoffMs = policy.backoffTimeMs ?? 0
+        this.nextRequestAt = Date.now() + this.backoffMs
       } else if (part.type === UMP_PART.SABR_REDIRECT) {
         const redirect: string | undefined = decodeSabrRedirect(part.data)
         if (redirect && /^https?:/i.test(redirect)) this.streamingUrl = redirect
       } else if (part.type === UMP_PART.SABR_ERROR) {
         this.lastError = decodeSabrError(part.data)
+      } else if (part.type === UMP_PART.SABR_CONTEXT_UPDATE) {
+        this.applyContextUpdate(part.data)
+      } else if (part.type === UMP_PART.SABR_CONTEXT_SENDING_POLICY) {
+        const policy: Map<number, ProtoField[]> = decodeProto(part.data)
+        for (const type of protoInts(policy, 1)) this.activeContextTypes.add(type)
+        for (const type of protoInts(policy, 2)) this.activeContextTypes.delete(type)
+        for (const type of protoInts(policy, 3)) this.sabrContexts.delete(type)
       }
     }
 
     void finished
+    return segments
+  }
+
+  private applyContextUpdate(data: Uint8Array): void {
+    const fields: Map<number, ProtoField[]> = decodeProto(data)
+    const type: number | undefined = protoNumber(fields, 1)
+    const value: Uint8Array | undefined = protoBytes(fields, 3)
+    if (type === undefined || !value) return
+    if (protoNumber(fields, 5) === SABR_CONTEXT_KEEP_EXISTING && this.sabrContexts.has(type)) return
+    this.sabrContexts.set(type, value)
+    if (protoNumber(fields, 4) === 1) this.activeContextTypes.add(type)
+    this.contextChanged = true
+  }
+
+  /**
+   * Repeats the request while the server answers with new SABR contexts or a backoff instead of media,
+   * as the player does. The first request of a session typically waits out a ~5 s backoff.
+   */
+  private async requestWithContext(format: SabrFormat, sequence: number | "init", key: string): Promise<Map<string, Uint8Array>> {
+    let segments: Map<string, Uint8Array> = new Map()
+    for (let attempt = 0; attempt < SABR_MAX_ATTEMPTS; attempt++) {
+      this.contextChanged = false
+      segments = await this.requestOnce(format, sequence)
+      if (segments.has(key) || this.segmentCache.has(key) || this.initCache.has(format.itag) && sequence === "init") break
+      if (!this.contextChanged && this.backoffMs <= 0) break
+    }
     return segments
   }
 
@@ -749,17 +878,18 @@ export class SabrSession {
     if (cached) return cached
     const format: SabrFormat | undefined = this.formatsByItag.get(itag)
     if (!format) return null
-    if (!this.config.serverAbrStreamingUrl) {
-      if (format.url && format.initRange) {
-        const direct: Uint8Array | null = await fetchRange(format.url, format.initRange.start, format.initRange.end, this.headers())
-        if (direct) this.initCache.set(itag, direct)
+    const indexUrl: string | undefined = this.indexUrlFor(format)
+    if (indexUrl && format.initRange) {
+      const direct: Uint8Array | null = await fetchRange(indexUrl, format.initRange.start, format.initRange.end, this.headers())
+      if (direct) {
+        this.initCache.set(itag, direct)
         return direct
       }
-      return null
     }
+    if (!this.config.serverAbrStreamingUrl) return null
 
     try {
-      const segments: Map<string, Uint8Array> = await this.requestOnce(format, "init")
+      const segments: Map<string, Uint8Array> = await this.requestWithContext(format, "init", `${itag}:init`)
       const media: Uint8Array | undefined = segments.get(`${itag}:init`) ?? this.initCache.get(itag)
       return media ?? null
     } catch (error) {
@@ -792,44 +922,23 @@ export class SabrSession {
       return direct
     }
 
-    const found: Uint8Array | undefined = await this.requestOnce(format, sequence).then(
-      (segments: Map<string, Uint8Array>): Uint8Array | undefined => segments.get(key),
-    )
-    if (found) return found
-
-    // 伺服器回傳的視窗不一定對齊：找最接近的 sequence 並快取。
-    let closestKey: string | null = null
-    let closestDelta: number = Number.MAX_SAFE_INTEGER
-    for (const cachedKey of this.segmentCache.keys()) {
-      if (!cachedKey.startsWith(`${itag}:`)) continue
-      const cachedSequence: number = Number(cachedKey.split(":")[1])
-      const delta: number = Math.abs(cachedSequence - sequence)
-      if (delta < closestDelta) {
-        closestDelta = delta
-        closestKey = cachedKey
-      }
-    }
-    if (closestKey) {
-      const media: Uint8Array | undefined = this.segmentCache.get(closestKey)
-      if (media && closestDelta <= 1) return media
-    }
-
-    if (format.url) {
-      const direct: Uint8Array | null = await this.fetchDirectSegment(format, sequence)
-      if (direct) this.segmentCache.set(key, direct)
-      return direct
-    }
+    await this.requestWithContext(format, sequence, key)
     return this.segmentCache.get(key) ?? null
+  }
+
+  private indexUrlFor(format: SabrFormat): string | undefined {
+    return format.url ?? this.config.indexUrls?.[format.itag]
   }
 
   private async sidxFor(format: SabrFormat): Promise<SidxIndex | null> {
     if (this.sidxCache.has(format.itag)) return this.sidxCache.get(format.itag) ?? null
-    if (!format.url || !format.indexRange) {
+    const indexUrl: string | undefined = this.indexUrlFor(format)
+    if (!indexUrl || !format.indexRange) {
       this.sidxCache.set(format.itag, null)
       return null
     }
     const bytes: Uint8Array | null = await fetchRange(
-      format.url,
+      indexUrl,
       format.indexRange.start,
       format.indexRange.end,
       this.headers(),
@@ -1053,14 +1162,20 @@ export function createSabrQualitySession(
   video: SabrFormat,
   audio: SabrFormat,
 ): SabrQualitySession {
-  const session: SabrSession = new SabrSession(config)
+  const session: SabrSession = new SabrSession({ ...config, pairedItags: { video: video.itag, audio: audio.itag } })
   const sessionId: string = `sabr-${config.videoId}-${video.itag}-${audio.itag}`
   const input: SabrManifestBuilderInput = { sessionId, session, video, audio }
 
   const handler: SabrProxySessionHandler = {
     hlsMasterPlaylist: (): string => buildHlsMasterPlaylist(input),
-    mediaPlaylist: (itag: number): string => buildMediaPlaylist(input, itag),
-    dashManifest: (): string => buildDashManifest(input),
+    mediaPlaylist: async (itag: number): Promise<string> => {
+      await session.prepareTimeline(itag)
+      return buildMediaPlaylist(input, itag)
+    },
+    dashManifest: async (): Promise<string> => {
+      await Promise.all([session.prepareTimeline(video.itag), session.prepareTimeline(audio.itag)])
+      return buildDashManifest(input)
+    },
     initializationSegment: (itag: number): Promise<Uint8Array | null> => session.fetchInitialization(itag),
     mediaSegment: (itag: number, sequence: number): Promise<Uint8Array | null> =>
       session.fetchSegment(itag, sequence),
