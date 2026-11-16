@@ -31,10 +31,14 @@ const MINI_VIDEO_INSET_V: number = 8
 const MINI_VIDEO_INSET_LEADING: number = 10
 const MINI_VIDEO_RADIUS: number = 10
 // From the bottom safe-area edge up to the tab bar's top edge, plus the gap above it.
-const TAB_BAR_CLEARANCE: number = 31 + 8
+const TAB_BAR_CLEARANCE: number = 44 + 8
 /** Space pages keep free above the tab bar while a video is loaded. */
 export const MINI_PLAYER_RESERVED_HEIGHT: number = MINI_HEIGHT + 8
 const MORPH_SECONDS: number = 0.38
+// Layers that belong to only one end of the morph leave right away and arrive in its last stretch,
+// so nothing is half-visible while the card is still changing shape.
+const FADE_OUT_SECONDS: number = 0.12
+const FADE_IN_SECONDS: number = 0.2
 
 interface Insets {
   top: number
@@ -144,6 +148,8 @@ export function PlayerHost(props: {
   const duration: number = progress.duration > 0 ? progress.duration : item?.duration ?? 0
   const ratio: number = duration > 0 ? progress.position / duration : 0
   const surfaceColor = fullscreen ? "black" : "systemBackground"
+  const fadeOut: Animation = Animation.easeOut(FADE_OUT_SECONDS)
+  const fadeInLate: Animation = Animation.easeOut(FADE_IN_SECONDS).delay(MORPH_SECONDS - FADE_IN_SECONDS)
 
   return (
     <ZStack
@@ -179,7 +185,12 @@ export function PlayerHost(props: {
             glassEffect={{ glass: UIGlass.regular(), shape: { type: "rect", cornerRadius: geometry.radius } }}
             opacity={isMini ? 1 : 0}
           />
-          <Rectangle fill={surfaceColor} frame={{ width: geometry.width, height: geometry.height }} opacity={isMini ? 0 : 1} />
+          <Rectangle
+            fill={surfaceColor}
+            frame={{ width: geometry.width, height: geometry.height }}
+            opacity={isMini ? 0 : 1}
+            animation={{ animation: isMini ? fadeInLate : fadeOut, value: isMini }}
+          />
           <VStack spacing={0} alignment="leading" frame={{ width: geometry.width, height: geometry.height, alignment: "top" }}>
             <Rectangle fill="black" frame={{ width: geometry.width, height: geometry.topInset }} />
             <HStack
@@ -208,12 +219,19 @@ export function PlayerHost(props: {
                   <Rectangle fill="black" frame={{ width: geometry.videoWidth, height: geometry.videoHeight }} />
                 )}
                 {isExpanded ? (
-                  <PlayerControlsOverlay
-                    width={geometry.videoWidth}
-                    height={geometry.videoHeight}
-                    onOpenQualitySheet={() => setShowQualitySheet(true)}
-                    onOpenDanmakuSheet={() => setShowDanmakuSheet(true)}
-                  />
+                  <ZStack
+                    transition={Transition.asymmetric(
+                      Transition.opacity().animation(fadeInLate),
+                      Transition.opacity().animation(fadeOut),
+                    )}
+                  >
+                    <PlayerControlsOverlay
+                      width={geometry.videoWidth}
+                      height={geometry.videoHeight}
+                      onOpenQualitySheet={() => setShowQualitySheet(true)}
+                      onOpenDanmakuSheet={() => setShowDanmakuSheet(true)}
+                    />
+                  </ZStack>
                 ) : (
                   <Rectangle
                     fill="rgba(0,0,0,0.001)"
@@ -225,6 +243,7 @@ export function PlayerHost(props: {
               <ZStack
                 frame={{ width: Math.max(0, geometry.width - geometry.videoWidth - geometry.videoInset), height: geometry.rowHeight }}
                 opacity={isMini ? 1 : 0}
+                animation={{ animation: isMini ? fadeInLate : fadeOut, value: isMini }}
                 allowsHitTesting={isMini}
                 clipped
               >
@@ -240,6 +259,7 @@ export function PlayerHost(props: {
               <ZStack
                 frame={{ width: geometry.width, maxHeight: "infinity", alignment: "top" }}
                 opacity={isExpanded ? 1 : 0}
+                animation={{ animation: isExpanded ? fadeInLate : fadeOut, value: isExpanded }}
                 allowsHitTesting={isExpanded}
               >
                 <WatchView
