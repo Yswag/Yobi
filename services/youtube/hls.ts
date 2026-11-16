@@ -2,12 +2,13 @@
  * YouTube HLS Master `.m3u8` 解析。
  *
  * 為每個 `#EXT-X-STREAM-INF` 建立單一畫質子 Master：
- * 保留原本的絕對 variant URL，並把對應的 `#EXT-X-MEDIA:TYPE=AUDIO`
- * 轉成絕對 URL 一起放進子 Master，切畫質時才不會失去音訊。
+ * variant 與對應的 `#EXT-X-MEDIA:TYPE=AUDIO` 都改指向本機轉手（片段預抓），
+ * 切畫質時才不會失去音訊。
  */
 
 import { fetch } from "scripting"
 import type { VideoQualityTrack } from "../../types"
+import { createHlsRelay } from "../hlsRelay"
 import { registerVirtualManifest } from "../localProxy"
 
 export interface HlsAudioGroup {
@@ -176,9 +177,28 @@ function buildSingleVariantMaster(variant: HlsVariant, audio: HlsAudioGroup | un
   return `${lines.join("\n")}\n`
 }
 
+/** 原始 master 逐行改寫：屬性不動，只把 variant 與音訊的網址換成本機轉手。 */
+function relayMasterText(text: string, masterUrl: string, relayGroup: string): string {
+  const relay = (uri: string): string => {
+    const absolute: string = resolveUrl(masterUrl, uri)
+    return createHlsRelay(relayGroup, simpleHash(absolute), absolute)
+  }
+  return text
+    .split("\n")
+    .map((rawLine: string): string => {
+      const line: string = rawLine.trim()
+      if (!line) return line
+      if (line.startsWith("#EXT-X-MEDIA:")) {
+        return line.replace(/URI="([^"]+)"/, (_match: string, uri: string): string => `URI="${relay(uri)}"`)
+      }
+      return line.startsWith("#") ? line : relay(line)
+    })
+    .join("\n")
+}
+
 /**
  * 抓取並解析 HLS Master，回傳可切換的畫質軌。
- * 原始 master 保留為自適應 `primaryUrl`。
+ * 自適應的 `primaryUrl` 是改寫過的本機 master，片段同樣經過預抓。
  */
 export async function resolveHlsManifest(masterUrl: string): Promise<ResolvedHlsManifest> {
   const response = await fetch(masterUrl, {
@@ -198,15 +218,22 @@ export async function resolveHlsManifest(masterUrl: string): Promise<ResolvedHls
 
   const qualities: VideoQualityTrack[] = []
   const usedIds: Set<string> = new Set()
+  const relayGroup: string = `yt${simpleHash(masterUrl)}`
 
   for (const variant of sorted) {
     const audio: HlsAudioGroup | undefined = variant.audioGroup
       ? parsed.audioGroups.find((group: HlsAudioGroup): boolean => group.groupId === variant.audioGroup)
       : parsed.audioGroups.find((group: HlsAudioGroup): boolean => group.isDefault) ?? parsed.audioGroups[0]
 
+    // 手動選的單一畫質走本機轉手，片段由代理先抓好。
+    const relayedVariant: HlsVariant = { ...variant, uri: createHlsRelay(relayGroup, simpleHash(variant.uri), variant.uri) }
+    const relayedAudio: HlsAudioGroup | undefined = audio
+      ? { ...audio, uri: createHlsRelay(relayGroup, simpleHash(audio.uri), audio.uri) }
+      : undefined
+
     const localUrl: string = registerVirtualManifest(
       `yt-hls-${simpleHash(variant.uri)}`,
-      buildSingleVariantMaster(variant, audio),
+      buildSingleVariantMaster(relayedVariant, relayedAudio),
       "application/vnd.apple.mpegurl",
     )
 
@@ -228,5 +255,10 @@ export async function resolveHlsManifest(masterUrl: string): Promise<ResolvedHls
     qualities.push(quality)
   }
 
-  return { primaryUrl: masterUrl, qualities, masterText, variants: parsed.variants, audioGroups: parsed.audioGroups }
+  const primaryUrl: string = registerVirtualManifest(
+    `yt-hls-auto-${relayGroup}`,
+    relayMasterText(masterText, masterUrl, relayGroup),
+    "application/vnd.apple.mpegurl",
+  )
+  return { primaryUrl, qualities, masterText, variants: parsed.variants, audioGroups: parsed.audioGroups }
 }

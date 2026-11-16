@@ -27,6 +27,7 @@ import {
   getSettings,
   getVideoDetail,
   recordWatchHistory,
+  releaseAllPrefetchers,
   resolveOfflineSource,
   resolveStream,
   updateSettings,
@@ -1046,6 +1047,7 @@ export async function closePlayer(): Promise<void> {
   } catch {
     // Ignore
   }
+  releaseAllPrefetchers()
   storeState.presentationMode = "hidden"
   storeState.currentItem = null
   storeState.pipAvailable = false

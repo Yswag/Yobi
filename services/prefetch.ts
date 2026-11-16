@@ -1,0 +1,191 @@
+import { AbortController } from "scripting"
+import type { AbortSignal } from "scripting"
+
+/**
+ * 片段預抓：播放器要第 N 塊時，背景先抓後面幾塊。
+ * Scripting 播放器自己抓片段時 4K 會轉圈，先抓好就能直接從記憶體回。
+ * 所有預抓器共用一個記憶體上限；同時只會播一支影片。
+ */
+
+const MAX_CACHED_BYTES: number = 96 * 1024 * 1024
+/** 這麼久沒被要資料的預抓器（換畫質、換影片後）會被清掉快取。 */
+const IDLE_MS: number = 10_000
+
+export interface ChunkSource {
+  /** 總塊數；還不知道時回 null。 */
+  count(): number | null
+  /** 總數未知時，回 null 代表超過結尾；網路錯誤要丟例外，才不會被當成結尾。 */
+  fetch(index: number, signal: AbortSignal): Promise<Uint8Array | null>
+}
+
+export interface PrefetcherOptions {
+  ahead: number
+  /** 同時抓幾塊；有狀態的來源（SABR）要設 1。 */
+  concurrency: number
+}
+
+interface InFlight {
+  promise: Promise<Uint8Array | null>
+  controller: AbortController
+}
+
+interface Queued {
+  index: number
+  resolve: (go: boolean) => void
+}
+
+const prefetchers: Set<Prefetcher> = new Set()
+
+function totalCachedBytes(): number {
+  let total: number = 0
+  for (const prefetcher of prefetchers) total += prefetcher.cachedBytes
+  return total
+}
+
+function dropIdle(current: Prefetcher): void {
+  const now: number = Date.now()
+  for (const prefetcher of prefetchers) {
+    if (prefetcher !== current && prefetcher.cachedBytes > 0 && prefetcher.isIdle(now)) prefetcher.release()
+  }
+}
+
+export class Prefetcher {
+  private readonly source: ChunkSource
+  private readonly options: PrefetcherOptions
+  private readonly cache: Map<number, Uint8Array> = new Map()
+  private readonly inFlight: Map<number, InFlight> = new Map()
+  private queue: Queued[] = []
+  private running: number = 0
+  /** 抓到 null 的最小塊號，之後不再往後預抓。 */
+  private endIndex: number = Number.POSITIVE_INFINITY
+  private lastRequestAt: number = 0
+  cachedBytes: number = 0
+
+  constructor(source: ChunkSource, options: PrefetcherOptions) {
+    this.source = source
+    this.options = options
+    prefetchers.add(this)
+  }
+
+  async get(index: number): Promise<Uint8Array | null> {
+    this.lastRequestAt = Date.now()
+    dropIdle(this)
+    this.trimOutside(index)
+
+    const cached: Uint8Array | undefined = this.cache.get(index)
+    const result: Promise<Uint8Array | null> = cached ? Promise.resolve(cached) : this.start(index, true)
+    const count: number = Math.min(this.source.count() ?? Number.POSITIVE_INFINITY, this.endIndex)
+    for (let ahead = 1; ahead <= this.options.ahead; ahead++) {
+      const next: number = index + ahead
+      if (next >= count) break
+      if (this.cache.has(next) || this.inFlight.has(next)) continue
+      if (totalCachedBytes() >= MAX_CACHED_BYTES) break
+      void this.start(next, false)
+    }
+
+    const bytes: Uint8Array | null = await result
+    if (bytes || index >= this.endIndex) return bytes
+    // 第一次失敗通常是暫時性的，直接再抓一次。
+    return this.start(index, true)
+  }
+
+  private start(index: number, urgent: boolean): Promise<Uint8Array | null> {
+    const existing: InFlight | undefined = this.inFlight.get(index)
+    if (existing) {
+      if (urgent) this.promote(index)
+      return existing.promise
+    }
+    const controller: AbortController = new AbortController()
+    const promise: Promise<Uint8Array | null> = this.schedule(index, urgent).then(async (go: boolean) => {
+      if (!go) return null
+      try {
+        const bytes: Uint8Array | null = await this.source.fetch(index, controller.signal)
+        if (!bytes && !controller.signal.aborted && this.source.count() === null) {
+          this.endIndex = Math.min(this.endIndex, index)
+        }
+        return bytes
+      } catch {
+        return null
+      } finally {
+        this.finishOne()
+      }
+    }).then((bytes: Uint8Array | null): Uint8Array | null => {
+      if (this.inFlight.get(index)?.controller === controller) this.inFlight.delete(index)
+      if (controller.signal.aborted) return null
+      if (bytes) {
+        this.cache.set(index, bytes)
+        this.cachedBytes += bytes.byteLength
+      }
+      return bytes
+    })
+    this.inFlight.set(index, { promise, controller })
+    return promise
+  }
+
+  /** 依同時上限排隊；回傳 true 代表輪到了，false 代表排隊中被取消。 */
+  private schedule(index: number, urgent: boolean): Promise<boolean> {
+    if (this.running < this.options.concurrency) {
+      this.running++
+      return Promise.resolve(true)
+    }
+    return new Promise((resolve: (go: boolean) => void) => {
+      const entry: Queued = { index, resolve }
+      if (urgent) this.queue.unshift(entry)
+      else this.queue.push(entry)
+    })
+  }
+
+  private promote(index: number): void {
+    const position: number = this.queue.findIndex((entry: Queued): boolean => entry.index === index)
+    if (position > 0) this.queue.unshift(...this.queue.splice(position, 1))
+  }
+
+  private finishOne(): void {
+    const next: Queued | undefined = this.queue.shift()
+    if (next) next.resolve(true)
+    else this.running = Math.max(0, this.running - 1)
+  }
+
+  /** 保留前一塊（播放器偶爾重抓）與後面的預抓範圍，其餘釋放；拖動進度後舊範圍的下載直接取消。 */
+  private trimOutside(index: number): void {
+    const keep = (chunk: number): boolean => chunk >= index - 1 && chunk <= index + this.options.ahead
+    for (const [chunk, bytes] of this.cache) {
+      if (keep(chunk)) continue
+      this.cache.delete(chunk)
+      this.cachedBytes -= bytes.byteLength
+    }
+    this.queue = this.queue.filter((entry: Queued): boolean => {
+      if (keep(entry.index)) return true
+      entry.resolve(false)
+      return false
+    })
+    for (const [chunk, flight] of this.inFlight) {
+      if (keep(chunk)) continue
+      flight.controller.abort()
+      this.inFlight.delete(chunk)
+    }
+  }
+
+  isIdle(now: number): boolean {
+    return now - this.lastRequestAt > IDLE_MS
+  }
+
+  release(): void {
+    for (const entry of this.queue) entry.resolve(false)
+    this.queue = []
+    for (const flight of this.inFlight.values()) flight.controller.abort()
+    this.inFlight.clear()
+    this.cache.clear()
+    this.cachedBytes = 0
+  }
+
+  dispose(): void {
+    this.release()
+    prefetchers.delete(this)
+  }
+}
+
+/** 停止播放時釋放所有預抓的資料。 */
+export function releaseAllPrefetchers(): void {
+  for (const prefetcher of prefetchers) prefetcher.release()
+}

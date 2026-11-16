@@ -20,6 +20,7 @@ import {
   type SabrProxySessionHandler,
   type SabrProxyUrls,
 } from "../localProxy"
+import { Prefetcher } from "../prefetch"
 
 export const UMP_PART = {  MEDIA_HEADER: 20,
   MEDIA: 21,
@@ -1288,6 +1289,24 @@ export function createSabrQualitySession(
   const sessionId: string = `sabr-${config.videoId}-${video.itag}-${audio.itag}`
   const input: SabrManifestBuilderInput = { sessionId, session, video, audio }
 
+  // 每個 itag 一個預抓器；session 有狀態（context、backoff、token），所以一次只抓一段。
+  const prefetchers: Map<number, Prefetcher> = new Map()
+  const prefetcherFor = (itag: number): Prefetcher => {
+    let prefetcher: Prefetcher | undefined = prefetchers.get(itag)
+    if (!prefetcher) {
+      prefetcher = new Prefetcher(
+        {
+          // 序號從 1 開始，就拿序號當塊號。
+          count: (): number => session.segmentCount(itag) + 1,
+          fetch: (sequence: number): Promise<Uint8Array | null> => session.fetchSegment(itag, sequence),
+        },
+        { ahead: 4, concurrency: 1 },
+      )
+      prefetchers.set(itag, prefetcher)
+    }
+    return prefetcher
+  }
+
   const handler: SabrProxySessionHandler = {
     hlsMasterPlaylist: (): string => buildHlsMasterPlaylist(input),
     mediaPlaylist: async (itag: number): Promise<string> => {
@@ -1299,8 +1318,7 @@ export function createSabrQualitySession(
       return buildDashManifest(input)
     },
     initializationSegment: (itag: number): Promise<Uint8Array | null> => session.fetchInitialization(itag),
-    mediaSegment: (itag: number, sequence: number): Promise<Uint8Array | null> =>
-      session.fetchSegment(itag, sequence),
+    mediaSegment: (itag: number, sequence: number): Promise<Uint8Array | null> => prefetcherFor(itag).get(sequence),
     contentType: (itag: number): string => {
       const format: SabrFormat | undefined = session.formatByItag(itag)
       return format ? containerOf(format.mimeType) : "video/mp4"

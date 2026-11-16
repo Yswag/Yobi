@@ -1,4 +1,6 @@
 import { fetch } from "scripting"
+import type { AbortSignal } from "scripting"
+import { Prefetcher } from "./prefetch"
 
 /**
  * 本機 HttpServer 代理。
@@ -12,6 +14,8 @@ import { fetch } from "scripting"
  *   /sabr-seg/:sessionId/:itag/:seq/seg.mp4
  *   /sabr/:sessionId/master.m3u8
  *   /sabr/:sessionId/manifest.mpd
+ *   /relay/:id/playlist.m3u8
+ *   /relay/:id/:index/seg.ts（index 為 init 時回初始化片段）
  */
 
 export interface SabrProxyUrls {
@@ -36,6 +40,17 @@ export interface SabrProxySessionHandler {
   contentType?(itag: number): string | undefined
 }
 
+/**
+ * 轉手外部 HLS 媒體清單：片段由這裡代抓。
+ * 片段網址照 YouTube 以 `seg.ts` 結尾、類型給 octet-stream（影片片段其實是 fMP4，音訊是 ADTS AAC）：
+ * 帶 `.mp4` 時播放器回 Invalid data，不帶副檔名時回 no playable track。
+ */
+export interface HlsRelayHandler {
+  playlist(segmentUrl: (index: number) => string, initUrl: string): Promise<string>
+  initialization(): Promise<Uint8Array | null>
+  segment(index: number): Promise<Uint8Array | null>
+}
+
 interface VirtualManifest {
   content: string
   contentType: string
@@ -50,11 +65,18 @@ let starting: boolean = false
 
 const virtualManifests: Map<string, VirtualManifest> = new Map()
 const sabrSessions: Map<string, SabrProxySessionHandler> = new Map()
+const hlsRelays: Map<string, HlsRelayHandler> = new Map()
 
-/** bilibili 的 m4s 需要 Referer，只能由本機代理代抓。 */
+/**
+ * bilibili 的 m4s 需要 Referer，只能由本機代理代抓。
+ * 整個檔按固定 4 MB 切格子，播放器要的範圍落在哪格就從那格切給它，後面幾格先抓。
+ */
 interface BiliFileSource {
   url: string
   contentType: string
+  /** 檔案總長，第一次拿到 Content-Range 後才知道。 */
+  total: number | null
+  prefetcher: Prefetcher
 }
 
 const biliFileSources: Map<string, BiliFileSource> = new Map()
@@ -111,6 +133,14 @@ function notFound(message: string): HttpResponse {
   })
 }
 
+function badGateway(message: string): HttpResponse {
+  const body: Data | null = Data.fromRawString(message, "utf-8")
+  return HttpResponse.raw(502, "Bad Gateway", {
+    headers: { ...BASE_HEADERS, "Content-Type": "text/plain; charset=utf-8" },
+    body: body ?? undefined,
+  })
+}
+
 function parseByteRange(header: string | undefined): { start: number; end: number | null } {
   const match: RegExpMatchArray | null =
     typeof header === "string" ? header.match(/bytes=(\d+)-(\d*)/) : null
@@ -131,7 +161,7 @@ function registerRoutes(target: HttpServer): void {
     return textResponse(manifest.content, manifest.contentType)
   })
 
-  // 播放器抓 MPD 片段時不會帶 Referer（來源是本機檔），由這裡補上並限制單次視窗大小。
+  // 播放器抓 MPD 片段時不會帶 Referer（來源是本機檔），由這裡補上；一次最多回一格。
   target.registerAsyncHandler(
     "/bili-file/:id/file.m4s",
     async (req: HttpRequest): Promise<HttpResponse> => {
@@ -150,36 +180,32 @@ function registerRoutes(target: HttpServer): void {
 
       const requested = parseByteRange(req.headers["range"] ?? req.headers["Range"])
       const start: number = requested.start
-      const end: number = Math.min(
-        requested.end ?? start + BILI_WINDOW_BYTES - 1,
-        start + BILI_WINDOW_BYTES - 1,
-      )
+      const chunkIndex: number = Math.floor(start / BILI_WINDOW_BYTES)
+      const chunk: Uint8Array | null = await source.prefetcher.get(chunkIndex)
+      const offset: number = start - chunkIndex * BILI_WINDOW_BYTES
+      if (!chunk || offset >= chunk.byteLength) {
+        if (source.total !== null && start >= source.total) {
+          return HttpResponse.raw(416, "Range Not Satisfiable", {
+            headers: { ...BASE_HEADERS, "Content-Range": `bytes */${source.total}` },
+          })
+        }
+        return badGateway("upstream failed")
+      }
 
-      try {
-        const upstream = await fetch(source.url, {
-          headers: { ...BILI_REQUEST_HEADERS, Range: `bytes=${start}-${end}` },
-        })
-        const bytes: Uint8Array = new Uint8Array(await upstream.arrayBuffer())
-        const contentRange: string | null = upstream.headers.get("content-range")
-        const headers: Record<string, string> = {
+      const sliceEnd: number = requested.end !== null
+        ? Math.min(chunk.byteLength, requested.end - chunkIndex * BILI_WINDOW_BYTES + 1)
+        : chunk.byteLength
+      const bytes: Uint8Array = offset === 0 && sliceEnd === chunk.byteLength ? chunk : chunk.slice(offset, sliceEnd)
+      return HttpResponse.raw(206, "Partial Content", {
+        headers: {
           ...BASE_HEADERS,
           "Content-Type": source.contentType,
           "Accept-Ranges": "bytes",
           "Content-Length": String(bytes.byteLength),
-        }
-        if (contentRange) headers["Content-Range"] = contentRange
-        return HttpResponse.raw(upstream.status, "OK", {
-          headers,
-          body: Data.fromUint8Array(bytes) ?? undefined,
-        })
-      } catch (error) {
-        const message: string = error instanceof Error ? error.message : "upstream failed"
-        const body: Data | null = Data.fromRawString(message, "utf-8")
-        return HttpResponse.raw(502, "Bad Gateway", {
-          headers: { ...BASE_HEADERS, "Content-Type": "text/plain; charset=utf-8" },
-          body: body ?? undefined,
-        })
-      }
+          "Content-Range": `bytes ${start}-${start + bytes.byteLength - 1}/${source.total ?? "*"}`,
+        },
+        body: Data.fromUint8Array(bytes) ?? undefined,
+      })
     },
   )
 
@@ -222,6 +248,31 @@ function registerRoutes(target: HttpServer): void {
       return binaryResponse(bytes, handler.contentType?.(itag) ?? "video/mp4")
     },
   )
+
+  target.registerAsyncHandler("/relay/:id/playlist.m3u8", async (req: HttpRequest): Promise<HttpResponse> => {
+    const id: string = req.params["id"]
+    const handler: HlsRelayHandler | undefined = hlsRelays.get(id)
+    if (!handler) return notFound("unknown relay")
+    try {
+      const text: string = await handler.playlist(
+        (index: number): string => `http://127.0.0.1:${serverPort}/relay/${id}/${index}/seg.ts`,
+        `http://127.0.0.1:${serverPort}/relay/${id}/init/seg.ts`,
+      )
+      return textResponse(text, "application/vnd.apple.mpegurl")
+    } catch (error) {
+      return badGateway(error instanceof Error ? error.message : "playlist failed")
+    }
+  })
+
+  target.registerAsyncHandler("/relay/:id/:index/seg.ts", async (req: HttpRequest): Promise<HttpResponse> => {
+    const handler: HlsRelayHandler | undefined = hlsRelays.get(req.params["id"])
+    if (!handler) return notFound("unknown relay")
+    const isInit: boolean = req.params["index"] === "init"
+    const index: number = Number(req.params["index"])
+    if (!isInit && !Number.isInteger(index)) return notFound("unknown segment")
+    const bytes: Uint8Array | null = await (isInit ? handler.initialization() : handler.segment(index)).catch(() => null)
+    return bytes ? binaryResponse(bytes, "application/octet-stream") : badGateway("segment unavailable")
+  })
 
   target.registerAsyncHandler(
     "/sabr-seg/:sessionId/:itag/:seq/seg.mp4",
@@ -274,12 +325,48 @@ export function ensureLocalProxyStarted(): number {
 /** 註冊虛擬 manifest 內容（m3u8 / mpd），回傳可播放的本地 URL。 */
 export function registerBiliFileSource(id: string, url: string, contentType: string): string {
   const port: number = ensureLocalProxyStarted()
-  if (!biliFileSources.has(id) && biliFileSources.size >= BILI_MAX_SOURCES) {
+  const existing: BiliFileSource | undefined = biliFileSources.get(id)
+  if (existing && existing.url === url) return `http://127.0.0.1:${port}/bili-file/${id}/file.m4s`
+  existing?.prefetcher.dispose()
+  if (!existing && biliFileSources.size >= BILI_MAX_SOURCES) {
     const oldest: string | undefined = biliFileSources.keys().next().value
-    if (oldest) biliFileSources.delete(oldest)
+    if (oldest) {
+      biliFileSources.get(oldest)?.prefetcher.dispose()
+      biliFileSources.delete(oldest)
+    }
   }
-  biliFileSources.set(id, { url, contentType })
+  const source: BiliFileSource = {
+    url,
+    contentType,
+    total: null,
+    prefetcher: new Prefetcher(
+      {
+        count: (): number | null => (source.total === null ? null : Math.ceil(source.total / BILI_WINDOW_BYTES)),
+        fetch: (index: number, signal: AbortSignal): Promise<Uint8Array | null> => fetchBiliChunk(source, index, signal),
+      },
+      { ahead: 4, concurrency: 4 },
+    ),
+  }
+  biliFileSources.set(id, source)
   return `http://127.0.0.1:${port}/bili-file/${id}/file.m4s`
+}
+
+async function fetchBiliChunk(source: BiliFileSource, index: number, signal: AbortSignal): Promise<Uint8Array | null> {
+  const start: number = index * BILI_WINDOW_BYTES
+  if (source.total !== null && start >= source.total) return null
+  const response = await fetch(source.url, {
+    headers: { ...BILI_REQUEST_HEADERS, Range: `bytes=${start}-${start + BILI_WINDOW_BYTES - 1}` },
+    signal,
+    debugLabel: "Yobi bili chunk",
+  })
+  if (response.status === 416) return null
+  if (!response.ok) throw new Error(`HTTP ${response.status}`)
+  const total: number = Number(response.headers.get("content-range")?.split("/")[1])
+  if (Number.isFinite(total) && total > 0) source.total = total
+  const bytes: Uint8Array = new Uint8Array(await response.arrayBuffer())
+  // 伺服器忽略 Range 回整個檔時，自己切出這一格。
+  if (response.status === 200 && start > 0) return bytes.slice(start, start + BILI_WINDOW_BYTES)
+  return bytes.byteLength > BILI_WINDOW_BYTES ? bytes.slice(0, BILI_WINDOW_BYTES) : bytes
 }
 
 export function registerVirtualManifest(id: string, content: string, contentType: string): string {
@@ -316,6 +403,17 @@ export function getSabrProxyUrls(sessionId: string): SabrProxyUrls | null {
   }
 }
 
+/** 註冊 HLS 轉手，回傳本機媒體清單網址。 */
+export function registerHlsRelayHandler(id: string, handler: HlsRelayHandler): string {
+  const port: number = ensureLocalProxyStarted()
+  hlsRelays.set(id, handler)
+  return `http://127.0.0.1:${port}/relay/${id}/playlist.m3u8`
+}
+
+export function unregisterHlsRelayHandler(id: string): void {
+  hlsRelays.delete(id)
+}
+
 /** 移除 SABR session。 */
 export function unregisterSabrSessionHandler(sessionId: string): void {
   sabrSessions.delete(sessionId)
@@ -335,6 +433,9 @@ export function getLocalProxyPort(): number {
 export function stopLocalProxy(): void {
   virtualManifests.clear()
   sabrSessions.clear()
+  hlsRelays.clear()
+  for (const source of biliFileSources.values()) source.prefetcher.dispose()
+  biliFileSources.clear()
   if (server) {
     try {
       server.stop()

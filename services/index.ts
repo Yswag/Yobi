@@ -45,6 +45,7 @@ export * from "./storage"
 export * from "./auth"
 export * from "./sponsorblock"
 export * from "./localProxy"
+export { releaseAllPrefetchers } from "./prefetch"
 export * from "./downloads"
 
 export type FeedFilter = "all" | Provider
