@@ -1,4 +1,5 @@
-import { fetch, useEffect, useState } from "scripting"
+import { AppEvents, fetch, useEffect, useState } from "scripting"
+import type { ScenePhase } from "scripting"
 import type {
   CommentItem,
   CommentPage,
@@ -71,6 +72,8 @@ export interface PlayerStoreSnapshot {
   activePage: number
   isFullscreen: boolean
   isPiPActive: boolean
+  /** 目前片源能否進子母畫面：只有 native 後端可以，system（HLS）不行。 */
+  pipAvailable: boolean
   danmakuEnabled: boolean
   danmakuCount: number
   queue: UnifiedVideoItem[]
@@ -124,6 +127,7 @@ let storeState: PlayerStoreSnapshot = {
   activePage: 1,
   isFullscreen: false,
   isPiPActive: false,
+  pipAvailable: false,
   danmakuEnabled: true,
   danmakuCount: 0,
   queue: [],
@@ -214,6 +218,20 @@ function mapControllerState(rawState: VideoPlaybackState): PlaybackStatus {
   }
 }
 
+// 子母畫面只有 native（自訂解碼）後端支援；system（HLS）目前一律 possible=false。
+function refreshPipAvailability(ctrl: VideoPlaybackController): void {
+  let available: boolean = false
+  try {
+    available = ctrl.mediaInfo?.backend === "native" && ctrl.getPictureInPictureState().supported
+  } catch {
+    available = false
+  }
+  if (storeState.pipAvailable !== available) {
+    storeState.pipAvailable = available
+    emitStore()
+  }
+}
+
 export function getPlayerController(): VideoPlaybackController {
   if (controllerInstance) return controllerInstance
   const ctrl: VideoPlaybackController = new VideoPlaybackController()
@@ -227,11 +245,20 @@ export function getPlayerController(): VideoPlaybackController {
     }
   })
 
+  // 播放中退到背景就自動接上子母畫面；暫停、收掉或後端不支援就不搶畫面。
+  AppEvents.scenePhase.addListener((phase: ScenePhase) => {
+    if (phase !== "background") return
+    if (storeState.status !== "playing" || !storeState.currentItem) return
+    if (!storeState.pipAvailable) return
+    void startPiP()
+  })
+
   ctrl.on("ready", (snap: VideoPlaybackSnapshot) => {
     if (typeof snap.duration === "number" && snap.duration > 0) {
       progressState.duration = snap.duration
       emitProgress()
     }
+    refreshPipAvailability(ctrl)
   })
 
   ctrl.on("progress", (snap: VideoPlaybackSnapshot) => {
@@ -308,6 +335,10 @@ export function getPlayerController(): VideoPlaybackController {
       storeState.isPiPActive = active
       emitStore()
     }
+  })
+
+  ctrl.on("pictureInPictureError", (err: { message: string }) => {
+    showSkippedToast(`子母畫面：${err.message}`)
   })
 
   return ctrl
@@ -1017,6 +1048,7 @@ export async function closePlayer(): Promise<void> {
   }
   storeState.presentationMode = "hidden"
   storeState.currentItem = null
+  storeState.pipAvailable = false
   storeState.detail = null
   storeState.manifest = null
   storeState.activeSponsorPrompt = null
@@ -1026,10 +1058,15 @@ export async function closePlayer(): Promise<void> {
 
 export async function startPiP(): Promise<void> {
   const ctrl: VideoPlaybackController = getPlayerController()
+  refreshPipAvailability(ctrl)
+  if (!storeState.pipAvailable) {
+    showSkippedToast("這個片源不支援子母畫面（HLS 播放）")
+    return
+  }
   try {
     await ctrl.startPictureInPicture()
-  } catch {
-    // Ignore when PiP is unavailable
+  } catch (err: unknown) {
+    showSkippedToast(`子母畫面失敗：${err instanceof Error ? err.message : String(err)}`)
   }
 }
 

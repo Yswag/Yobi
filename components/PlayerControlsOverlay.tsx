@@ -5,7 +5,6 @@ import {
   Menu,
   ProgressView,
   Rectangle,
-  Slider,
   Spacer,
   Text,
   VStack,
@@ -26,7 +25,6 @@ import {
   selectSubtitle,
   setPlaybackRate,
   skipActiveSponsorSegment,
-  startPiP,
   toggleDanmaku,
   toggleFullscreen,
   togglePlayPause,
@@ -49,11 +47,17 @@ export interface PlayerControlsOverlayProps {
 }
 
 const AUTO_HIDE_MS: number = 4000
+// 進場慢一點、退場快一點，收起時才不會拖泥帶水。
+const CONTROLS_FADE_IN_SECONDS: number = 0.15
+const CONTROLS_FADE_OUT_SECONDS: number = 0.09
 const DOUBLE_TAP_MS: number = 230
 const TAP_HINT_MS: number = 650
 const PLAYBACK_RATES: number[] = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2]
 const EDGE_SCRIM_HEIGHT: number = 96
 const MINIMIZE_DRAG_DISTANCE: number = 70
+const SCRUBBER_HEIGHT: number = 22
+const SCRUBBER_TRACK: number = 3
+const SCRUBBER_KNOB: number = 11
 // 64pt 以下一律放大到 44pt 的觸控框（HIG 最小值），視覺尺寸不變。
 const MIN_HIT_SIZE: number = 44
 
@@ -114,7 +118,7 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
   const store: PlayerStoreSnapshot = usePlayerStore()
   const progress: PlayerProgressSnapshot = usePlayerProgress()
 
-  const [controlsVisible, setControlsVisible] = useState<boolean>(true)
+  const [controlsVisible, setControlsVisible] = useState<boolean>(false)
   const [scrubPreviewSec, setScrubPreviewSec] = useState<number>(0)
   const [isScrubbing, setIsScrubbing] = useState<boolean>(false)
   const [tapHint, setTapHint] = useState<"left" | "right" | null>(null)
@@ -137,6 +141,9 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
   const sideSafeInset: number = Math.max(Device.safeAreaInsets?.leading ?? 0, Device.safeAreaInsets?.trailing ?? 0)
   const edgeInset: number = store.isFullscreen ? Math.max(24, sideSafeInset) : 12
   const trackWidth: number = Math.max(1, props.width - edgeInset * 2)
+  // 底列是「進度條＋全螢幕」，進度條吃掉剩下的寬。
+  const barWidth: number = Math.max(1, trackWidth - 4 - MIN_HIT_SIZE)
+  const scrubWidthRef = useRef<number>(1)
 
   function clearAutoHide(): void {
     if (hideTimerRef.current !== null) {
@@ -163,11 +170,14 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
     }, TAP_HINT_MS)
   }
 
-  function toggleControls(): void {
-    const next: boolean = !controlsVisible
-    setControlsVisible(next)
-    if (next) armAutoHide()
-    else clearAutoHide()
+  function showControls(): void {
+    setControlsVisible(true)
+    armAutoHide()
+  }
+
+  function hideControls(): void {
+    setControlsVisible(false)
+    clearAutoHide()
   }
 
   function handleTap(loc: Point): void {
@@ -181,17 +191,13 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
       } else if (loc.x > props.width * 0.58) {
         void seekBy(10)
         showTapHint("right")
-      } else {
-        toggleControls()
       }
       return
     }
+    // 不排延遲：隱藏或顯示都當下反應，雙擊只負責跳轉，不會先顯示再收回。
     lastTapAtRef.current = now
-    setTimeout(() => {
-      if (lastTapAtRef.current !== now) return
-      lastTapAtRef.current = null
-      toggleControls()
-    }, DOUBLE_TAP_MS)
+    if (controlsVisible) hideControls()
+    else showControls()
   }
 
   function handleDragEnded(d: DragGestureDetails): void {
@@ -211,18 +217,18 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
     void openVideo(store.currentItem, { cid: store.activeCid, page: store.activePage })
   }
 
-  function handleSliderChanged(value: number): void {
-    // Seeking on every tick floods the local proxy with segment requests; seek once on release.
+  function handleScrubChanged(d: DragGestureDetails): void {
+    if (duration <= 0) return
+    const x: number = Math.max(0, Math.min(scrubWidthRef.current, d.location.x))
+    const value: number = (x / scrubWidthRef.current) * duration
+    // 拖動時只預覽，放開才 seek：逐格 seek 會把本機代理灌滿分段請求。
     scrubTargetRef.current = value
     setScrubPreviewSec(value)
     setIsScrubbing(true)
+    clearAutoHide()
   }
 
-  function handleSliderEditingChanged(editing: boolean): void {
-    if (editing) {
-      clearAutoHide()
-      return
-    }
+  function handleScrubEnded(): void {
     const target: number | null = scrubTargetRef.current
     scrubTargetRef.current = null
     if (target !== null) void seekTo(target)
@@ -269,10 +275,6 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
   function renderControlsLayer(): VirtualNode {
     const title: string = store.currentItem?.title ?? ""
     const provider = store.currentItem?.provider ?? "yt"
-    const sliderMax: number = Math.max(1, progress.duration || 1)
-    const sliderValue: number = isScrubbing
-      ? scrubPreviewSec
-      : Math.min(progress.position, sliderMax)
     const playing: boolean = store.status === "playing"
     const loading: boolean = store.status === "loading" || store.status === "buffering"
     const hasSubtitles: boolean = (store.manifest?.subtitles.length ?? 0) > 0
@@ -288,16 +290,19 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
               iconSize={14}
               onTap={handleBack}
             />
-            <Text
-              font={store.isFullscreen ? type.cardTitle + 1 : type.body}
-              fontWeight="semibold"
-              foregroundStyle={palette.onMedia}
-              lineLimit={1}
-              layoutPriority={1}
-              shadow={{ color: "rgba(0,0,0,0.4)", radius: 4 }}
-            >
-              {title}
-            </Text>
+            {/* 一般模式下方分頁已有完整標題，重複截一行只會擠掉右側按鈕。 */}
+            {store.isFullscreen ? (
+              <Text
+                font={type.cardTitle + 1}
+                fontWeight="semibold"
+                foregroundStyle={palette.onMedia}
+                lineLimit={1}
+                layoutPriority={1}
+                shadow={{ color: "rgba(0,0,0,0.4)", radius: 4 }}
+              >
+                {title}
+              </Text>
+            ) : null}
             <Spacer />
             <HStack spacing={4} fixedSize>
               {provider === "bili" ? (
@@ -310,64 +315,13 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
               {provider === "bili" ? (
                 <IconControl icon="slider.horizontal.3" size={17} onTap={() => props.onOpenDanmakuSheet?.()} />
               ) : null}
-              <Button action={() => props.onOpenQualitySheet?.()} buttonStyle="plain">
-                <VStack frame={{ height: MIN_HIT_SIZE }} contentShape="rect">
-                  <Text
-                    font={type.caption}
-                    fontWeight="bold"
-                    foregroundStyle={palette.onMedia}
-                    lineLimit={1}
-                    fixedSize
-                    padding={{ horizontal: 8, vertical: 4 }}
-                    background={{ style: "rgba(255,255,255,0.18)", shape: "capsule" }}
-                  >
-                    {store.selectedQualityLabel}
-                  </Text>
-                </VStack>
-              </Button>
-              <IconControl icon="pip.enter" size={17} onTap={() => void startPiP()} />
-            </HStack>
-          </HStack>
-
-          <Spacer />
-
-          <HStack spacing={store.isFullscreen ? 56 : 36}>
-            <GlassCircle icon="gobackward.10" size={48} iconSize={20} onTap={() => void seekBy(-10)} />
-            {loading ? (
-              <VStack frame={{ width: 68, height: 68 }}>
-                <ProgressView tint="white" controlSize="large" />
-              </VStack>
-            ) : (
-              <GlassCircle icon={playing ? "pause.fill" : "play.fill"} size={68} iconSize={28} onTap={() => void togglePlayPause()} />
-            )}
-            <GlassCircle icon="goforward.10" size={48} iconSize={20} onTap={() => void seekBy(10)} />
-          </HStack>
-
-          <Spacer />
-
-          <VStack spacing={2} padding={{ horizontal: edgeInset, bottom: store.isFullscreen ? 16 : 6 }}>
-            <HStack spacing={4} frame={{ width: trackWidth }}>
-              <HStack spacing={4}>
-                <Text font={type.caption} fontWeight="semibold" monospacedDigit foregroundStyle={palette.onMedia}>
-                  {formatDuration(isScrubbing ? scrubPreviewSec : progress.position)}
-                </Text>
-                <Text font={type.caption} fontWeight="semibold" monospacedDigit foregroundStyle={palette.onMediaDim}>
-                  {`/ ${formatDuration(progress.duration)}`}
-                </Text>
-                {progress.activeChapter ? (
-                  <Text font={type.caption} foregroundStyle={palette.onMediaDim} lineLimit={1}>
-                    {`· ${progress.activeChapter.title}`}
-                  </Text>
-                ) : null}
-              </HStack>
-              <Spacer />
               {hasSubtitles ? (
                 <Menu
                   label={
                     <HStack spacing={0} frame={{ width: MIN_HIT_SIZE, height: MIN_HIT_SIZE }} contentShape="rect">
                       <Image
                         systemName={store.selectedSubtitleId ? "captions.bubble.fill" : "captions.bubble"}
-                        font={16}
+                        font={17}
                         foregroundStyle={palette.onMedia}
                       />
                     </HStack>
@@ -387,11 +341,16 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
                     />
                   ))}
                 </Menu>
-              ) : null}
+              ) : (
+                // 沒字幕時也留位置，只是淡掉，使用者才知道這部片沒有字幕可選。
+                <VStack frame={{ width: MIN_HIT_SIZE, height: MIN_HIT_SIZE }} contentShape="rect" opacity={0.35}>
+                  <Image systemName="captions.bubble" font={17} foregroundStyle={palette.onMedia} />
+                </VStack>
+              )}
               <Menu
                 label={
                   <HStack spacing={0} frame={{ width: MIN_HIT_SIZE, height: MIN_HIT_SIZE }} contentShape="rect">
-                    <Text font={type.meta + 1} fontWeight="bold" monospacedDigit foregroundStyle={palette.onMedia}>
+                    <Text font={type.meta + 3} fontWeight="semibold" monospacedDigit foregroundStyle={palette.onMedia}>
                       {rateLabel(store.playbackRate)}
                     </Text>
                   </HStack>
@@ -406,31 +365,67 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
                   />
                 ))}
               </Menu>
-              <IconControl
-                icon={store.isFullscreen ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right"}
-                size={16}
-                onTap={() => toggleFullscreen()}
-              />
+              <Button action={() => props.onOpenQualitySheet?.()} buttonStyle="plain">
+                <VStack frame={{ height: MIN_HIT_SIZE }} contentShape="rect">
+                  <Text
+                    font={type.caption}
+                    fontWeight="bold"
+                    foregroundStyle={palette.onMedia}
+                    lineLimit={1}
+                    fixedSize
+                    padding={{ horizontal: 8, vertical: 4 }}
+                    background={{ style: "rgba(255,255,255,0.18)", shape: "capsule" }}
+                  >
+                    {store.selectedQualityLabel}
+                  </Text>
+                </VStack>
+              </Button>
             </HStack>
-            <ZStack alignment="leading" frame={{ width: trackWidth, height: 22, alignment: "leading" }}>
-              <Slider
-                min={0}
-                max={sliderMax}
-                step={0.5}
-                value={sliderValue}
-                tint={palette.brand}
-                onChanged={handleSliderChanged}
-                onEditingChanged={handleSliderEditingChanged}
-              />
-              <ZStack
-                alignment="leading"
-                frame={{ width: trackWidth, height: 3, alignment: "leading" }}
-                offset={{ x: 0, y: 14 }}
-                allowsHitTesting={false}
-              >
-                {renderSponsorBlocks(trackWidth, 3)}
-              </ZStack>
-            </ZStack>
+          </HStack>
+
+          <Spacer />
+
+          <HStack spacing={store.isFullscreen ? 44 : 28}>
+            <GlassCircle icon="gobackward.10" size={44} iconSize={18} onTap={() => void seekBy(-10)} />
+            {loading ? (
+              <VStack frame={{ width: 60, height: 60 }}>
+                <ProgressView tint="white" controlSize="large" />
+              </VStack>
+            ) : (
+              <GlassCircle icon={playing ? "pause.fill" : "play.fill"} size={60} iconSize={26} onTap={() => void togglePlayPause()} />
+            )}
+            <GlassCircle icon="goforward.10" size={44} iconSize={18} onTap={() => void seekBy(10)} />
+          </HStack>
+
+          <Spacer />
+
+          <VStack spacing={2} padding={{ horizontal: edgeInset, bottom: store.isFullscreen ? 10 : 4 }} frame={{ width: trackWidth }}>
+            <HStack spacing={4} frame={{ width: trackWidth }}>
+              <Text font={type.caption} monospacedDigit foregroundStyle={palette.onMedia}>
+                {formatDuration(isScrubbing ? scrubPreviewSec : progress.position)}
+              </Text>
+              <Text font={type.caption} monospacedDigit foregroundStyle={palette.onMediaDim}>
+                {`/ ${formatDuration(progress.duration)}`}
+              </Text>
+              {progress.activeChapter ? (
+                <Text font={type.caption} foregroundStyle={palette.onMediaDim} lineLimit={1}>
+                  {`· ${progress.activeChapter.title}`}
+                </Text>
+              ) : null}
+              <Spacer />
+            </HStack>
+            <HStack spacing={4} frame={{ width: trackWidth }}>
+              {renderScrubber(barWidth)}
+              <Button action={() => toggleFullscreen()} buttonStyle="plain">
+                <VStack frame={{ width: MIN_HIT_SIZE, height: 30 }} contentShape="rect">
+                  <Image
+                    systemName={store.isFullscreen ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right"}
+                    font={16}
+                    foregroundStyle={palette.onMedia}
+                  />
+                </VStack>
+              </Button>
+            </HStack>
           </VStack>
         </VStack>
       </ZStack>
@@ -572,18 +567,45 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
     )
   }
 
-  function renderThinProgressBar(): VirtualNode | null {
-    if (controlsVisible || store.isFullscreen || duration <= 0) return null
-    const ratio: number = Math.max(0, Math.min(1, progress.position / duration))
+  // 細進度條：拖曳直接用位置換算，圓點標出目前播放位置。
+  function renderScrubber(width: number): VirtualNode | null {
+    if (duration <= 0) return null
+    scrubWidthRef.current = width
+    const value: number = isScrubbing ? scrubPreviewSec : Math.min(progress.position, duration)
+    const ratio: number = Math.max(0, Math.min(1, value / duration))
+    const knob: number = isScrubbing ? SCRUBBER_KNOB + 4 : SCRUBBER_KNOB
+    const knobX: number = Math.max(knob / 2, Math.min(width - knob / 2, width * ratio)) - knob / 2
     return (
-      <ZStack frame={{ width: props.width, height: props.height, alignment: "bottom" }} allowsHitTesting={false}>
-        <ZStack
-          alignment="leading"
-          frame={{ width: props.width, height: 2.5, alignment: "leading" }}
-          background="rgba(255,255,255,0.2)"
-        >
-          <Rectangle fill={palette.brand} frame={{ width: props.width * ratio, height: 2.5 }} />
-          {renderSponsorBlocks(props.width, 2.5)}
+      <ZStack
+        alignment="leading"
+        frame={{ width, height: SCRUBBER_HEIGHT, alignment: "leading" }}
+        contentShape="rect"
+        onDragGesture={{
+          minDistance: 0,
+          coordinateSpace: "local",
+          onChanged: handleScrubChanged,
+          onEnded: handleScrubEnded,
+        }}
+      >
+        <ZStack alignment="leading" frame={{ width, height: SCRUBBER_KNOB, alignment: "leading" }} allowsHitTesting={false}>
+          <Rectangle
+            fill="rgba(255,255,255,0.24)"
+            frame={{ width, height: SCRUBBER_TRACK }}
+            clipShape={{ type: "rect", cornerRadius: SCRUBBER_TRACK / 2 }}
+          />
+          <Rectangle
+            fill={palette.brand}
+            frame={{ width: width * ratio, height: SCRUBBER_TRACK }}
+            clipShape={{ type: "rect", cornerRadius: SCRUBBER_TRACK / 2 }}
+          />
+          {renderSponsorBlocks(width, SCRUBBER_TRACK)}
+          <Rectangle
+            fill="white"
+            frame={{ width: knob, height: knob }}
+            clipShape={{ type: "rect", cornerRadius: knob / 2 }}
+            offset={{ x: knobX, y: 0 }}
+            shadow={{ color: "rgba(0,0,0,0.35)", radius: 3, y: 1 }}
+          />
         </ZStack>
       </ZStack>
     )
@@ -601,9 +623,18 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
           onEnded: handleDragEnded,
         }}
       />
-      {controlsVisible ? renderControlsLayer() : null}
+      <ZStack
+        frame={{ width: props.width, height: props.height }}
+        opacity={controlsVisible ? 1 : 0}
+        allowsHitTesting={controlsVisible}
+        animation={{
+          animation: controlsVisible ? Animation.easeOut(CONTROLS_FADE_IN_SECONDS) : Animation.easeIn(CONTROLS_FADE_OUT_SECONDS),
+          value: controlsVisible,
+        }}
+      >
+        {renderControlsLayer()}
+      </ZStack>
       {renderFloatingLayer()}
-      {renderThinProgressBar()}
     </ZStack>
   )
 }

@@ -583,7 +583,8 @@ export async function resolveYoutubeStream(
     rawId: videoId,
     delivery: route.delivery,
     primaryUrl: chosen?.url ?? primaryUrl,
-    backend: "auto",
+    // 交付的是本地 HLS；native 才能進子母畫面，先試能不能直接吃。
+    backend: "native",
     qualities,
     audioTracks: route.audioTracks,
     subtitles: parseSubtitleTracks(route.player),
@@ -598,7 +599,7 @@ export async function resolveYoutubeStream(
       if (quality && prepareQuality && !(await prepareQuality(quality.id))) {
         throw new Error("這個畫質暫時無法播放")
       }
-      return { url: quality?.url ?? primaryUrl, backend: "auto" }
+      return { url: quality?.url ?? primaryUrl, backend: "native" }
     },
   }
 }
