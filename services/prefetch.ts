@@ -26,7 +26,10 @@ export interface PrefetcherOptions {
 
 interface InFlight {
   promise: Promise<Uint8Array | null>
-  controller: AbortController
+  /** 正在等這塊的播放器請求數；有人在等就不取消。 */
+  waiters: number
+  /** 取消後立刻釋放名額並回 null；被 abort 的 fetch 不一定會結束，不能等它。 */
+  cancel: () => void
 }
 
 interface Queued {
@@ -73,7 +76,7 @@ export class Prefetcher {
     this.trimOutside(index)
 
     const cached: Uint8Array | undefined = this.cache.get(index)
-    const result: Promise<Uint8Array | null> = cached ? Promise.resolve(cached) : this.start(index, true)
+    const result: Promise<Uint8Array | null> = cached ? Promise.resolve(cached) : this.wait(index)
     const count: number = Math.min(this.source.count() ?? Number.POSITIVE_INFINITY, this.endIndex)
     for (let ahead = 1; ahead <= this.options.ahead; ahead++) {
       const next: number = index + ahead
@@ -86,7 +89,18 @@ export class Prefetcher {
     const bytes: Uint8Array | null = await result
     if (bytes || index >= this.endIndex) return bytes
     // 第一次失敗通常是暫時性的，直接再抓一次。
-    return this.start(index, true)
+    return this.cache.get(index) ?? this.wait(index)
+  }
+
+  private async wait(index: number): Promise<Uint8Array | null> {
+    const promise: Promise<Uint8Array | null> = this.start(index, true)
+    const flight: InFlight | undefined = this.inFlight.get(index)
+    if (flight) flight.waiters++
+    try {
+      return await promise
+    } finally {
+      if (flight) flight.waiters--
+    }
   }
 
   private start(index: number, urgent: boolean): Promise<Uint8Array | null> {
@@ -95,31 +109,58 @@ export class Prefetcher {
       if (urgent) this.promote(index)
       return existing.promise
     }
+
     const controller: AbortController = new AbortController()
-    const promise: Promise<Uint8Array | null> = this.schedule(index, urgent).then(async (go: boolean) => {
+    let cancelled: boolean = false
+    let holdsSlot: boolean = false
+    let settleCancel: (value: null) => void = () => {}
+    const cancellation: Promise<null> = new Promise((resolve: (value: null) => void) => {
+      settleCancel = resolve
+    })
+    const releaseSlot = (): void => {
+      if (!holdsSlot) return
+      holdsSlot = false
+      this.finishOne()
+    }
+
+    const work: Promise<Uint8Array | null> = this.schedule(index, urgent).then(async (go: boolean) => {
       if (!go) return null
+      holdsSlot = true
+      if (cancelled) {
+        releaseSlot()
+        return null
+      }
       try {
         const bytes: Uint8Array | null = await this.source.fetch(index, controller.signal)
-        if (!bytes && !controller.signal.aborted && this.source.count() === null) {
-          this.endIndex = Math.min(this.endIndex, index)
-        }
+        if (!bytes && !cancelled && this.source.count() === null) this.endIndex = Math.min(this.endIndex, index)
         return bytes
       } catch {
         return null
       } finally {
-        this.finishOne()
+        releaseSlot()
       }
-    }).then((bytes: Uint8Array | null): Uint8Array | null => {
-      if (this.inFlight.get(index)?.controller === controller) this.inFlight.delete(index)
-      if (controller.signal.aborted) return null
-      if (bytes) {
+    })
+
+    const flight: InFlight = {
+      waiters: 0,
+      cancel: (): void => {
+        if (cancelled) return
+        cancelled = true
+        this.dequeue(index)
+        controller.abort()
+        releaseSlot()
+        settleCancel(null)
+      },
+      promise: Promise.race([work, cancellation]).then((bytes: Uint8Array | null): Uint8Array | null => {
+        if (this.inFlight.get(index) === flight) this.inFlight.delete(index)
+        if (cancelled || !bytes) return null
         this.cache.set(index, bytes)
         this.cachedBytes += bytes.byteLength
-      }
-      return bytes
-    })
-    this.inFlight.set(index, { promise, controller })
-    return promise
+        return bytes
+      }),
+    }
+    this.inFlight.set(index, flight)
+    return flight.promise
   }
 
   /** 依同時上限排隊；回傳 true 代表輪到了，false 代表排隊中被取消。 */
@@ -135,18 +176,30 @@ export class Prefetcher {
     })
   }
 
+  private dequeue(index: number): void {
+    this.queue = this.queue.filter((entry: Queued): boolean => {
+      if (entry.index !== index) return true
+      entry.resolve(false)
+      return false
+    })
+  }
+
   private promote(index: number): void {
     const position: number = this.queue.findIndex((entry: Queued): boolean => entry.index === index)
     if (position > 0) this.queue.unshift(...this.queue.splice(position, 1))
   }
 
+  /** 名額交給下一個排隊者；沒人排隊才真的減少。 */
   private finishOne(): void {
     const next: Queued | undefined = this.queue.shift()
     if (next) next.resolve(true)
     else this.running = Math.max(0, this.running - 1)
   }
 
-  /** 保留前一塊（播放器偶爾重抓）與後面的預抓範圍，其餘釋放；拖動進度後舊範圍的下載直接取消。 */
+  /**
+   * 保留前一塊（播放器偶爾重抓）與後面的預抓範圍，其餘釋放。
+   * 拖動後舊範圍的預抓直接取消，但播放器還在等的那塊不動，否則新舊請求會互相取消。
+   */
   private trimOutside(index: number): void {
     const keep = (chunk: number): boolean => chunk >= index - 1 && chunk <= index + this.options.ahead
     for (const [chunk, bytes] of this.cache) {
@@ -154,15 +207,9 @@ export class Prefetcher {
       this.cache.delete(chunk)
       this.cachedBytes -= bytes.byteLength
     }
-    this.queue = this.queue.filter((entry: Queued): boolean => {
-      if (keep(entry.index)) return true
-      entry.resolve(false)
-      return false
-    })
     for (const [chunk, flight] of this.inFlight) {
-      if (keep(chunk)) continue
-      flight.controller.abort()
-      this.inFlight.delete(chunk)
+      if (keep(chunk) || flight.waiters > 0) continue
+      flight.cancel()
     }
   }
 
@@ -171,10 +218,10 @@ export class Prefetcher {
   }
 
   release(): void {
+    for (const flight of [...this.inFlight.values()]) flight.cancel()
+    this.inFlight.clear()
     for (const entry of this.queue) entry.resolve(false)
     this.queue = []
-    for (const flight of this.inFlight.values()) flight.controller.abort()
-    this.inFlight.clear()
     this.cache.clear()
     this.cachedBytes = 0
   }

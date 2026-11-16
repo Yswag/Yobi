@@ -69,7 +69,8 @@ const hlsRelays: Map<string, HlsRelayHandler> = new Map()
 
 /**
  * bilibili 的 m4s 需要 Referer，只能由本機代理代抓。
- * 整個檔按固定 4 MB 切格子，播放器要的範圍落在哪格就從那格切給它，後面幾格先抓。
+ * 整個檔按固定 4 MB 切格子預抓；回應仍是「從起點最多 4 MB、不超過要求的結尾」，跨格就拼兩格。
+ * DASH 的子片段是明確範圍，只回到格子邊界會截斷樣本，播放器回 Invalid data。
  */
 interface BiliFileSource {
   url: string
@@ -161,7 +162,7 @@ function registerRoutes(target: HttpServer): void {
     return textResponse(manifest.content, manifest.contentType)
   })
 
-  // 播放器抓 MPD 片段時不會帶 Referer（來源是本機檔），由這裡補上；一次最多回一格。
+  // 播放器抓 MPD 片段時不會帶 Referer（來源是本機檔），由這裡補上；一次最多回 4 MB。
   target.registerAsyncHandler(
     "/bili-file/:id/file.m4s",
     async (req: HttpRequest): Promise<HttpResponse> => {
@@ -180,10 +181,10 @@ function registerRoutes(target: HttpServer): void {
 
       const requested = parseByteRange(req.headers["range"] ?? req.headers["Range"])
       const start: number = requested.start
-      const chunkIndex: number = Math.floor(start / BILI_WINDOW_BYTES)
-      const chunk: Uint8Array | null = await source.prefetcher.get(chunkIndex)
-      const offset: number = start - chunkIndex * BILI_WINDOW_BYTES
-      if (!chunk || offset >= chunk.byteLength) {
+      const first: number = Math.floor(start / BILI_WINDOW_BYTES)
+      const head: Uint8Array | null = await source.prefetcher.get(first)
+      const offset: number = start - first * BILI_WINDOW_BYTES
+      if (!head || offset >= head.byteLength) {
         if (source.total !== null && start >= source.total) {
           return HttpResponse.raw(416, "Range Not Satisfiable", {
             headers: { ...BASE_HEADERS, "Content-Range": `bytes */${source.total}` },
@@ -192,10 +193,20 @@ function registerRoutes(target: HttpServer): void {
         return badGateway("upstream failed")
       }
 
-      const sliceEnd: number = requested.end !== null
-        ? Math.min(chunk.byteLength, requested.end - chunkIndex * BILI_WINDOW_BYTES + 1)
-        : chunk.byteLength
-      const bytes: Uint8Array = offset === 0 && sliceEnd === chunk.byteLength ? chunk : chunk.slice(offset, sliceEnd)
+      let end: number = Math.min(requested.end ?? Number.POSITIVE_INFINITY, start + BILI_WINDOW_BYTES - 1)
+      if (source.total !== null) end = Math.min(end, source.total - 1)
+      const headEnd: number = first * BILI_WINDOW_BYTES + head.byteLength - 1
+      let bytes: Uint8Array
+      if (end <= headEnd) {
+        bytes = offset === 0 && end === headEnd ? head : head.slice(offset, end - first * BILI_WINDOW_BYTES + 1)
+      } else {
+        // 跨格：接上下一格（已在預抓範圍內）。
+        const tail: Uint8Array | null = await source.prefetcher.get(first + 1)
+        const tailLength: number = tail ? Math.min(tail.byteLength, end - headEnd) : 0
+        bytes = new Uint8Array(head.byteLength - offset + tailLength)
+        bytes.set(head.subarray(offset), 0)
+        if (tail && tailLength > 0) bytes.set(tail.subarray(0, tailLength), head.byteLength - offset)
+      }
       return HttpResponse.raw(206, "Partial Content", {
         headers: {
           ...BASE_HEADERS,
