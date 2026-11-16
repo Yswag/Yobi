@@ -22,7 +22,6 @@ export const DEFAULT_SETTINGS: PlayerSettings = {
   youtubeStreamMode: "auto",
   preferredQualityHeight: 1080,
   defaultPlaybackRate: 1,
-  backgroundAudioEnabled: true,
   sponsorBlockEnabled: true,
   sponsorBlockAutoSkip: true,
   sponsorBlockCategories: [

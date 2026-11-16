@@ -211,7 +211,6 @@ export interface PlayerSettings {
   youtubeStreamMode: YoutubeStreamPreference
   preferredQualityHeight: number // e.g. 1080, 720, 2160
   defaultPlaybackRate: number
-  backgroundAudioEnabled: boolean
   sponsorBlockEnabled: boolean
   sponsorBlockAutoSkip: boolean
   sponsorBlockCategories: SponsorCategory[]

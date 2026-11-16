@@ -246,11 +246,12 @@ export function getPlayerController(): VideoPlaybackController {
   })
 
   // 播放中退到背景就自動接上子母畫面；暫停、收掉或後端不支援就不搶畫面。
+  // 鎖屏時系統不給開 PiP，失敗就靜默。
   AppEvents.scenePhase.addListener((phase: ScenePhase) => {
     if (phase !== "background") return
     if (storeState.status !== "playing" || !storeState.currentItem) return
     if (!storeState.pipAvailable) return
-    void startPiP()
+    void ctrl.startPictureInPicture().catch(() => {})
   })
 
   ctrl.on("ready", (snap: VideoPlaybackSnapshot) => {
@@ -630,7 +631,6 @@ export async function openVideo(item: UnifiedVideoItem, options: OpenVideoOption
       return
     }
 
-    ctrl.backgroundAudioEnabled = settings.backgroundAudioEnabled
     ctrl.playbackRate = settings.defaultPlaybackRate || 1
     ctrl.danmakuEnabled = settings.danmakuEnabled && item.provider === "bili" && storeState.presentationMode !== "mini"
     ctrl.danmakuOpacity = settings.danmakuOpacity

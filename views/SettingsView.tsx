@@ -423,11 +423,6 @@ export function SettingsView(props: SettingsViewProps): VirtualNode {
           value={settings.defaultPlaybackRate}
           onChange={(value: number) => patchSettings({ defaultPlaybackRate: value })}
         />
-        <Toggle
-          title="背景與鎖定畫面播放"
-          value={settings.backgroundAudioEnabled}
-          onChanged={(value: boolean) => patchSettings({ backgroundAudioEnabled: value })}
-        />
       </Section>
 
       <Section
