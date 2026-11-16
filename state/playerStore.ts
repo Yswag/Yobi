@@ -31,6 +31,7 @@ import {
   updateSettings,
 } from "../services"
 import { SPONSOR_CATEGORY_LABELS } from "../utils/format"
+import { toCleanVtt } from "../utils/subtitles"
 
 export type PlayerPresentationMode = "hidden" | "expanded" | "mini"
 
@@ -845,13 +846,18 @@ export async function selectSubtitle(subtitleId: string | null): Promise<void> {
 
   try {
     const response = await fetch(sub.url, { timeout: 20, debugLabel: "Yobi Subtitle" })
-    if (!response.ok) return
+    if (!response.ok) throw new Error(`HTTP ${response.status}`)
     const text: string = await response.text()
-    const format: "vtt" | "srt" = sub.format === "srt" ? "srt" : "vtt"
-    await ctrl.loadSubtitles(text, format)
+    const vtt: string = toCleanVtt(text)
+    if (!vtt) throw new Error("empty subtitles")
+    if (storeState.selectedSubtitleId !== subtitleId) return
+    await ctrl.loadSubtitles(vtt, "vtt")
     ctrl.subtitlesEnabled = true
   } catch {
-    // Ignore subtitle fetch error
+    if (storeState.selectedSubtitleId !== subtitleId) return
+    storeState.selectedSubtitleId = null
+    emitStore()
+    showSkippedToast("字幕載入失敗")
   }
 }
 
