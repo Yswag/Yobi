@@ -430,6 +430,41 @@ export function decodeMediaHeader(bytes: Uint8Array): SabrMediaHeader {
   return header
 }
 
+/**
+ * UMP part 42 (`FormatInitializationMetadata`): which encode of the itag the server is actually
+ * sending (`lastModified`) and where its init and index boxes sit. The same itag can exist in two
+ * encodes, so this, not the player response, describes the file the segments come from.
+ */
+export interface SabrFormatInitMetadata {
+  itag: number
+  lastModified: string
+  endSegmentNumber?: number
+  indexRange?: SabrByteRange
+}
+
+function decodeRange(bytes: Uint8Array | undefined): SabrByteRange | undefined {
+  if (!bytes) return undefined
+  const fields: Map<number, ProtoField[]> = decodeProto(bytes)
+  const start: number | undefined = protoNumber(fields, 1)
+  const end: number | undefined = protoNumber(fields, 2)
+  return start !== undefined && end !== undefined ? { start, end } : undefined
+}
+
+export function decodeFormatInitMetadata(bytes: Uint8Array): SabrFormatInitMetadata | null {
+  const fields: Map<number, ProtoField[]> = decodeProto(bytes)
+  const formatId: Uint8Array | undefined = protoBytes(fields, 2)
+  if (!formatId) return null
+  const idFields: Map<number, ProtoField[]> = decodeProto(formatId)
+  const itag: number | undefined = protoNumber(idFields, 1)
+  if (itag === undefined) return null
+  const metadata: SabrFormatInitMetadata = { itag, lastModified: String(protoNumber(idFields, 2) ?? 0) }
+  const endSegmentNumber: number | undefined = protoNumber(fields, 4)
+  if (endSegmentNumber !== undefined) metadata.endSegmentNumber = endSegmentNumber
+  const indexRange: SabrByteRange | undefined = decodeRange(protoBytes(fields, 7))
+  if (indexRange) metadata.indexRange = indexRange
+  return metadata
+}
+
 export interface SabrNextRequestPolicy {
   playbackCookie?: Uint8Array
   targetVideoReadaheadMs?: number
@@ -601,6 +636,7 @@ export class SabrSession {
   private segmentCache: Map<string, Uint8Array> = new Map()
   private timings: Map<string, { startMs: number; durationMs: number }> = new Map()
   private sidxCache: Map<number, SidxIndex | null> = new Map()
+  private initMetadata: Map<number, SabrFormatInitMetadata> = new Map()
   private indexedCounts: Map<number, number> = new Map()
   private sabrContexts: Map<number, Uint8Array> = new Map()
   private activeContextTypes: Set<number> = new Set()
@@ -656,17 +692,12 @@ export class SabrSession {
    * Load the segment index before a playlist is built so its count and durations match the media
    * (same as upstream ingesting initialization data). Without it the 5 s grid points seeks at the wrong segments.
    */
-  async prepareTimeline(itag: number): Promise<void> {
-    if (this.indexedCounts.has(itag)) return
+  async prepareTimeline(itag: number): Promise<boolean> {
+    if (this.indexedCounts.has(itag)) return true
     const format: SabrFormat | undefined = this.formatsByItag.get(itag)
-    if (!format) return
-    let index: SidxIndex | null = null
-    try {
-      index = await this.sidxFor(format)
-    } catch {
-      index = null
-    }
-    if (!index || index.entries.length === 0) return
+    if (!format) return false
+    const index: SidxIndex | null = await this.timelineIndex(format)
+    if (!index || index.entries.length === 0) return false
     let startMs: number = 0
     index.entries.forEach((entry: SidxEntry, i: number) => {
       const durationMs: number = entry.durationUs / 1000
@@ -674,6 +705,22 @@ export class SabrSession {
       startMs += durationMs
     })
     this.indexedCounts.set(itag, index.entries.length)
+    return true
+  }
+
+  /**
+   * The segment index of the file the server actually sends. Like the official player, take it from
+   * the server's own init response (`ftyp`/`moov`/`sidx`); a direct URL from another client only
+   * counts when part 42 says it is the same encode.
+   */
+  private async timelineIndex(format: SabrFormat): Promise<SidxIndex | null> {
+    if (!this.config.serverAbrStreamingUrl) return this.sidxFor(format)
+    const init: Uint8Array | null = await this.fetchInitialization(format.itag).catch(() => null)
+    const fromInit: SidxIndex | null = init ? parseSidx(init, 0) : null
+    if (fromInit && fromInit.entries.length > 0) return fromInit
+    const served: SabrFormatInitMetadata | undefined = this.initMetadata.get(format.itag)
+    if (served && served.lastModified === format.lastModified) return this.sidxFor(format)
+    return null
   }
 
   private recordTiming(itag: number, header: SabrMediaHeader): void {
@@ -885,6 +932,9 @@ export class SabrSession {
           this.segmentCache.set(`${itag}:${header.segmentNum}`, media)
           segments.set(`${itag}:${header.segmentNum}`, media)
         }
+      } else if (part.type === UMP_PART.FORMAT_INITIALIZATION_METADATA) {
+        const metadata: SabrFormatInitMetadata | null = decodeFormatInitMetadata(part.data)
+        if (metadata) this.initMetadata.set(metadata.itag, metadata)
       } else if (part.type === UMP_PART.NEXT_REQUEST_POLICY) {
         const policy: SabrNextRequestPolicy = decodeNextRequestPolicy(part.data)
         if (policy.playbackCookie && policy.playbackCookie.length > 0) this.playbackCookie = policy.playbackCookie
@@ -959,21 +1009,20 @@ export class SabrSession {
     const format: SabrFormat | undefined = this.formatsByItag.get(itag)
     if (!format) return null
     const indexUrl: string | undefined = this.indexUrlFor(format)
-    if (indexUrl && format.initRange) {
+    // With SABR the init must come from the server too: a direct URL may point at the other encode.
+    if (!this.config.serverAbrStreamingUrl) {
+      if (!indexUrl || !format.initRange) return null
       const direct: Uint8Array | null = await fetchRange(indexUrl, format.initRange.start, format.initRange.end, this.headers())
-      if (direct) {
-        this.initCache.set(itag, direct)
-        return direct
-      }
+      if (direct) this.initCache.set(itag, direct)
+      return direct
     }
-    if (!this.config.serverAbrStreamingUrl) return null
 
     try {
       const segments: Map<string, Uint8Array> = await this.requestWithContext(format, "init", `${itag}:init`)
       const media: Uint8Array | undefined = segments.get(`${itag}:init`) ?? this.initCache.get(itag)
       return media ?? null
     } catch (error) {
-      if (indexUrl && format.initRange) {
+      if (indexUrl && format.initRange && this.initMetadata.get(itag)?.lastModified === format.lastModified) {
         const direct: Uint8Array | null = await fetchRange(
           indexUrl,
           format.initRange.start,
@@ -1011,25 +1060,15 @@ export class SabrSession {
     return this.config.indexUrls?.[format.itag] ?? format.url
   }
 
+  // 只快取成功的結果，失敗的下次還能再讀。
   private async sidxFor(format: SabrFormat): Promise<SidxIndex | null> {
-    if (this.sidxCache.has(format.itag)) return this.sidxCache.get(format.itag) ?? null
+    const cached: SidxIndex | undefined = this.sidxCache.get(format.itag) ?? undefined
+    if (cached) return cached
     const indexUrl: string | undefined = this.indexUrlFor(format)
-    if (!indexUrl || !format.indexRange) {
-      this.sidxCache.set(format.itag, null)
-      return null
-    }
-    const bytes: Uint8Array | null = await fetchRange(
-      indexUrl,
-      format.indexRange.start,
-      format.indexRange.end,
-      this.headers(),
-    )
-    if (!bytes) {
-      this.sidxCache.set(format.itag, null)
-      return null
-    }
-    const index: SidxIndex | null = parseSidx(bytes, format.indexRange.start)
-    this.sidxCache.set(format.itag, index)
+    if (!indexUrl || !format.indexRange) return null
+    const bytes: Uint8Array | null = await fetchRange(indexUrl, format.indexRange.start, format.indexRange.end, this.headers()).catch(() => null)
+    const index: SidxIndex | null = bytes ? parseSidx(bytes, format.indexRange.start) : null
+    if (index && index.entries.length > 0) this.sidxCache.set(format.itag, index)
     return index
   }
 
@@ -1205,6 +1244,8 @@ export interface SabrQualitySession {
   video: SabrFormat
   audio: SabrFormat
   quality: VideoQualityTrack
+  /** 影片與音訊都讀到真正的分段時間軸時為 true；false 時不該拿來播。 */
+  prepare: () => Promise<boolean>
 }
 
 export function qualityLabelOf(format: SabrFormat): string {
@@ -1281,5 +1322,13 @@ export function createSabrQualitySession(
   if (video.bitrate) quality.bitrate = video.bitrate
   if (codecOf(video.mimeType)) quality.codec = codecOf(video.mimeType)
 
-  return { session, urls, video, audio, quality }
+  const prepare = async (): Promise<boolean> => {
+    const [videoReady, audioReady] = await Promise.all([
+      session.prepareTimeline(video.itag),
+      session.prepareTimeline(audio.itag),
+    ])
+    return videoReady && audioReady
+  }
+
+  return { session, urls, video, audio, quality, prepare }
 }

@@ -49,6 +49,7 @@ import {
   pickBestAudioFormat,
   pickVideoFormats,
   type SabrFormat,
+  type SabrQualitySession,
   type SabrSessionConfig,
 } from "./sabr"
 
@@ -486,6 +487,8 @@ interface ResolvedRoute {
   qualities: VideoQualityTrack[]
   audioTracks: AudioStreamTrack[]
   player: JsonObject
+  /** SABR：該畫質的影片與音訊時間軸都讀到索引才回 true。 */
+  prepareQuality?: (qualityId: string) => Promise<boolean>
 }
 
 /** VISIONOS HLS: no PO token and seekable; without visitorData some videos come back LOGIN_REQUIRED. */
@@ -527,14 +530,19 @@ async function resolveSabrRoute(videoId: string): Promise<ResolvedRoute> {
       ? (staleToken: string): Promise<string> => refreshYoutubePageToken(videoId, staleToken)
       : undefined,
   }
-  const qualities: VideoQualityTrack[] = pickVideoFormats(info.formats, true).map(
-    (video: SabrFormat): VideoQualityTrack => createSabrQualitySession(config, video, audio).quality,
+  const sessions: SabrQualitySession[] = pickVideoFormats(info.formats, true).map(
+    (video: SabrFormat): SabrQualitySession => createSabrQualitySession(config, video, audio),
   )
+  const qualities: VideoQualityTrack[] = sessions.map((entry: SabrQualitySession): VideoQualityTrack => entry.quality)
   if (qualities.length === 0) throw new Error("YouTube SABR 沒有影片軌")
+  const prepareQuality = async (qualityId: string): Promise<boolean> => {
+    const entry: SabrQualitySession | undefined = sessions.find((item: SabrQualitySession): boolean => item.quality.id === qualityId)
+    return entry ? entry.prepare() : false
+  }
   const audioTracks: AudioStreamTrack[] = info.formats
     .filter((format: SabrFormat): boolean => format.isAudio && format.mimeType.startsWith("audio/mp4"))
     .map((format: SabrFormat): AudioStreamTrack => audioTrackOf(format))
-  return { delivery: "sabr", primaryUrl: qualities[0].url, qualities, audioTracks, player: info.player }
+  return { delivery: "sabr", primaryUrl: qualities[0].url, qualities, audioTracks, player: info.player, prepareQuality }
 }
 
 /** 解析可播放串流：只跑選定的路線，失敗才換另一條。auto 與 hls 先走 HLS，sabr 先走 SABR。 */
@@ -546,10 +554,18 @@ export async function resolveYoutubeStream(
   const routes: Array<(id: string) => Promise<ResolvedRoute>> =
     mode === "sabr" ? [resolveSabrRoute, resolveHlsRoute] : [resolveHlsRoute, resolveSabrRoute]
   let route: ResolvedRoute | null = null
+  let chosen: VideoQualityTrack | undefined
   let firstError: unknown = null
   for (const resolve of routes) {
     try {
-      route = await resolve(videoId)
+      const candidate: ResolvedRoute = await resolve(videoId)
+      const pick: VideoQualityTrack | undefined = preferredHeight > 0 ? closestQuality(candidate.qualities, preferredHeight) : undefined
+      // SABR 沒有真正的分段時間軸就不播：估算的時間軸會讓字幕與拖動都對不上。
+      if (candidate.prepareQuality && !(await candidate.prepareQuality(pick?.id ?? candidate.qualities[0].id))) {
+        throw new Error("YouTube SABR 讀不到分段索引")
+      }
+      route = candidate
+      chosen = pick
       break
     } catch (error) {
       if (firstError === null) firstError = error
@@ -559,9 +575,8 @@ export async function resolveYoutubeStream(
     throw firstError instanceof Error ? firstError : new Error("找不到可播放的 YouTube 串流")
   }
 
-  const { primaryUrl, qualities } = route
+  const { primaryUrl, qualities, prepareQuality } = route
   const details: JsonObject = asObject(route.player["videoDetails"]) ?? {}
-  const chosen: VideoQualityTrack | undefined = preferredHeight > 0 ? closestQuality(qualities, preferredHeight) : undefined
 
   return {
     provider: "yt",
@@ -580,6 +595,9 @@ export async function resolveYoutubeStream(
       const quality: VideoQualityTrack | undefined = qualities.find(
         (entry: VideoQualityTrack): boolean => entry.id === qualityId,
       )
+      if (quality && prepareQuality && !(await prepareQuality(quality.id))) {
+        throw new Error("這個畫質暫時無法播放")
+      }
       return { url: quality?.url ?? primaryUrl, backend: "auto" }
     },
   }
