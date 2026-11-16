@@ -1,3 +1,4 @@
+import { warmThrottlingDecoder } from "./nsig"
 import type { YoutubePoTokens, YoutubeWebConfig } from "./potoken"
 
 /**
@@ -14,6 +15,7 @@ const PAGE_ORIGIN: string = "https://m.youtube.com"
 const USER_AGENT: string =
   "Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Mobile/15E148 Safari/604.1"
 const MINT_TIMEOUT_MS: number = 15000
+const LOAD_TIMEOUT_MS: number = 15000
 const POLL_MS: number = 250
 const MAX_VIDEO_TOKENS: number = 64
 
@@ -74,12 +76,31 @@ function sleep(ms: number): Promise<void> {
   return new Promise<void>((resolve) => setTimeout(resolve, ms))
 }
 
+/** WebKit kills the app when a WebView is driven off the main thread; the SABR proxy calls in from a background one. */
+function onMain<T>(run: () => Promise<T>): Promise<T> {
+  if (Thread.isMainThread) return run()
+  return new Promise<T>((resolve, reject) => {
+    Thread.runInMain(() => {
+      run().then(resolve, reject)
+    })
+  })
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_resolve, reject) => setTimeout(() => reject(new Error(message)), ms)),
+  ])
+}
+
 function mintIn(web: WebViewController, videoId: string): Promise<string> {
-  return web.evaluateJavaScript<string>(`return window.__yobiMint ? window.__yobiMint(${JSON.stringify(videoId)}) : ""`)
+  return onMain(() =>
+    web.evaluateJavaScript<string>(`return window.__yobiMint ? window.__yobiMint(${JSON.stringify(videoId)}) : ""`),
+  )
 }
 
 async function readConfig(web: WebViewController): Promise<YoutubeWebConfig> {
-  const raw: string = await web.evaluateJavaScript<string>(`
+  const raw: string = await onMain(() => web.evaluateJavaScript<string>(`
     var get = function (key) { return window.ytcfg && ytcfg.get ? ytcfg.get(key) : undefined; };
     return JSON.stringify({
       visitorData: get("VISITOR_DATA") || "",
@@ -87,34 +108,53 @@ async function readConfig(web: WebViewController): Promise<YoutubeWebConfig> {
       clientVersion: get("INNERTUBE_CLIENT_VERSION") || "",
       jsUrl: get("PLAYER_JS_URL") || "",
     });
-  `)
+  `))
   const config: YoutubeWebConfig = JSON.parse(raw)
   if (!config.visitorData || !config.clientVersion || !config.jsUrl) throw new Error("YouTube 頁面缺少 ytcfg")
   return config
 }
 
+function disposeWeb(web: WebViewController): void {
+  if (Thread.isMainThread) web.dispose()
+  else Thread.runInMain(() => web.dispose())
+}
+
 async function openPage(seedVideoId: string): Promise<MintPage> {
-  const web: WebViewController = new WebViewController({ ephemeral: true })
+  const web: WebViewController = await onMain(async () => new WebViewController({ ephemeral: true }))
   try {
-    await web.setSettings({ customUserAgent: USER_AGENT })
-    await web.addContentRuleList({ id: "yobi-block-media", rules: BLOCK_MEDIA })
-    await web.addUserScript({ source: HOOK, injectionTime: "documentStart", forMainFrameOnly: true })
-    await web.loadURL(`${PAGE_ORIGIN}/watch?v=${encodeURIComponent(seedVideoId)}`)
+    await onMain(async () => {
+      await web.setSettings({ customUserAgent: USER_AGENT })
+      await web.addContentRuleList({ id: "yobi-block-media", rules: BLOCK_MEDIA })
+      await web.addUserScript({ source: HOOK, injectionTime: "documentStart", forMainFrameOnly: true })
+    })
+    await withTimeout(
+      onMain(() => web.loadURL(`${PAGE_ORIGIN}/watch?v=${encodeURIComponent(seedVideoId)}`)),
+      LOAD_TIMEOUT_MS,
+      "YouTube 頁面載入逾時",
+    )
     const tokens: Map<string, string> = new Map()
     const deadline: number = Date.now() + MINT_TIMEOUT_MS
     while (Date.now() < deadline) {
       const token: string = await mintIn(web, seedVideoId)
       if (token) {
         tokens.set(seedVideoId, token)
-        return { web, config: await readConfig(web), tokens }
+        const config: YoutubeWebConfig = await readConfig(web)
+        warmThrottlingDecoder(config.jsUrl)
+        return { web, config, tokens }
       }
       await sleep(POLL_MS)
     }
     throw new Error("YouTube 頁面的 PO token 產生器沒有就緒")
   } catch (error) {
-    web.dispose()
+    disposeWeb(web)
     throw error
   }
+}
+
+/** Drops a page that stopped minting, e.g. after its web content process was reclaimed. */
+function retire(page: MintPage): void {
+  if (current === page) current = null
+  disposeWeb(page.web)
 }
 
 function pageFor(seedVideoId: string): Promise<MintPage> {
@@ -140,6 +180,15 @@ export function warmYoutubePageMinter(seedVideoId: string = "jNQXAC9IVRw"): void
 /** Video-bound token from the page player, with the page's web config (visitor, STS, client version). */
 export async function getYoutubePageTokens(videoId: string): Promise<YoutubePoTokens> {
   const page: MintPage = await pageFor(videoId)
+  try {
+    return await tokensFrom(page, videoId)
+  } catch (_error) {
+    retire(page)
+    return tokensFrom(await pageFor(videoId), videoId)
+  }
+}
+
+async function tokensFrom(page: MintPage, videoId: string): Promise<YoutubePoTokens> {
   let token: string | undefined = page.tokens.get(videoId)
   if (!token) {
     token = await mintIn(page.web, videoId)
@@ -159,8 +208,7 @@ export async function getYoutubePageTokens(videoId: string): Promise<YoutubePoTo
 }
 
 export function disposeYoutubePageMinter(): void {
-  current?.web.dispose()
-  current = null
+  if (current) retire(current)
 }
 
 /**
@@ -168,10 +216,6 @@ export function disposeYoutubePageMinter(): void {
  * already did, then mints again.
  */
 export async function refreshYoutubePageToken(videoId: string, staleToken: string): Promise<string> {
-  if (current && current.tokens.get(videoId) === staleToken) {
-    const old: MintPage = current
-    current = null
-    old.web.dispose()
-  }
+  if (current && current.tokens.get(videoId) === staleToken) retire(current)
   return (await getYoutubePageTokens(videoId)).visitorBoundPoToken
 }

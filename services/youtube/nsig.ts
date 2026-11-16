@@ -24,10 +24,9 @@ interface SolverResult {
 type Solver = (request: Record<string, unknown>) => SolverResult
 
 let solver: Solver | null = null
-// One player build at a time; the preprocessed form makes later calls cheap.
-let cachedJsUrl: string | null = null
-let cachedPreprocessed: string | null = null
-let pending: Promise<string> | null = null
+// Preprocessed players by URL; the page alternates between a few player builds.
+const MAX_PLAYERS: number = 4
+const preprocessed: Map<string, Promise<string>> = new Map()
 
 function loadUmd(source: string): unknown {
   const module: { exports: Record<string, unknown> } = { exports: {} }
@@ -43,37 +42,42 @@ function getSolver(): Solver {
   return solver
 }
 
-async function preprocessedPlayer(jsUrl: string): Promise<string> {
-  if (cachedJsUrl === jsUrl && cachedPreprocessed) return cachedPreprocessed
-  if (pending && cachedJsUrl === jsUrl) return pending
-  cachedJsUrl = jsUrl
-  cachedPreprocessed = null
-  pending = (async (): Promise<string> => {
-    const url: string = jsUrl.startsWith("http") ? jsUrl : `https://www.youtube.com${jsUrl}`
-    const response = await fetch(url, { timeout: 25, debugLabel: "Yobi player js" })
-    if (!response.ok) throw new Error(`播放器腳本下載失敗：HTTP ${response.status}`)
-    const player: string = await response.text()
-    const result: SolverResult = getSolver()({
-      type: "player",
-      player,
-      requests: [],
-      output_preprocessed: true,
-    })
-    if (!result.preprocessed_player) throw new Error(result.error ?? "播放器腳本解析失敗")
-    return result.preprocessed_player
-  })()
-  try {
-    const preprocessed: string = await pending
-    if (cachedJsUrl === jsUrl) cachedPreprocessed = preprocessed
-    return preprocessed
-  } finally {
-    pending = null
-  }
+async function loadPlayer(jsUrl: string): Promise<string> {
+  const url: string = jsUrl.startsWith("http") ? jsUrl : `https://www.youtube.com${jsUrl}`
+  const response = await fetch(url, { timeout: 25, debugLabel: "Yobi player js" })
+  if (!response.ok) throw new Error(`播放器腳本下載失敗：HTTP ${response.status}`)
+  const player: string = await response.text()
+  const result: SolverResult = getSolver()({
+    type: "player",
+    player,
+    requests: [],
+    output_preprocessed: true,
+  })
+  if (!result.preprocessed_player) throw new Error(result.error ?? "播放器腳本解析失敗")
+  return result.preprocessed_player
 }
 
-/** Returns decoded values keyed by the original `n`. */
-export async function decodeThrottlingParameters(jsUrl: string, values: string[]): Promise<Record<string, string>> {
-  if (values.length === 0) return {}
+function preprocessedPlayer(jsUrl: string): Promise<string> {
+  const cached: Promise<string> | undefined = preprocessed.get(jsUrl)
+  if (cached) return cached
+  if (preprocessed.size >= MAX_PLAYERS) {
+    const oldest: string | undefined = preprocessed.keys().next().value
+    if (oldest !== undefined) preprocessed.delete(oldest)
+  }
+  const loading: Promise<string> = loadPlayer(jsUrl)
+  preprocessed.set(jsUrl, loading)
+  loading.catch(() => {
+    if (preprocessed.get(jsUrl) === loading) preprocessed.delete(jsUrl)
+  })
+  return loading
+}
+
+/** Downloads and preprocesses a player ahead of its first `n` challenge. */
+export function warmThrottlingDecoder(jsUrl: string): void {
+  void preprocessedPlayer(jsUrl).catch(() => undefined)
+}
+
+async function solve(jsUrl: string, values: string[]): Promise<Record<string, string>> {
   const result: SolverResult = getSolver()({
     type: "preprocessed",
     preprocessed_player: await preprocessedPlayer(jsUrl),
@@ -84,6 +88,17 @@ export async function decodeThrottlingParameters(jsUrl: string, values: string[]
     throw new Error(response?.error ?? "n 參數解碼失敗")
   }
   return response.data
+}
+
+/** Returns decoded values keyed by the original `n`. The solver occasionally answers `no solutions`; one retry from a fresh player clears it. */
+export async function decodeThrottlingParameters(jsUrl: string, values: string[]): Promise<Record<string, string>> {
+  if (values.length === 0) return {}
+  try {
+    return await solve(jsUrl, values)
+  } catch (_error) {
+    preprocessed.delete(jsUrl)
+    return solve(jsUrl, values)
+  }
 }
 
 /** Rewrites the `n` query parameter of a googlevideo URL. */
