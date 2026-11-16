@@ -143,25 +143,30 @@ export function parseViewCountText(text: string): number | undefined {
 function parsePublishedAt(text: string): number | undefined {
   if (!text) return undefined
   const now: number = Date.now()
+  const unitMs: Record<string, number> = {
+    second: 1000,
+    minute: 60_000,
+    hour: 3_600_000,
+    day: 86_400_000,
+    week: 604_800_000,
+    month: 2_592_000_000,
+    year: 31_536_000_000,
+  }
   const lower: string = text.toLowerCase()
   const numberMatch: RegExpMatchArray | null = lower.match(/(\d+)\s*(second|minute|hour|day|week|month|year)s?\s+ago/)
   if (numberMatch) {
-    const amount: number = Number(numberMatch[1])
-    const unitMs: Record<string, number> = {
-      second: 1000,
-      minute: 60_000,
-      hour: 3_600_000,
-      day: 86_400_000,
-      week: 604_800_000,
-      month: 2_592_000_000,
-      year: 31_536_000_000,
-    }
-    return now - amount * (unitMs[numberMatch[2]] ?? 0)
+    return now - Number(numberMatch[1]) * (unitMs[numberMatch[2]] ?? 0)
+  }
+  // lockup 的縮寫寫法：1y ago / 4w ago / 3d ago
+  const shortMatch: RegExpMatchArray | null = lower.match(/(\d+)\s*(s|m|h|d|w|y)\s+ago/)
+  if (shortMatch) {
+    const shorts: Record<string, string> = { s: "second", m: "minute", h: "hour", d: "day", w: "week", y: "year" }
+    return now - Number(shortMatch[1]) * (unitMs[shorts[shortMatch[2]]] ?? 0)
   }
   const zhMatch: RegExpMatchArray | null = text.match(/(\d+)\s*(秒|分鐘|小時|天|週|個月|年)前/)
   if (zhMatch) {
     const amount: number = Number(zhMatch[1])
-    const unitMs: Record<string, number> = {
+    const zhUnits: Record<string, number> = {
       "秒": 1000,
       "分鐘": 60_000,
       "小時": 3_600_000,
@@ -170,7 +175,7 @@ function parsePublishedAt(text: string): number | undefined {
       "個月": 2_592_000_000,
       "年": 31_536_000_000,
     }
-    return now - amount * (unitMs[zhMatch[2]] ?? 0)
+    return now - amount * (zhUnits[zhMatch[2]] ?? 0)
   }
   return undefined
 }
@@ -310,17 +315,20 @@ function fromLockupViewModel(renderer: JsonObject): UnifiedVideoItem | null {
   let publishedText: string = ""
   let authorName: string = ""
   let watching: boolean = false
+  const bareCount: RegExp = /^[\d.,]+\s*[KMB萬億亿]?$/i
   for (const text of parts) {
     if (/watching|正在觀看|正在观看|人觀看中/i.test(text)) {
       watching = true
       continue
     }
-    if (/view|觀看|观看|次/i.test(text) && /\d/.test(text)) {
-      if (viewCount === undefined) viewCount = parseViewCountText(text)
+    // 「1y ago」「3 週前」這類才是發佈時間，不要拿單個「前」去認。
+    if (/\d/.test(text) && /(ago|前)/i.test(text) && !/view|觀看|观看/i.test(text)) {
+      if (!publishedText) publishedText = text
       continue
     }
-    if (/(ago|前)/i.test(text)) {
-      if (!publishedText) publishedText = text
+    // 觀看數可能是「72M」這種純數量，不一定帶 "views"。
+    if (/\d/.test(text) && (/view|觀看|观看|次/i.test(text) || bareCount.test(text))) {
+      if (viewCount === undefined) viewCount = parseViewCountText(text)
       continue
     }
     if (!authorName && text !== title) authorName = text
@@ -402,23 +410,35 @@ export function extractVideoItems(root: unknown): UnifiedVideoItem[] {
   return results
 }
 
-/** 解析 next response 的推薦影片。 */
+/** 解析 next response 的推薦影片（`compactVideoRenderer` 與新版 `lockupViewModel` 都吃）。 */
 export function parseRelatedVideos(next: JsonObject): UnifiedVideoItem[] {
-  const results: unknown[] = asArray(asObject(asObject(next["secondaryResults"])?.["secondaryResults"])?.["results"])
+  // 推薦清單在 contents.twoColumnWatchNextResults.secondaryResults 裡，外層再包一層同名節點。
+  const watch: JsonObject | null = asObject(asObject(next["contents"])?.["twoColumnWatchNextResults"])
+  const holder: JsonObject | null = asObject(watch?.["secondaryResults"] ?? next["secondaryResults"])
+  const nested: unknown[] = asArray(asObject(holder?.["secondaryResults"])?.["results"])
+  const results: unknown[] = nested.length > 0 ? nested : asArray(holder?.["results"])
+
   const items: UnifiedVideoItem[] = []
   const seen: Set<string> = new Set()
   for (const entry of results) {
     const object: JsonObject | null = asObject(entry)
     if (!object) continue
-    const compact: JsonObject | null = asObject(object["compactVideoRenderer"])
-    if (!compact) continue
-    const item: UnifiedVideoItem | null = fromVideoRenderer(compact)
+    const lockup: JsonObject | null = asObject(object["lockupViewModel"])
+    const renderer: JsonObject | null = asObject(object["compactVideoRenderer"] ?? object["videoRenderer"])
+    const item: UnifiedVideoItem | null = lockup
+      ? fromLockupViewModel(lockup)
+      : renderer
+        ? fromVideoRenderer(renderer)
+        : null
     if (item && !seen.has(item.id)) {
       seen.add(item.id)
       items.push(item)
     }
   }
-  return items
+  if (items.length > 0) return items
+
+  // 其他版型（例如 reel / 精選）直接掃整塊推薦區。
+  return extractVideoItems(holder ?? next)
 }
 
 /** 解析 player response 的字幕軌。 */
@@ -532,29 +552,82 @@ function parseCommentRenderer(renderer: JsonObject): CommentItem | null {
   return item
 }
 
-function parseCommentEntity(payload: JsonObject): CommentItem | null {
-  const properties: JsonObject | null = asObject(payload["properties"])
+function parseCommentEntity(entity: JsonObject): CommentItem | null {
+  const properties: JsonObject | null = asObject(entity["properties"])
   if (!properties) return null
-  const toolbar: JsonObject | null = asObject(properties["toolbarStateKey"])
-  const commentId: string =
-    typeof toolbar?.["commentId"] === "string" ? String(toolbar["commentId"]) : String(payload["commentId"] ?? "")
-  const content: string = readText(asObject(properties["content"])?.["content"]) || readText(properties["content"])
+  const commentId: string = String(properties["commentId"] ?? entity["key"] ?? "")
+  const content: string = readText(properties["content"])
   if (!commentId || !content) return null
-  return {
+
+  // author / toolbar 是同一層的兄弟節點，不在 properties 裡。
+  const author: JsonObject | null = asObject(entity["author"])
+  const toolbar: JsonObject | null = asObject(entity["toolbar"])
+  const likeText: string = readText(toolbar?.["likeCountNotliked"]) || readText(toolbar?.["likeCountLiked"])
+  const replyText: string = readText(toolbar?.["replyCount"])
+  const item: CommentItem = {
     id: commentId,
-    authorId: "",
-    authorName: readText(properties["authorButtonA11y"]).replace(/^Photo of\s+/, "").replace(/^@/, ""),
-    authorAvatar: readThumbnailUrl(asObject(payload["avatar"])?.["image"]),
+    authorId: String(author?.["channelId"] ?? ""),
+    authorName: String(author?.["displayName"] ?? "") || readText(properties["authorButtonA11y"]).replace(/^@/, ""),
+    authorAvatar:
+      String(author?.["avatarThumbnailUrl"] ?? "") ||
+      readThumbnailUrl(asObject(entity["avatar"])?.["image"] ?? entity["avatar"]),
     content,
-    likeCount: Number(readText(properties["likeCountNotliked"]).replace(/[^\d]/g, "")) || 0,
+    likeCount: Number(likeText.replace(/[^\d]/g, "")) || 0,
     publishedText: readText(properties["publishedTime"]),
   }
+  const replyCount: number = Number((replyText.match(/\d+/) ?? ["0"])[0])
+  if (replyCount > 0) item.replyCount = replyCount
+  return item
+}
+
+/** 續頁 token：continuationItemRenderer 可能直挂 endpoint，也可能是「Show more replies」按鈕。 */
+function continuationTokenOf(item: JsonObject | null): string | null {
+  if (!item) return null
+  const renderer: JsonObject | null = asObject(item["continuationItemRenderer"])
+  const button: JsonObject | null = asObject(asObject(renderer?.["button"])?.["buttonRenderer"])
+  const command: JsonObject | null =
+    asObject(asObject(renderer?.["continuationEndpoint"])?.["continuationCommand"]) ??
+    asObject(asObject(button?.["command"])?.["continuationCommand"])
+  return typeof command?.["token"] === "string" ? String(command["token"]) : null
+}
+
+/** 一組項目陣列最後一項若是續頁項目，取出它的 token。 */
+export function lastItemToken(items: unknown[]): string | null {
+  return continuationTokenOf(asObject(items[items.length - 1]))
+}
+
+/** 回應裡最後一組項目陣列的續頁 token（留言頁與回覆頁共用）。 */
+export function findPageCursor(response: JsonObject): string | null {
+  let cursor: string | null = null
+
+  const visit = (node: unknown, depth: number): void => {
+    if (!node || depth > 26) return
+    if (Array.isArray(node)) {
+      for (const entry of node) visit(entry, depth + 1)
+      return
+    }
+    const object: JsonObject | null = asObject(node)
+    if (!object) return
+    for (const key of Object.keys(object)) {
+      // 整塊跳過：展開回覆的 token 也長在一樣的陣列裡，遞迴下去會認錯。
+      if (key === "continuationItems") {
+        const token: string | null = lastItemToken(asArray(object[key]))
+        if (token) cursor = token
+        continue
+      }
+      visit(object[key], depth + 1)
+    }
+  }
+
+  visit(response, 0)
+  return cursor
 }
 
 /** 解析留言（舊版 commentRenderer 與新版 commentEntityPayload 皆支援）。 */
 export function parseComments(next: JsonObject): CommentItem[] {
   const comments: CommentItem[] = []
   const seen: Set<string> = new Set()
+  const replyTokens: Map<string, string> = new Map()
 
   const visit = (node: unknown, depth: number): void => {
     if (!node || depth > 24) return
@@ -564,6 +637,17 @@ export function parseComments(next: JsonObject): CommentItem[] {
     }
     const object: JsonObject | null = asObject(node)
     if (!object) return
+
+    // 每則留言的回覆 token 掛在 thread 上，留言本體卻在 frameworkUpdates，先記下來再配對。
+    const thread: JsonObject | null = asObject(object["commentThreadRenderer"])
+    if (thread) {
+      const viewModel: JsonObject | null = asObject(thread["commentViewModel"])
+      const inner: JsonObject | null = asObject(viewModel?.["commentViewModel"])
+      const commentId: string = String(inner?.["commentId"] ?? viewModel?.["commentId"] ?? "")
+      const replies: JsonObject | null = asObject(asObject(thread["replies"])?.["commentRepliesRenderer"])
+      const token: string | null = lastItemToken(asArray(replies?.["contents"]))
+      if (commentId && token) replyTokens.set(commentId, token)
+    }
 
     const legacy: JsonObject | null = asObject(object["commentRenderer"])
     if (legacy) {
@@ -587,6 +671,11 @@ export function parseComments(next: JsonObject): CommentItem[] {
   }
 
   visit(next, 0)
+
+  for (const comment of comments) {
+    const token: string | undefined = replyTokens.get(comment.id)
+    if (token && (comment.replyCount ?? 0) > 0) comment.replyCursor = token
+  }
   return comments
 }
 

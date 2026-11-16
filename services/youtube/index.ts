@@ -7,6 +7,9 @@ import type {
   AudioStreamTrack,
   ChannelDetail,
   CommentItem,
+  CommentPage,
+  CommentQuery,
+  CommentSort,
   StreamManifest,
   UnifiedVideoItem,
   VideoDetail,
@@ -30,6 +33,7 @@ import { getYoutubePageTokens, refreshYoutubePageToken } from "./pageMinter"
 import { getYoutubePoTokens, type YoutubePoTokens } from "./potoken"
 import {
   extractVideoItems,
+  findPageCursor,
   parseChannelDetail,
   parseComments,
   parseRelatedVideos,
@@ -173,23 +177,58 @@ export async function getYoutubeVideoDetail(videoId: string): Promise<VideoDetai
 
   let next: JsonObject | null = null
   try {
-    next = await fetchNextResponse(videoId)
+    next = await fetchWatchNext(videoId)
   } catch (_error) {
     next = null
   }
 
-  const detail: VideoDetail = parseVideoDetail(videoId, player, next)
-  if (!detail.relatedVideos || detail.relatedVideos.length === 0) {
-    detail.relatedVideos = next ? parseRelatedVideos(next) : []
-  }
-  return detail
+  return parseVideoDetail(videoId, player, next)
 }
 
+const COMMENTS_PANEL_ID: string = "engagement-panel-comments-section"
+
+/** 子樹裡第一個 continuation token。 */
+function firstContinuationToken(node: unknown): string | null {
+  let token: string | null = null
+
+  const visit = (current: unknown, depth: number): void => {
+    if (!current || token || depth > 24) return
+    if (Array.isArray(current)) {
+      for (const entry of current) visit(entry, depth + 1)
+      return
+    }
+    const object: JsonObject | null = asObject(current)
+    if (!object) return
+    const command: JsonObject | null = asObject(asObject(object["continuationEndpoint"])?.["continuationCommand"])
+    if (command && typeof command["token"] === "string") {
+      token = String(command["token"])
+      return
+    }
+    for (const key of Object.keys(object)) visit(object[key], depth + 1)
+  }
+
+  visit(node, 0)
+  return token
+}
+
+/**
+ * 留言的 continuation token。
+ * 新版放在 `engagementPanels` 的 comments 面板裡，itemSection 版本則標成 `comment-item-section`，
+ * 兩者都不會出現 `request: ...comments` 字樣。
+ */
 function findCommentsContinuation(next: JsonObject): string | null {
-  const tokens: string[] = []
+  for (const entry of asArray(next["engagementPanels"])) {
+    const panel: JsonObject | null = asObject(asObject(entry)?.["engagementPanelSectionListRenderer"])
+    if (!panel || String(panel["panelIdentifier"] ?? "") !== COMMENTS_PANEL_ID) continue
+    const token: string | null = firstContinuationToken(panel["content"])
+    if (token) return token
+  }
+
+  let sectionToken: string | null = null
+  let legacyToken: string | null = null
 
   const visit = (node: unknown, depth: number): void => {
-    if (!node || depth > 26) return
+    if (!node || depth > 26 || sectionToken) return
     if (Array.isArray(node)) {
       for (const entry of node) visit(entry, depth + 1)
       return
@@ -199,14 +238,10 @@ function findCommentsContinuation(next: JsonObject): string | null {
 
     const section: JsonObject | null = asObject(object["itemSectionRenderer"])
     if (section) {
-      const header: string = JSON.stringify(section["header"] ?? "")
-      const contents: unknown[] = asArray(section["contents"])
-      const endpoint: JsonObject | null = asObject(
-        asObject(contents[0])?.["continuationItemRenderer"],
-      )?.["continuationEndpoint"] as JsonObject | null
-      const command: JsonObject | null = asObject(endpoint?.["continuationCommand"])
-      if (command && typeof command["token"] === "string" && /comment/i.test(header)) {
-        tokens.push(String(command["token"]))
+      if (String(section["sectionIdentifier"] ?? "") === "comment-item-section") {
+        sectionToken = firstContinuationToken(section)
+      } else if (!legacyToken && /comment/i.test(JSON.stringify(section["header"] ?? ""))) {
+        legacyToken = firstContinuationToken(section)
       }
     }
 
@@ -214,39 +249,79 @@ function findCommentsContinuation(next: JsonObject): string | null {
   }
 
   visit(next, 0)
-  if (tokens.length > 0) return tokens[0]
-
-  // 退而求其次：任何 targetId 指向 watch 的 continuation
-  let fallback: string | null = null
-  const scan = (node: unknown, depth: number): void => {
-    if (!node || depth > 26 || fallback) return
-    if (Array.isArray(node)) {
-      for (const entry of node) scan(entry, depth + 1)
-      return
-    }
-    const object: JsonObject | null = asObject(node)
-    if (!object) return
-    const command: JsonObject | null = asObject(asObject(object["continuationEndpoint"])?.["continuationCommand"])
-    if (command && typeof command["token"] === "string" && String(command["request"] ?? "").includes("comments")) {
-      fallback = String(command["token"])
-      return
-    }
-    for (const key of Object.keys(object)) scan(object[key], depth + 1)
-  }
-  scan(next, 0)
-  return fallback
+  return sectionToken ?? legacyToken
 }
 
 /** 留言（取第一頁）。 */
 export async function getYoutubeComments(videoId: string): Promise<CommentItem[]> {
-  const next: JsonObject = await fetchNextResponse(videoId)
-  const initial: CommentItem[] = parseComments(next)
-  if (initial.length > 0) return initial
+  const page: CommentPage = await getYoutubeCommentPage(videoId)
+  return page.comments
+}
 
-  const token: string | null = findCommentsContinuation(next)
-  if (!token) return []
+let watchNextCache: { videoId: string; at: number; data: JsonObject } | null = null
+const WATCH_NEXT_TTL_MS: number = 5 * 60 * 1000
+
+/** 詳情與留言用同一份 next；換排序也不必重抓。 */
+async function fetchWatchNext(videoId: string): Promise<JsonObject> {
+  const now: number = Date.now()
+  if (watchNextCache && watchNextCache.videoId === videoId && now - watchNextCache.at < WATCH_NEXT_TTL_MS) {
+    return watchNextCache.data
+  }
+  const data: JsonObject = await fetchNextResponse(videoId)
+  watchNextCache = { videoId, at: now, data }
+  return data
+}
+
+/** 留言面板（含排序選單與第一頁 token）。 */
+function commentsPanel(next: JsonObject): JsonObject | null {
+  for (const entry of asArray(next["engagementPanels"])) {
+    const panel: JsonObject | null = asObject(asObject(entry)?.["engagementPanelSectionListRenderer"])
+    if (panel && String(panel["panelIdentifier"] ?? "") === COMMENTS_PANEL_ID) return panel
+  }
+  return null
+}
+
+/** 面板標頭的 `Top` / `Newest` 各自帶一個 continuation token。 */
+function sortToken(panel: JsonObject | null, sort: CommentSort): string | null {
+  const header: JsonObject | null = asObject(panel?.["header"])
+  const menu: JsonObject | null = asObject(asObject(header?.["engagementPanelTitleHeaderRenderer"])?.["menu"])
+  const items: unknown[] = asArray(asObject(menu?.["sortFilterSubMenuRenderer"])?.["subMenuItems"])
+  const wanted: RegExp = sort === "newest" ? /new|最新/i : /top|熱門|热门|最熱|最热/i
+
+  const matched: unknown = items.find((entry: unknown): boolean => wanted.test(String(asObject(entry)?.["title"] ?? "")))
+  const chosen: JsonObject | null = asObject(matched) ?? asObject(items[sort === "newest" ? 1 : 0])
+  const token: unknown = asObject(asObject(chosen?.["serviceEndpoint"])?.["continuationCommand"])?.["token"]
+  return typeof token === "string" ? token : null
+}
+
+// 留言回應裡「下一頁」的 token 是 `continuationItems` 陣列的最後一項。 */
+
+/**
+ * 留言分頁。不給 cursor 就是第一頁（依 sort）；給 cursor 就接續下一批，
+ * 回傳的 `cursor` 是 null 代表沒有更多。
+ */
+export async function getYoutubeCommentPage(videoId: string, query: CommentQuery = {}): Promise<CommentPage> {
+  const sort: CommentSort = query.sort ?? "top"
+  let token: string | null = query.cursor ?? null
+
+  if (!token) {
+    const next: JsonObject = await fetchWatchNext(videoId)
+    const panel: JsonObject | null = commentsPanel(next)
+    token =
+      sortToken(panel, sort) ??
+      (panel ? firstContinuationToken(panel["content"]) : null) ??
+      findCommentsContinuation(next)
+  }
+  if (!token) return { comments: [], cursor: null }
+
   const response: JsonObject = await fetchNextResponse(videoId, token)
-  return parseComments(response)
+  return { comments: parseComments(response), cursor: findPageCursor(response) }
+}
+
+/** 一則留言的回覆分頁；cursor 來自 `CommentItem.replyCursor`。 */
+export async function getYoutubeCommentReplies(videoId: string, cursor: string): Promise<CommentPage> {
+  const response: JsonObject = await fetchNextResponse(videoId, cursor)
+  return { comments: parseComments(response), cursor: findPageCursor(response) }
 }
 
 /** 頻道頁。 */

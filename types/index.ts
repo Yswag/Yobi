@@ -121,6 +121,23 @@ export interface CommentItem {
   publishedText: string
   replyCount?: number
   replies?: CommentItem[]
+  /** 載入下一批回覆的游標；`null` 代表回覆已全數載完。 */
+  replyCursor?: string | null
+}
+
+/** 留言排序：最熟 / 最新。 */
+export type CommentSort = "top" | "newest"
+
+export interface CommentQuery {
+  sort?: CommentSort
+  /** 下一批的游標；不給就是第一頁。 */
+  cursor?: string | null
+}
+
+export interface CommentPage {
+  comments: CommentItem[]
+  /** 下一批的游標，null 代表沒有更多。 */
+  cursor: string | null
 }
 
 export interface ChannelDetail {

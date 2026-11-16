@@ -3,6 +3,8 @@ import type {
   AudioStreamTrack,
   ChannelDetail,
   CommentItem,
+  CommentPage,
+  CommentQuery,
   Provider,
   StreamManifest,
   UnifiedVideoItem,
@@ -960,7 +962,9 @@ export async function fetchBiliDanmakuXml(cid: number): Promise<string> {
 function mapReply(raw: any): CommentItem {
   const member = raw?.member ?? {}
   const replies = Array.isArray(raw?.replies) ? raw.replies.slice(0, 3) : []
-  return {
+  const inline: CommentItem[] | undefined = replies.length ? replies.map(mapReply) : undefined
+  const replyCount: number = Number(raw?.rcount) || 0
+  const item: CommentItem = {
     id: String(raw?.rpid_str ?? raw?.rpid ?? ""),
     authorId: String(member.mid ?? ""),
     authorName: cleanText(member.uname),
@@ -968,28 +972,48 @@ function mapReply(raw: any): CommentItem {
     content: typeof raw?.content?.message === "string" ? raw.content.message : "",
     likeCount: Number(raw?.like) || 0,
     publishedText: publishedTextFromEpoch(numberOrUndefined(raw?.ctime)) ?? "",
-    replyCount: Number(raw?.rcount) || 0,
-    replies: replies.length ? replies.map(mapReply) : undefined,
+    replyCount,
+    replies: inline,
   }
+  // 行內只带前幾則，展開時從第一頁重抓（重複的用 id 去掉）。
+  if (replyCount > 0) item.replyCursor = "1"
+  return item
 }
 
-export async function getBiliComments(
+/**
+ * 留言分頁。游標是 `p<頁碼>` 或 `o<offset>`；`sort` 對應 `/reply/main` 的 mode（3 = 熱門、2 = 最新）。
+ * 這個端點沒帶 `pagination_str` 就不回傳任何留言。
+ */
+export async function getBiliCommentPage(
   bvidOrAid: string,
-  page = 1,
-): Promise<CommentItem[]> {
+  query: CommentQuery = {},
+): Promise<CommentPage> {
   const ids = await resolveIds(bvidOrAid)
   const oid = await resolveAid(ids)
+  const raw: string = String(query.cursor ?? "p1")
+  const isOffset: boolean = raw.startsWith("o")
+  const offset: string = isOffset ? raw.slice(1) : ""
+  const page: number = isOffset ? 1 : Math.max(1, Number(raw.replace(/^p/, "")) || 1)
+  const mode: number = query.sort === "newest" ? 2 : 3
 
   try {
     const main: any = await biliFetchJson<any>(`${API}/x/v2/reply/main`, {
       oid,
       type: 1,
-      mode: 3,
+      mode,
       next: page,
       ps: 20,
+      pagination_str: JSON.stringify({ offset }),
     })
     const replies = main?.data?.replies
-    if (Array.isArray(replies) && replies.length) return replies.map(mapReply)
+    if (Array.isArray(replies)) {
+      const ended: boolean = main?.data?.cursor?.is_end === true || replies.length < 20
+      const nextOffset: string = String(main?.data?.cursor?.pagination_reply?.next_offset ?? "")
+      return {
+        comments: replies.map(mapReply),
+        cursor: ended ? null : nextOffset ? `o${nextOffset}` : `p${page + 1}`,
+      }
+    }
   } catch {
     // fall back to the legacy endpoint
   }
@@ -999,10 +1023,40 @@ export async function getBiliComments(
     type: 1,
     pn: page,
     ps: 20,
-    sort: 2,
+    sort: mode === 2 ? 0 : 2,
   })
-  const replies = legacy?.data?.replies
-  return Array.isArray(replies) ? replies.map(mapReply) : []
+  const legacyReplies = legacy?.data?.replies
+  const comments: CommentItem[] = Array.isArray(legacyReplies) ? legacyReplies.map(mapReply) : []
+  return { comments, cursor: comments.length < 20 ? null : `p${page + 1}` }
+}
+
+export async function getBiliComments(
+  bvidOrAid: string,
+  page = 1,
+): Promise<CommentItem[]> {
+  const result: CommentPage = await getBiliCommentPage(bvidOrAid, { cursor: `p${page}` })
+  return result.comments
+}
+
+/** 一层留言的回覆分頁；游標是頁碼。 */
+export async function getBiliCommentReplies(
+  bvidOrAid: string,
+  rootId: string,
+  query: CommentQuery = {},
+): Promise<CommentPage> {
+  const ids = await resolveIds(bvidOrAid)
+  const oid = await resolveAid(ids)
+  const page: number = Math.max(1, Number(query.cursor ?? "1") || 1)
+  const result: any = await biliFetchJson<any>(`${API}/x/v2/reply/reply`, {
+    oid,
+    type: 1,
+    root: rootId,
+    pn: page,
+    ps: 20,
+  })
+  const replies = result?.data?.replies
+  const comments: CommentItem[] = Array.isArray(replies) ? replies.map(mapReply) : []
+  return { comments, cursor: comments.length < 20 ? null : String(page + 1) }
 }
 
 // ─── Channel / UP 主 ────────────────────────────────────────────────────────

@@ -1,6 +1,8 @@
 import { fetch, useEffect, useState } from "scripting"
 import type {
   CommentItem,
+  CommentPage,
+  CommentSort,
   OfflineDownload,
   PlayerSettings,
   SponsorSegment,
@@ -18,7 +20,8 @@ import {
   fetchSponsorSegments,
   findActiveSponsorSegment,
   findDownload,
-  getComments,
+  getCommentPage,
+  getCommentReplies,
   getSavedPosition,
   getSettings,
   getVideoDetail,
@@ -48,6 +51,11 @@ export interface PlayerStoreSnapshot {
   manifest: StreamManifest | null
   comments: CommentItem[]
   commentsLoading: boolean
+  commentsSort: CommentSort
+  commentsCursor: string | null
+  commentsLoadingMore: boolean
+  /** 正在載入回覆的留言 id。 */
+  repliesLoading: Record<string, boolean>
   sponsorSegments: SponsorSegment[]
   activeSponsorPrompt: SponsorSegment | null
   skippedToast: string | null
@@ -97,6 +105,10 @@ let storeState: PlayerStoreSnapshot = {
   manifest: null,
   comments: [],
   commentsLoading: false,
+  commentsSort: "top",
+  commentsCursor: null,
+  commentsLoadingMore: false,
+  repliesLoading: {},
   sponsorSegments: [],
   activeSponsorPrompt: null,
   skippedToast: null,
@@ -464,6 +476,10 @@ export async function openVideo(item: UnifiedVideoItem, options: OpenVideoOption
     manifest: null,
     comments: [],
     commentsLoading: true,
+    commentsSort: "top",
+    commentsCursor: null,
+    commentsLoadingMore: false,
+    repliesLoading: {},
     sponsorSegments: [],
     activeSponsorPrompt: null,
     skippedToast: null,
@@ -509,10 +525,11 @@ export async function openVideo(item: UnifiedVideoItem, options: OpenVideoOption
     })
     .catch(() => {})
 
-  void getComments(item.provider, item.rawId)
-    .then((comments: CommentItem[]) => {
+  void getCommentPage(item.provider, item.rawId, { sort: storeState.commentsSort })
+    .then((page: CommentPage) => {
       if (requestId !== openRequestSeq) return
-      storeState.comments = comments
+      storeState.comments = page.comments
+      storeState.commentsCursor = page.cursor
       storeState.commentsLoading = false
       emitStore()
     })
@@ -1028,15 +1045,82 @@ export async function playPrevious(): Promise<void> {
 export async function reloadComments(): Promise<void> {
   const item: UnifiedVideoItem | null = storeState.currentItem
   if (!item) return
+  const sort: CommentSort = storeState.commentsSort
   storeState.commentsLoading = true
+  storeState.commentsCursor = null
   emitStore()
   try {
-    const comments: CommentItem[] = await getComments(item.provider, item.rawId)
-    storeState.comments = comments
+    const page: CommentPage = await getCommentPage(item.provider, item.rawId, { sort })
+    if (storeState.currentItem?.id !== item.id || storeState.commentsSort !== sort) return
+    storeState.comments = page.comments
+    storeState.commentsCursor = page.cursor
   } catch {
     // Ignore
   } finally {
-    storeState.commentsLoading = false
+    if (storeState.currentItem?.id === item.id) {
+      storeState.commentsLoading = false
+      emitStore()
+    }
+  }
+}
+
+/** 換排序：清掉現有留言，從第一頁重載。 */
+export async function setCommentsSort(sort: CommentSort): Promise<void> {
+  if (storeState.commentsSort === sort) return
+  storeState.commentsSort = sort
+  await reloadComments()
+}
+
+/** 接續下一批留言；沒有游標就什麼都不做。 */
+export async function loadMoreComments(): Promise<void> {
+  const item: UnifiedVideoItem | null = storeState.currentItem
+  const cursor: string | null = storeState.commentsCursor
+  if (!item || !cursor || storeState.commentsLoading || storeState.commentsLoadingMore) return
+
+  const sort: CommentSort = storeState.commentsSort
+  storeState.commentsLoadingMore = true
+  emitStore()
+  try {
+    const page: CommentPage = await getCommentPage(item.provider, item.rawId, { sort, cursor })
+    if (storeState.currentItem?.id !== item.id || storeState.commentsSort !== sort) return
+    const seen: Set<string> = new Set(storeState.comments.map((comment: CommentItem): string => comment.id))
+    const fresh: CommentItem[] = page.comments.filter((comment: CommentItem): boolean => !seen.has(comment.id))
+    storeState.comments = fresh.length > 0 ? [...storeState.comments, ...fresh] : storeState.comments
+    storeState.commentsCursor = page.cursor
+  } catch {
+    // Keep the cursor so the user can retry
+  } finally {
+    storeState.commentsLoadingMore = false
+    emitStore()
+  }
+}
+
+/** 載入某則留言的下一批回覆（第一次就是展開）。 */
+export async function loadCommentReplies(commentId: string): Promise<void> {
+  const item: UnifiedVideoItem | null = storeState.currentItem
+  const target: CommentItem | undefined = storeState.comments.find(
+    (comment: CommentItem): boolean => comment.id === commentId,
+  )
+  const cursor: string | null | undefined = target?.replyCursor
+  if (!item || !target || !cursor) return
+  if (storeState.repliesLoading[commentId] === true) return
+
+  storeState.repliesLoading = { ...storeState.repliesLoading, [commentId]: true }
+  emitStore()
+  try {
+    const page: CommentPage = await getCommentReplies(item.provider, item.rawId, commentId, cursor)
+    if (storeState.currentItem?.id !== item.id) return
+    storeState.comments = storeState.comments.map((comment: CommentItem): CommentItem => {
+      if (comment.id !== commentId) return comment
+      const existing: CommentItem[] = comment.replies ?? []
+      const seen: Set<string> = new Set(existing.map((reply: CommentItem): string => reply.id))
+      const fresh: CommentItem[] = page.comments.filter((reply: CommentItem): boolean => !seen.has(reply.id))
+      return { ...comment, replies: [...existing, ...fresh], replyCursor: page.cursor }
+    })
+  } catch {
+    // Keep the cursor so the user can retry
+  } finally {
+    storeState.repliesLoading = { ...storeState.repliesLoading, [commentId]: false }
     emitStore()
   }
 }

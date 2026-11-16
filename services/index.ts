@@ -7,6 +7,8 @@
 import type {
   ChannelDetail,
   CommentItem,
+  CommentPage,
+  CommentQuery,
   Provider,
   StreamManifest,
   UnifiedVideoItem,
@@ -15,7 +17,8 @@ import type {
 } from "../types"
 import {
   getYoutubeChannel,
-  getYoutubeComments,
+  getYoutubeCommentPage,
+  getYoutubeCommentReplies,
   getYoutubeSearchSuggestions,
   getYoutubeTrending,
   getYoutubeVideoDetail,
@@ -25,7 +28,8 @@ import {
 } from "./youtube"
 import {
   getBiliChannel,
-  getBiliComments,
+  getBiliCommentPage,
+  getBiliCommentReplies,
   getBiliSearchSuggestions,
   getBiliTrending,
   getBiliVideoDetail,
@@ -147,10 +151,31 @@ export async function resolveStream(
   return resolveYoutubeStream(rawId, options.mode ?? "auto", options.preferredHeight ?? 0)
 }
 
-/** 留言。 */
+/** 留言（只取第一頁）。 */
 export async function getComments(provider: Provider, rawId: string): Promise<CommentItem[]> {
-  if (provider === "bili") return getBiliComments(rawId)
-  return getYoutubeComments(rawId)
+  const page: CommentPage = await getCommentPage(provider, rawId)
+  return page.comments
+}
+
+/** 留言分頁：不給 cursor 就是第一頁，回傳的 cursor 為 null 代表沒有更多。 */
+export async function getCommentPage(
+  provider: Provider,
+  rawId: string,
+  query: CommentQuery = {},
+): Promise<CommentPage> {
+  if (provider === "bili") return getBiliCommentPage(rawId, query)
+  return getYoutubeCommentPage(rawId, query)
+}
+
+/** 一則留言的回覆分頁。 */
+export async function getCommentReplies(
+  provider: Provider,
+  rawId: string,
+  commentId: string,
+  cursor: string,
+): Promise<CommentPage> {
+  if (provider === "bili") return getBiliCommentReplies(rawId, commentId, { cursor })
+  return getYoutubeCommentReplies(rawId, cursor)
 }
 
 /** 頻道 / UP 主。 */

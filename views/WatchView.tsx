@@ -31,10 +31,13 @@ import {
   providerFullName,
 } from "../utils/format"
 import {
+  loadCommentReplies,
+  loadMoreComments,
   openVideo,
   reloadComments,
   seekTo,
   selectPage,
+  setCommentsSort,
   usePlayerProgress,
   usePlayerStore,
 } from "../state/playerStore"
@@ -400,6 +403,19 @@ export function WatchView(props: WatchViewProps): VirtualNode {
       <CommentsSheet
         comments={store.comments}
         loading={store.commentsLoading}
+        loadingMore={store.commentsLoadingMore}
+        sort={store.commentsSort}
+        hasMore={store.commentsCursor !== null}
+        repliesLoading={store.repliesLoading}
+        onSort={(sort) => {
+          void setCommentsSort(sort)
+        }}
+        onLoadMore={() => {
+          void loadMoreComments()
+        }}
+        onLoadReplies={(commentId) => {
+          void loadCommentReplies(commentId)
+        }}
         onRefresh={() => {
           void reloadComments()
         }}
