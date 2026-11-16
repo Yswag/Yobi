@@ -169,6 +169,7 @@ export function SearchView(props: SearchViewProps): VirtualNode {
   const runSearch = (rawQuery: string): void => {
     const trimmed: string = rawQuery.trim()
     if (!trimmed) return
+    Keyboard.hide()
     setQuery(trimmed)
     setSubmittedQuery(trimmed)
     setHasSearched(true)

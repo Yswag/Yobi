@@ -75,6 +75,9 @@ function YobiRootView(): VirtualNode {
         // The mini player is placed against the full-size tab bar.
         tabBarMinimizeBehavior="never"
         tabViewSearchActivation="searchTabSelection"
+        // An overlay never sizes the tabs: the screen-size player would otherwise overflow the root when the keyboard
+        // shrinks it, and the centered root would push every tab upward.
+        overlay={{ alignment: "topLeading", content: <PlayerHost onOpenChannel={handleOpenChannel} /> }}
       >
         <Tab title="首頁" systemImage="house.fill" value={TAB.home}>
           {stack(TAB.home, <HomeView onOpenChannel={handleOpenChannel} onOpenSettings={openSettings} />)}
@@ -97,7 +100,6 @@ function YobiRootView(): VirtualNode {
           {stack(TAB.search, <SearchView onOpenChannel={handleOpenChannel} />)}
         </Tab>
       </TabView>
-      <PlayerHost onOpenChannel={handleOpenChannel} />
     </ZStack>
   )
 }
