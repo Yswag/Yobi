@@ -324,9 +324,12 @@ export async function getYoutubeCommentReplies(videoId: string, cursor: string):
   return { comments: parseComments(response), cursor: findPageCursor(response) }
 }
 
+// 頻道的「影片」分頁；首頁分頁會混進別的頻道的播放清單。
+const CHANNEL_VIDEOS_PARAMS: string = "EgZ2aWRlb3PyBgQKAjoA"
+
 /** 頻道頁。 */
 export async function getYoutubeChannel(channelId: string): Promise<ChannelDetail> {
-  const response: JsonObject = await fetchBrowseResponse(channelId)
+  const response: JsonObject = await fetchBrowseResponse(channelId, CHANNEL_VIDEOS_PARAMS)
   return parseChannelDetail(channelId, response)
 }
 

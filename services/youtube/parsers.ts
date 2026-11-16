@@ -811,7 +811,16 @@ export function parseChannelDetail(channelId: string, browse: JsonObject): Chann
     readThumbnailUrl(asObject(channelMetadata["banner"])) ||
     readThumbnailUrl(asObject(asObject(asObject(pageHeader["banner"])?.["imageBannerViewModel"])?.["image"]))
 
-  const videos: UnifiedVideoItem[] = extractVideoItems(browse)
+  // 頻道的影片分頁不帶作者；合作影片則帶「A and B」，保留。
+  const videos: UnifiedVideoItem[] = extractVideoItems(browse).map((video: UnifiedVideoItem): UnifiedVideoItem => {
+    if (video.authorName && video.authorId) return video
+    return {
+      ...video,
+      authorName: video.authorName || name,
+      authorId: video.authorId || channelId,
+      authorAvatar: video.authorAvatar || avatar || undefined,
+    }
+  })
 
   return {
     id: `yt:${channelId}`,
