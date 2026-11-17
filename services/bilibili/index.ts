@@ -7,6 +7,7 @@ import type {
   CommentQuery,
   Provider,
   StreamManifest,
+  SubtitleTrackInfo,
   UnifiedVideoItem,
   VideoDetail,
   VideoPagePart,
@@ -24,6 +25,7 @@ import {
   writeBiliDashMpdFromPrepared,
 } from "./dashMpd"
 import { writeBiliHlsManifest } from "./hls"
+import { fetchBiliSubtitleTracks } from "./subtitles"
 
 const API = "https://api.bilibili.com"
 const VIEW_URL = `${API}/x/web-interface/view`
@@ -612,6 +614,7 @@ export async function resolveBiliStream(
   const streamCid = Number(resolvedCid)
   const danmakuXmlUrl = `https://comment.bilibili.com/${streamCid}.xml`
   const dash: BiliDashPayload | undefined = data.dash
+  const subtitles: SubtitleTrackInfo[] = await fetchBiliSubtitleTracks(resolvedBvid, streamCid)
 
   if (dash && Array.isArray(dash.video) && dash.video.length) {
     const duration =
@@ -633,7 +636,7 @@ export async function resolveBiliStream(
       headers: { ...BILI_HEADERS },
       qualities,
       audioTracks,
-      subtitles: [],
+      subtitles,
       danmakuXmlUrl,
       cid: streamCid,
       isLive: false,
@@ -679,7 +682,7 @@ export async function resolveBiliStream(
       headers: { ...BILI_HEADERS },
       qualities: [quality],
       audioTracks: [],
-      subtitles: [],
+      subtitles,
       danmakuXmlUrl,
       cid: streamCid,
       isLive: false,

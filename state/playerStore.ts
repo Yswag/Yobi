@@ -35,7 +35,7 @@ import {
   warmStreamStart,
 } from "../services"
 import { SPONSOR_CATEGORY_LABELS } from "../utils/format"
-import { toCleanVtt } from "../utils/subtitles"
+import { biliSubtitleToVtt, toCleanVtt } from "../utils/subtitles"
 
 export type PlayerPresentationMode = "hidden" | "expanded" | "mini"
 
@@ -462,10 +462,17 @@ function pickInitialQualityTrack(
   return { id: best.id, label: best.label }
 }
 
+/** 彈幕 XML 換畫質後要重新載入；同一個 cid 不必重抓。 */
+const danmakuXmlCache: Map<number, string> = new Map()
+
 async function loadBiliDanmakuForCid(cid: number): Promise<void> {
   const ctrl: VideoPlaybackController = getPlayerController()
   try {
-    const xml: string = await fetchBiliDanmakuXml(cid)
+    let xml: string | undefined = danmakuXmlCache.get(cid)
+    if (xml === undefined) {
+      xml = await fetchBiliDanmakuXml(cid)
+      if (xml) danmakuXmlCache.set(cid, xml)
+    }
     if (!xml || !xml.includes("<d")) return
     const report = await ctrl.loadDanmakuText(xml, "xml")
     storeState.danmakuCount = report.loaded
@@ -538,6 +545,8 @@ export async function openVideo(item: UnifiedVideoItem, options: OpenVideoOption
   } catch {
     // Ignore cleanup errors before open
   }
+  subtitleVttCache.clear()
+  danmakuXmlCache.clear()
 
   // Kick off detail, comments, and SponsorBlock in parallel so video opens as fast as possible
   void getVideoDetail(item.provider, item.rawId)
@@ -630,15 +639,6 @@ export async function openVideo(item: UnifiedVideoItem, options: OpenVideoOption
       return
     }
 
-    ctrl.playbackRate = settings.defaultPlaybackRate || 1
-    ctrl.danmakuEnabled = settings.danmakuEnabled && item.provider === "bili" && storeState.presentationMode !== "mini"
-    ctrl.danmakuOpacity = settings.danmakuOpacity
-    ctrl.setDanmakuStyle({
-      speed: settings.danmakuSpeed,
-      area: settings.danmakuArea,
-      blockedWords: settings.danmakuBlockedWords,
-    })
-
     // 續播點在開片前就知道，先把那裡的片段抓起來，跟 open() 同時進行。
     let resumeAt: number = 0
     if (options.startSeconds !== undefined && options.startSeconds > 0) {
@@ -661,12 +661,13 @@ export async function openVideo(item: UnifiedVideoItem, options: OpenVideoOption
       await ctrl.open(url, { backend, headers })
       if (requestId !== openRequestSeq) return
     }
+    await restoreControllerSettings()
+    if (requestId !== openRequestSeq) return
 
     if (resumeAt > 0) {
       await seekForResume(ctrl, resumeAt)
       if (requestId !== openRequestSeq) return
     }
-
     if (item.provider === "bili" && activeCid) {
       void loadBiliDanmakuForCid(activeCid)
     }
@@ -784,6 +785,13 @@ export async function selectQuality(qualityId: string): Promise<void> {
         // Ignore seek failure
       }
     }
+    // 先回到原位再重套字幕與彈幕，字幕下載不卡住續播點。
+    await restoreControllerSettings()
+    // open() 也會清掉彈幕內容，只留「已開啟」的開關。
+    const activeCid: number | undefined = storeState.activeCid
+    if (storeState.currentItem?.provider === "bili" && activeCid && storeState.danmakuEnabled) {
+      void loadBiliDanmakuForCid(activeCid)
+    }
     if (wasPlaying) {
       await ctrl.play()
     }
@@ -830,12 +838,33 @@ export async function selectYoutubeStreamMode(mode: YoutubeStreamPreference): Pr
         // Ignore
       }
     }
+    await restoreControllerSettings()
     await ctrl.play()
   } catch (err: unknown) {
     storeState.status = "error"
     storeState.errorText = err instanceof Error ? err.message : "切換串流引擎失敗"
     emitStore()
   }
+}
+
+/** 同一條字幕在同一次播放裡不必重抓（bili 的網址每次解析都不同）；換片時清掉。 */
+const subtitleVttCache: Map<string, string> = new Map()
+
+async function fetchSubtitleVtt(sub: SubtitleTrackInfo): Promise<string> {
+  const key: string = `${storeState.currentItem?.id ?? ""}:${sub.id}`
+  const cached: string | undefined = subtitleVttCache.get(key)
+  if (cached) return cached
+  const response = await fetch(sub.url, {
+    timeout: 20,
+    headers: sub.headers,
+    debugLabel: "Yobi Subtitle",
+  })
+  if (!response.ok) throw new Error(`HTTP ${response.status}`)
+  const text: string = await response.text()
+  const vtt: string = sub.format === "bili" ? biliSubtitleToVtt(text) : toCleanVtt(text)
+  if (!vtt) throw new Error("empty subtitles")
+  subtitleVttCache.set(key, vtt)
+  return vtt
 }
 
 export async function selectSubtitle(subtitleId: string | null): Promise<void> {
@@ -857,11 +886,7 @@ export async function selectSubtitle(subtitleId: string | null): Promise<void> {
   emitStore()
 
   try {
-    const response = await fetch(sub.url, { timeout: 20, debugLabel: "Yobi Subtitle" })
-    if (!response.ok) throw new Error(`HTTP ${response.status}`)
-    const text: string = await response.text()
-    const vtt: string = toCleanVtt(text)
-    if (!vtt) throw new Error("empty subtitles")
+    const vtt: string = await fetchSubtitleVtt(sub)
     if (storeState.selectedSubtitleId !== subtitleId) return
     await ctrl.loadSubtitles(vtt, "vtt")
     ctrl.subtitlesEnabled = true
@@ -871,6 +896,43 @@ export async function selectSubtitle(subtitleId: string | null): Promise<void> {
     emitStore()
     showSkippedToast("字幕載入失敗")
   }
+}
+
+/**
+ * 重開串流（切畫質、換分 P、換引擎、重試）後把控制項狀態再套一次。
+ * open() 會把控制器自己的字幕與彈幕設定清掉，只留 store 顯示「已開啟」就會跟實際不符。
+ */
+async function restoreControllerSettings(): Promise<void> {
+  const ctrl: VideoPlaybackController = getPlayerController()
+  const settings: PlayerSettings = storeState.settings
+  ctrl.playbackRate = storeState.isBoosting2x ? 2 : storeState.playbackRate || 1
+  ctrl.danmakuOpacity = settings.danmakuOpacity
+  ctrl.setDanmakuStyle({
+    speed: settings.danmakuSpeed,
+    area: settings.danmakuArea,
+    blockedWords: settings.danmakuBlockedWords,
+  })
+
+  const subtitleId: string | null = storeState.selectedSubtitleId
+  if (subtitleId !== null) {
+    const sub: SubtitleTrackInfo | undefined = storeState.manifest?.subtitles.find(
+      (entry: SubtitleTrackInfo): boolean => entry.id === subtitleId,
+    )
+    if (!sub) {
+      // 新 manifest 沒有這條字幕（換分 P、換引擎），不要留一個開不了的開關。
+      storeState.selectedSubtitleId = null
+    } else {
+      try {
+        await ctrl.loadSubtitles(await fetchSubtitleVtt(sub), "vtt")
+      } catch {
+        storeState.selectedSubtitleId = null
+        showSkippedToast("字幕載入失敗")
+      }
+    }
+  }
+
+  applyOverlayVisibility(storeState.presentationMode !== "mini")
+  emitStore()
 }
 
 export async function selectPage(pagePart: VideoPagePart): Promise<void> {
@@ -912,6 +974,7 @@ export async function selectPage(pagePart: VideoPagePart): Promise<void> {
     const backend = manifest.backend
     const headers = manifest.headers
     await ctrl.open(url, { backend, headers })
+    await restoreControllerSettings()
     void loadBiliDanmakuForCid(pagePart.cid)
     await ctrl.play()
   } catch (err: unknown) {

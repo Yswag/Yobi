@@ -65,10 +65,40 @@ function parseCues(source: string): Cue[] {
 
 /** SRT／WebVTT → 只有時間、純文字與 CC 樣式的 WebVTT；沒有任何可用的 cue 時回傳空字串。 */
 export function toCleanVtt(source: string): string {
-  const cues: Cue[] = parseCues(source)
+  return cuesToVtt(parseCues(source))
+}
+
+/** 已解析好的 cue 直接輸出成帶 CC 樣式的 WebVTT。 */
+export function cuesToVtt(cues: Cue[]): string {
   if (cues.length === 0) return ""
   const blocks: string[] = cues.map(
     (cue: Cue): string => `${vttTime(cue.start)} --> ${vttTime(cue.end)} ${CUE_SETTINGS}\n${cue.text.replace(/-->/g, "→")}`,
   )
   return `WEBVTT\n\n${CUE_STYLE}\n\n${blocks.join("\n\n")}\n`
+}
+
+/**
+ * bilibili 的 CC 字幕是 JSON：`{ body: [{ from, to, content }] }`。
+ * 解析失敗或沒有可用句子時回空字串。
+ */
+export function biliSubtitleToVtt(source: string): string {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(source)
+  } catch {
+    return ""
+  }
+  const body: unknown = (parsed as { body?: unknown } | null)?.body
+  if (!Array.isArray(body)) return ""
+  const cues: Cue[] = []
+  for (const entry of body) {
+    const item = entry as { from?: unknown; to?: unknown; content?: unknown } | null
+    const start: number = Number(item?.from)
+    const end: number = Number(item?.to)
+    const text: string = decodeEntities(String(item?.content ?? "")).trim()
+    if (!Number.isFinite(start) || !Number.isFinite(end)) continue
+    if (end - start < MIN_CUE_SECONDS || !text) continue
+    cues.push({ start, end, text })
+  }
+  return cuesToVtt(cues)
 }
