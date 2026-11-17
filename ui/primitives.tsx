@@ -255,6 +255,8 @@ export function ProgressTrack(props: {
   )
 }
 
+import { thumbnailUrl, avatarUrl } from "../utils/image"
+
 export function Thumbnail(props: {
   url?: string
   width?: number
@@ -273,6 +275,8 @@ export function Thumbnail(props: {
     : props.durationText ?? (props.duration && props.duration > 0 ? formatDuration(props.duration) : null)
   const compact: boolean = props.width !== undefined && props.width < 200
   const inset: number = compact ? 6 : 10
+  // 請求縮圖大小而不是原圖：捲動中每張都解一張 1920×1080 是最貴的一項。
+  const image: string | undefined = thumbnailUrl(props.url, props.width ?? 480)
 
   // A 16:9 plate carries the layout; the scale-to-fill image sits in its overlay so it can't resize the card.
   return (
@@ -284,9 +288,9 @@ export function Thumbnail(props: {
       aspectRatio={{ value: 16 / 9, contentMode: "fit" }}
       overlay={
         <ZStack frame={{ maxWidth: "infinity", maxHeight: "infinity" }}>
-          {props.url ? (
+          {image ? (
             <Image
-              imageUrl={props.url}
+              imageUrl={image}
               resizable
               scaleToFill
               frame={{ maxWidth: "infinity", maxHeight: "infinity" }}
@@ -334,10 +338,11 @@ export function Avatar(props: {
   onTap?: () => void
 }): VirtualNode {
   const shape = { type: "rect" as const, cornerRadius: props.size / 2 }
-  if (props.url) {
+  const image: string | undefined = avatarUrl(props.url, props.size)
+  if (image) {
     return (
       <Image
-        imageUrl={props.url}
+        imageUrl={image}
         resizable
         scaleToFill
         frame={{ width: props.size, height: props.size }}

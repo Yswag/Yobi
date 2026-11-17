@@ -150,6 +150,22 @@ let progressState: PlayerProgressSnapshot = {
 
 /** 上次送出的快照；用來在「什麼都沒變」時不要吵醒訂閱者。 */
 let lastEmittedStore: PlayerStoreSnapshot | null = null
+/** 同上，給播放進度用。 */
+let lastEmittedProgress: PlayerProgressSnapshot | null = null
+/** 使用者正在捲動內容時凍結進度通知，捲完再補上。 */
+let progressPaused: boolean = false
+
+function sameProgress(next: PlayerProgressSnapshot, previous: PlayerProgressSnapshot | null): boolean {
+  if (previous === null) return false
+  // 播放器每 250ms 發一次，但畫面上看得到的最小單位就是「秒」（時間文字、進度條位置）。
+  // 以 1 秒為粒度，重畫從每秒 4 次降到 1 次；暫停與拖曳時照樣一動都不通知。
+  return (
+    Math.floor(next.position) === Math.floor(previous.position) &&
+    Math.floor(next.duration) === Math.floor(previous.duration) &&
+    Math.floor(next.bufferedUntil) === Math.floor(previous.bufferedUntil) &&
+    next.activeChapter === previous.activeChapter
+  )
+}
 
 function sameSnapshot(next: PlayerStoreSnapshot, previous: PlayerStoreSnapshot | null): boolean {
   if (previous === null) return false
@@ -180,7 +196,13 @@ function emitStore(): void {
 }
 
 function emitProgress(): void {
-  progressState = { ...progressState }
+  if (progressPaused) return
+  const next: PlayerProgressSnapshot = { ...progressState }
+  // 播放器暫停後仍然每 250ms 發一次 progress，位置卻沒有動。
+  // 每次都通知，就等於讓所有顯示時間的元件（章節列、進度條、迷你列）每秒重畫四次。
+  if (sameProgress(next, lastEmittedProgress)) return
+  lastEmittedProgress = next
+  progressState = { ...next }
   for (const listener of Array.from(progressListeners)) {
     try {
       listener()
@@ -190,8 +212,19 @@ function emitProgress(): void {
   }
 }
 
-/** 播放器的 seek／stop 在等代理回資料時可能一直不回來，不能讓介面跟著等。 */
-function withTimeout<T>(task: Promise<T>, ms: number): Promise<T | "timeout"> {
+/**
+ * 使用者正在捲動觀看頁時凍結進度通知：這段時間裡一個訂閱者都不叫醒。
+ * 停止捲動後補上最新值，所以進度條不會停在凍結那一刻。
+ */
+export function setProgressUpdatesPaused(paused: boolean): void {
+  if (progressPaused === paused) return
+  progressPaused = paused
+  if (paused) return
+  lastEmittedProgress = null
+  emitProgress()
+}
+
+/** 播放器 seek／stop 在等代理回資料時可能一直不回來，不能讓介面跟著等。 */function withTimeout<T>(task: Promise<T>, ms: number): Promise<T | "timeout"> {
   return new Promise((resolve: (value: T | "timeout") => void, reject: (reason: unknown) => void): void => {
     const timer: number = setTimeout((): void => resolve("timeout"), ms)
     task.then(
@@ -568,67 +601,44 @@ export async function openVideo(item: UnifiedVideoItem, options: OpenVideoOption
   subtitleVttCache.clear()
   danmakuXmlCache.clear()
 
-  // 開片期間每一次 store 通知都會重建整個觀看頁（留言、推薦、描述）；
-  // 先收著，等第一幀出來再一次套用，開片那段就不會被重繪打斷。
-  const heldUpdates: (() => void)[] = []
-  let firstFrame: boolean = false
-  const applyLater = (update: () => void): void => {
-    if (firstFrame) {
-      update()
-      emitStore()
-      return
-    }
-    heldUpdates.push(update)
-  }
-  const releaseHeld = (): void => {
-    firstFrame = true
-    if (heldUpdates.length === 0) return
-    for (const update of heldUpdates.splice(0)) update()
-    emitStore()
-  }
-
   // Kick off detail, comments, and SponsorBlock in parallel so video opens as fast as possible
   void getVideoDetail(item.provider, item.rawId)
     .then((detail: VideoDetail) => {
       if (requestId !== openRequestSeq) return
-      applyLater((): void => {
-        const resolvedCid: number | undefined =
-          storeState.activeCid ?? detail.cid ?? detail.pages?.[0]?.cid
-        storeState.detail = detail
-        if (resolvedCid && !storeState.activeCid) {
-          storeState.activeCid = resolvedCid
-        }
-        if (detail.duration > 0 && progressState.duration <= 0) {
-          progressState.duration = detail.duration
-          emitProgress()
-        }
-      })
+      const resolvedCid: number | undefined =
+        storeState.activeCid ?? detail.cid ?? detail.pages?.[0]?.cid
+      storeState.detail = detail
+      if (resolvedCid && !storeState.activeCid) {
+        storeState.activeCid = resolvedCid
+      }
+      if (detail.duration > 0 && progressState.duration <= 0) {
+        progressState.duration = detail.duration
+        emitProgress()
+      }
+      emitStore()
     })
     .catch(() => {})
 
   void getCommentPage(item.provider, item.rawId, { sort: storeState.commentsSort })
     .then((page: CommentPage) => {
       if (requestId !== openRequestSeq) return
-      applyLater((): void => {
-        storeState.comments = page.comments
-        storeState.commentsCursor = page.cursor
-        storeState.commentsLoading = false
-      })
+      storeState.comments = page.comments
+      storeState.commentsCursor = page.cursor
+      storeState.commentsLoading = false
+      emitStore()
     })
     .catch(() => {
       if (requestId !== openRequestSeq) return
-      applyLater((): void => {
-        storeState.commentsLoading = false
-      })
+      storeState.commentsLoading = false
+      emitStore()
     })
 
   if (settings.sponsorBlockEnabled) {
     void fetchSponsorSegments(item.provider, item.rawId, settings.sponsorBlockCategories)
       .then((segments: SponsorSegment[]) => {
         if (requestId !== openRequestSeq) return
-        applyLater((): void => {
-          storeState.sponsorSegments = segments
-        })
+        storeState.sponsorSegments = segments
+        emitStore()
       })
       .catch(() => {})
   }
@@ -717,7 +727,6 @@ export async function openVideo(item: UnifiedVideoItem, options: OpenVideoOption
 
     await ctrl.play()
     if (requestId !== openRequestSeq) return
-    releaseHeld()
     // 字幕不擋第一幀，開播後才去拿，拿到再補進 manifest。
     const pendingSubtitles = manifest?.resolveSubtitles
     if (pendingSubtitles) {
@@ -733,7 +742,6 @@ export async function openVideo(item: UnifiedVideoItem, options: OpenVideoOption
     }
   } catch (err: unknown) {
     if (requestId !== openRequestSeq) return
-    releaseHeld()
     const message: string = err instanceof Error ? err.message : String(err)
     storeState.status = "error"
     storeState.errorText = message || "無法載入影片串流"

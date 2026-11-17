@@ -343,11 +343,14 @@ export function PlayerHost(props: {
                 allowsHitTesting={isMini}
                 clipped
               >
-                <MiniPlayerBar
-                  item={item}
-                  height={MINI_HEIGHT}
-                  trailingInset={MINI_RADIUS - MINI_BUTTON_SIZE / 2}
-                />
+                {/* 展開時不掛：迷你列會跟著 progress 重畫，沒顯示就別讓它存在。 */}
+                {morph > 0 ? (
+                  <MiniPlayerBar
+                    item={item}
+                    height={MINI_HEIGHT}
+                    trailingInset={MINI_RADIUS - MINI_BUTTON_SIZE / 2}
+                  />
+                ) : null}
               </ZStack>
             </HStack>
             {fullscreen ? null : (

@@ -14,7 +14,7 @@ import {
   useRef,
   useState,
 } from "scripting"
-import type { GeometryProxy, VirtualNode } from "scripting"
+import type { GeometryProxy, ScrollGeometry, ScrollPhase, ScrollPhaseChangeContext, VirtualNode } from "scripting"
 import type { Provider, UnifiedVideoItem, VideoChapter, VideoCollaborator, VideoPagePart } from "../types"
 import { CommentsSheet } from "../components/CommentsSheet"
 import { addToPlaylistFlow, VideoCard } from "../components/VideoCard"
@@ -34,6 +34,7 @@ import {
   providerFullName,
 } from "../utils/format"
 import {
+  getPlayerProgressSnapshot,
   loadCommentReplies,
   loadMoreComments,
   openVideo,
@@ -41,7 +42,8 @@ import {
   seekTo,
   selectPage,
   setCommentsSort,
-  usePlayerProgress,
+  setProgressUpdatesPaused,
+  subscribePlayerProgress,
   usePlayerStore,
 } from "../state/playerStore"
 import { Avatar, EmptyState, SectionHeader } from "../ui/primitives"
@@ -120,9 +122,27 @@ function SegmentCard(props: { caption: string; title: string; active: boolean; o
   )
 }
 
+// 只有「換章節」才重繪。原本訂閱 progress 是每個 tick 都重建整排卡片，
+// 那會讓正在捲動的頁面持續重排版，看起來一直在抖。
+function useActiveChapterIndex(chapters: VideoChapter[]): number {
+  const [index, setIndex] = useState<number>(-1)
+  useEffect(() => {
+    const apply = (): void => {
+      const position: number = getPlayerProgressSnapshot().position
+      const next: number = chapters.findIndex(
+        (chapter: VideoChapter): boolean => position >= chapter.startTime && position < chapter.endTime,
+      )
+      setIndex((previous: number): number => (previous === next ? previous : next))
+    }
+    apply()
+    return subscribePlayerProgress(apply)
+  }, [chapters])
+  return index
+}
+
 // 只有這塊跟著播放進度重繪，整頁不要訂閱 progress。
 function ChaptersSection(props: { chapters: VideoChapter[] }): VirtualNode {
-  const progress = usePlayerProgress()
+  const activeIndex: number = useActiveChapterIndex(props.chapters)
   return (
     <VStack alignment="leading" spacing={10}>
       <SectionHeader title="章節" />
@@ -133,7 +153,7 @@ function ChaptersSection(props: { chapters: VideoChapter[] }): VirtualNode {
               key={`chapter-${index}-${chapter.startTime}`}
               caption={formatDuration(chapter.startTime)}
               title={chapter.title}
-              active={progress.position >= chapter.startTime && progress.position < chapter.endTime}
+              active={index === activeIndex}
               onTap={() => void seekTo(chapter.startTime)}
             />
           ))}
@@ -161,6 +181,10 @@ export function WatchView(props: WatchViewProps): VirtualNode {
   // 所以自己把分頁與捲動位置收回頂部。
   useEffect(() => {
     setTab(TAB_RELATED)
+  }, [itemId])
+  // 換頁或關掉播放頁時把凍結解除，不然進度條會一直停住。
+  useEffect((): (() => void) => {
+    return (): void => setProgressUpdatesPaused(false)
   }, [itemId])
   const channelRawId: string = detail?.authorId || item?.authorId || ""
   const channelName: string = detail?.authorName || item?.authorName || ""
@@ -500,16 +524,26 @@ export function WatchView(props: WatchViewProps): VirtualNode {
       />
     )
 
-  // 留言捲到底自動抓下一頁。幾何回呼在每次捲動、內容變動時都會觸發，
-  // 用「載入中」旗標與距底部距離雙重擋住重複請求。
-  const handleCommentsScroll = (
-    _old: ScrollGeometrySnapshot,
-    next: ScrollGeometrySnapshot,
+  // 留言捲到底自動抓下一頁。
+  // 用「階段變化」而不是每幀的幾何回呼：幾何版每次捲動畫面都會跨橋進 JS，
+  // 就算立刻 return 也佔主執行緒；階段版一個手勢只回呼一兩次。
+  // 捲動時凍結播放進度通知：捲動是主執行緒最敏感的時刻，這一秒的數字沒人看得到。
+  const handleScrollPhase = (next: ScrollPhase): void => {
+    setProgressUpdatesPaused(String(next) !== "idle")
+  }
+
+  const handleCommentsPhase = (
+    _old: ScrollPhase,
+    next: ScrollPhase,
+    context: ScrollPhaseChangeContext,
   ): void => {
-    if (next.containerSize.height <= 0) return
+    handleScrollPhase(next)
+    if (String(next) !== "idle") return
+    const geometry: ScrollGeometry = context.geometry
+    if (geometry.containerSize.height <= 0) return
     if (store.commentsCursor === null) return
     if (store.commentsLoading || store.commentsLoadingMore) return
-    const remaining: number = next.contentSize.height - next.contentOffset.y - next.containerSize.height
+    const remaining: number = geometry.contentSize.height - geometry.contentOffset.y - geometry.containerSize.height
     if (remaining > COMMENTS_AUTO_LOAD_PX) return
     void loadMoreComments()
   }
@@ -563,6 +597,7 @@ export function WatchView(props: WatchViewProps): VirtualNode {
               scrollIndicator="hidden"
               tag={TAB_RELATED}
               frame={{ maxWidth: "infinity", maxHeight: "infinity", alignment: "top" }}
+              onScrollPhaseChange={(_old: ScrollPhase, next: ScrollPhase): void => handleScrollPhase(next)}
             >
               <VStack spacing={20} frame={{ maxWidth: "infinity" }} padding={{ top: 10, bottom: 24 }}>
                 {infoBlock}
@@ -580,7 +615,7 @@ export function WatchView(props: WatchViewProps): VirtualNode {
               scrollIndicator="hidden"
               tag={TAB_COMMENTS}
               frame={{ maxWidth: "infinity", maxHeight: "infinity", alignment: "top" }}
-              onScrollGeometryChange={{ of: "geometry", onChanged: handleCommentsScroll }}
+              onScrollPhaseChange={handleCommentsPhase}
             >
               <VStack spacing={0} frame={{ maxWidth: "infinity" }} padding={{ top: 10, bottom: 24 }}>
                 {commentsList}
