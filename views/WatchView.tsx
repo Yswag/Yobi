@@ -1,5 +1,6 @@
 import {
   EmptyView,
+  GeometryReader,
   HStack,
   Image,
   LazyVStack,
@@ -10,9 +11,10 @@ import {
   Text,
   VStack,
   useEffect,
+  useRef,
   useState,
 } from "scripting"
-import type { VirtualNode } from "scripting"
+import type { GeometryProxy, VirtualNode } from "scripting"
 import type { Provider, UnifiedVideoItem, VideoChapter, VideoCollaborator, VideoPagePart } from "../types"
 import { CommentsSheet } from "../components/CommentsSheet"
 import { addToPlaylistFlow, VideoCard } from "../components/VideoCard"
@@ -56,6 +58,14 @@ const TAB_RELATED: number = 0
 const TAB_COMMENTS: number = 1
 
 const SEGMENT_CARD_WIDTH: number = 156
+/** 留言捲到剩這麼多高度就自動抓下一頁。 */
+const COMMENTS_AUTO_LOAD_PX: number = 320
+
+interface ScrollGeometrySnapshot {
+  contentOffset: { x: number; y: number }
+  contentSize: { width: number; height: number }
+  containerSize: { width: number; height: number }
+}
 
 function ActionChip(props: { icon: string; label: string; active?: boolean; onTap: () => void }): VirtualNode {
   return (
@@ -146,6 +156,12 @@ export function WatchView(props: WatchViewProps): VirtualNode {
 
   const item: UnifiedVideoItem | null = store.currentItem
   const detail = store.detail
+  const itemId: string = item?.id ?? ""
+  // 這個元件跟著播放器常駐（PlayerHost 用 useMemo 包住），換片不會重建；
+  // 所以自己把分頁與捲動位置收回頂部。
+  useEffect(() => {
+    setTab(TAB_RELATED)
+  }, [itemId])
   const channelRawId: string = detail?.authorId || item?.authorId || ""
   const channelName: string = detail?.authorName || item?.authorName || ""
   const channelAvatar: string | undefined = detail?.authorAvatar || item?.authorAvatar
@@ -484,6 +500,20 @@ export function WatchView(props: WatchViewProps): VirtualNode {
       />
     )
 
+  // 留言捲到底自動抓下一頁。幾何回呼在每次捲動、內容變動時都會觸發，
+  // 用「載入中」旗標與距底部距離雙重擋住重複請求。
+  const handleCommentsScroll = (
+    _old: ScrollGeometrySnapshot,
+    next: ScrollGeometrySnapshot,
+  ): void => {
+    if (next.containerSize.height <= 0) return
+    if (store.commentsCursor === null) return
+    if (store.commentsLoading || store.commentsLoadingMore) return
+    const remaining: number = next.contentSize.height - next.contentOffset.y - next.containerSize.height
+    if (remaining > COMMENTS_AUTO_LOAD_PX) return
+    void loadMoreComments()
+  }
+
   return (
     <VStack
       spacing={8}
@@ -497,40 +527,62 @@ export function WatchView(props: WatchViewProps): VirtualNode {
         },
       }}
     >
+      {/* 頁首當真正的兄弟，佔實際空間（不疊上去、不靠安全區）。 */}
       <Picker
         title="內容"
         value={tab}
         onChanged={(next: number) => withAnimation(() => setTab(next))}
         pickerStyle="segmented"
-        padding={{ horizontal: space.page, top: 10 }}
+        frame={{ maxWidth: "infinity", height: 32 }}
+        padding={{ horizontal: space.page, top: 6, bottom: 6 }}
+        background="systemBackground"
       >
         <Text tag={TAB_RELATED}>詳情</Text>
         <Text tag={TAB_COMMENTS}>留言</Text>
       </Picker>
-      <TabView
-        tabIndex={tab}
-        onTabIndexChanged={setTab}
-        tabViewStyle="pageNeverDisplayIndex"
-        frame={{ maxWidth: "infinity", maxHeight: "infinity" }}
-      >
-        <ScrollView axes="vertical" scrollIndicator="hidden" tag={TAB_RELATED}>
-          <VStack spacing={20} frame={{ maxWidth: "infinity" }} padding={{ bottom: 24 }}>
-            {infoBlock}
-            {actionBar}
-            {pagesSection}
-            {chaptersSection}
-            <VStack spacing={10} frame={{ maxWidth: "infinity" }}>
-              <SectionHeader title="相關影片" />
-              {relatedList}
-            </VStack>
-          </VStack>
-        </ScrollView>
-        <ScrollView axes="vertical" scrollIndicator="hidden" tag={TAB_COMMENTS}>
-          <VStack spacing={0} frame={{ maxWidth: "infinity" }} padding={{ top: 6, bottom: 24 }}>
-            {commentsList}
-          </VStack>
-        </ScrollView>
-      </TabView>
+      {/* TabView 不會回報自己需要多少高，要自己量。
+          兩頁改成「填滿且靠上」：寫死高度時頁面比容器高，SwiftUI 會把它垂直置中，
+          上緣就溢出到容器外 → 最上面那排內容看起來被切掉。 */}
+      <GeometryReader>
+        {(proxy: GeometryProxy) => (
+          <TabView
+            key={`pager-${itemId}`}
+            tabIndex={tab}
+            onTabIndexChanged={setTab}
+            tabViewStyle="pageNeverDisplayIndex"
+            frame={{ width: proxy.size.width, height: proxy.size.height }}
+          >
+            <ScrollView
+              axes="vertical"
+              scrollIndicator="hidden"
+              tag={TAB_RELATED}
+              frame={{ maxWidth: "infinity", maxHeight: "infinity", alignment: "top" }}
+            >
+              <VStack spacing={20} frame={{ maxWidth: "infinity" }} padding={{ top: 10, bottom: 24 }}>
+                {infoBlock}
+                {actionBar}
+                {pagesSection}
+                {chaptersSection}
+                <VStack spacing={10} frame={{ maxWidth: "infinity" }}>
+                  <SectionHeader title="相關影片" />
+                  {relatedList}
+                </VStack>
+              </VStack>
+            </ScrollView>
+            <ScrollView
+              axes="vertical"
+              scrollIndicator="hidden"
+              tag={TAB_COMMENTS}
+              frame={{ maxWidth: "infinity", maxHeight: "infinity", alignment: "top" }}
+              onScrollGeometryChange={{ of: "geometry", onChanged: handleCommentsScroll }}
+            >
+              <VStack spacing={0} frame={{ maxWidth: "infinity" }} padding={{ top: 10, bottom: 24 }}>
+                {commentsList}
+              </VStack>
+            </ScrollView>
+          </TabView>
+        )}
+      </GeometryReader>
     </VStack>
   )
 }
