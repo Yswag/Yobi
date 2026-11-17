@@ -47,6 +47,7 @@ export * from "./auth"
 export * from "./sponsorblock"
 export * from "./localProxy"
 export { prefetchedAheadBytes, prefetchWindow, releaseAllPrefetchers } from "./prefetch"
+export { lastMediaFailure } from "./mediaServer"
 export { currentDownloadBps, lastDownloadHost } from "./netMeter"
 export * from "./downloads"
 

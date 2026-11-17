@@ -603,8 +603,19 @@ async function fetchBiliAttempt(
     })
     if (response.status === 416) return { ok: false, ms: Date.now() - startedAt, reason: "416" }
     if (!response.ok) return { ok: false, ms: Date.now() - startedAt, reason: `HTTP ${response.status}` }
+    // CDN 擋人或過期時會用 200 回錯誤頁；這種位元組進了快取就是壞資料。
+    const contentType: string = (response.headers.get("content-type") ?? "").toLowerCase()
+    if (contentType.includes("text/") || contentType.includes("json") || contentType.includes("xml")) {
+      return { ok: false, ms: Date.now() - startedAt, reason: `content-type ${contentType}` }
+    }
     const total: number = Number(response.headers.get("content-range")?.split("/")[1])
     const bytes: Uint8Array = new Uint8Array(await response.arrayBuffer())
+    // 206 就該吐出完整一格；比要求的少就代表上游截斷，拼起來的片段會壞掉。
+    const known: boolean = Number.isFinite(total) && total > 0
+    const atEof: boolean = known && start + bytes.byteLength >= total
+    if (response.status === 206 && bytes.byteLength < BILI_WINDOW_BYTES && !atEof) {
+      return { ok: false, ms: Date.now() - startedAt, reason: `short ${bytes.byteLength}/${BILI_WINDOW_BYTES}` }
+    }
     // 試線的格子算進網速，但不是主線路，不更新面板上的「線路」。
     recordDownload(bytes.byteLength, trackHost ? url : "")
     // 伺服器忽略 Range 回整個檔時，自己切出這一格。
@@ -614,7 +625,7 @@ async function fetchBiliAttempt(
         : bytes.byteLength > BILI_WINDOW_BYTES
           ? bytes.slice(0, BILI_WINDOW_BYTES)
           : bytes
-    return { ok: true, bytes: sliced, ms: Date.now() - startedAt, total: Number.isFinite(total) && total > 0 ? total : null }
+    return { ok: true, bytes: sliced, ms: Date.now() - startedAt, total: known ? total : null }
   } catch (error) {
     return {
       ok: false,

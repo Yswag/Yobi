@@ -35,7 +35,10 @@ interface Session {
 }
 
 const PIPELINE: number = 6
-const IDLE_TIMEOUT_MS: number = 15000
+// 等格子時沒東西可寫，socket 閒置時間不能比單格逾時短，不然會被自己砍掉。
+const IDLE_TIMEOUT_MS: number = 60000
+/** 同一格最多要幾次（預抓器內部已經會重試一次）。 */
+const GRID_TRIES: number = 3
 
 const sessions: Map<string, Session> = new Map()
 let server: Server | null = null
@@ -74,9 +77,32 @@ async function writeChunk(socket: Socket, bytes: Uint8Array): Promise<boolean> {
   })
 }
 
+/** 最近一次抓不到片段的說明，給播放統計面板看。 */
+let lastFailure: string | null = null
+
+function noteFailure(text: string): void {
+  lastFailure = text
+}
+
+export function lastMediaFailure(): string | null {
+  return lastFailure
+}
+
+/** 要一格；失敗就再要一次，換線路由 localProxy 自己處理。 */
+async function fetchGrid(access: BiliStreamAccess, index: number): Promise<Uint8Array | null> {
+  for (let attempt = 0; attempt < GRID_TRIES; attempt++) {
+    access.markWaiting(index)
+    const bytes: Uint8Array | null = await access.prefetcher.get(index).catch((): null => null)
+    if (bytes && bytes.byteLength > 0) return bytes
+  }
+  noteFailure(`第 ${index} 格（${index * access.windowBytes} 起）抓不到`)
+  return null
+}
+
 /**
- * 把 [start, end] 這段邊抓邊送。第一格到齊就先送 header，之後每格寫一段；
- * 播放器斷線（seek 很常發生）就停止，不再往後抓。
+ * 回答 [start, end] 這段：第一格到就先送 header，之後每格到就寫一段；
+ * 播放器斷線（seek 很常發生）就停手，不再往後抓。
+ * 中途拿不到格子時只能斷線（長度已經宣告了），所以抓格子本身先重試。
  */
 async function streamRange(
   socket: Socket,
@@ -89,14 +115,16 @@ async function streamRange(
 ): Promise<void> {
   const requested: RegExpMatchArray | null = /bytes=(\d*)-(\d*)/.exec(rangeHeader ?? "")
   const from: number = requested && requested[1] ? Math.max(start, Number(requested[1])) : start
-  const to: number = requested && requested[2] ? Math.min(end, Number(requested[2])) : end
+  const total: number | null = access.total()
+  // 檔尾沒那麼多位元組就先修正結尾，不要宣告了長度又寫不滿。
+  const rawTo: number = requested && requested[2] ? Math.min(end, Number(requested[2])) : end
+  const to: number = total !== null ? Math.min(rawTo, total - 1) : rawTo
   if (to < from) {
     socket.write(headerBlock("416 Range Not Satisfiable", { "Content-Length": "0" }))
     socket.end()
     return
   }
   const partial: boolean = from !== start || to !== end
-  const window: number = Math.max(64 * 1024, access.windowBytes)
   let closed: boolean = false
   socket.on("close", (): void => {
     closed = true
@@ -104,50 +132,56 @@ async function streamRange(
   socket.on("error", (): void => {
     closed = true
   })
-
-  const firstIndex: number = Math.floor(from / window)
-  const lastIndex: number = Math.floor(to / window)
-  const pending: Map<number, Promise<Uint8Array | null>> = new Map()
-  const launch = (index: number): void => {
-    if (index > lastIndex || pending.has(index)) return
-    access.markWaiting(index)
-    pending.set(index, access.prefetcher.get(index).catch((): null => null))
-  }
-  launch(firstIndex)
-  for (let index = firstIndex + 1; index < firstIndex + PIPELINE; index++) launch(index)
-
-  const first: Uint8Array | null = await pending.get(firstIndex)!
-  if (!first || closed) {
-    socket.destroy()
-    return
+  const aborted: () => boolean = (): boolean => closed || socket.destroyed
+  const headers: Record<string, string> = {
+    "Content-Type": track.mimeType || "video/mp4",
+    "Content-Length": String(to - from + 1),
+    "Accept-Ranges": "bytes",
+    // Content-Range 只能出現在 206；跟 200 一起送 ffmpeg 會回 Invalid data。
+    ...(partial ? { "Content-Range": `bytes ${from}-${to}/${total ?? "*"}` } : {}),
   }
 
-  const total: number | null = access.total()
-  socket.write(
-    headerBlock(partial ? "206 Partial Content" : "200 OK", {
-      "Content-Type": track.mimeType || "video/mp4",
-      "Content-Length": String(to - from + 1),
-      "Accept-Ranges": "bytes",
-      // Content-Range 只能出現在 206；跟 200 一起送 ffmpeg 會回 Invalid data。
-      ...(partial ? { "Content-Range": `bytes ${from}-${to}/${total ?? "*"}` } : {}),
-    }),
-  )
   if (head) {
+    socket.write(headerBlock(partial ? "206 Partial Content" : "200 OK", headers))
     socket.end()
     return
   }
 
+  const window: number = Math.max(64 * 1024, access.windowBytes)
+  const firstIndex: number = Math.floor(from / window)
+  const lastIndex: number = Math.floor(to / window)
+  const pending: Map<number, Promise<Uint8Array | null>> = new Map()
+  const launch = (index: number): void => {
+    if (index < firstIndex || index > lastIndex || pending.has(index)) return
+    pending.set(index, fetchGrid(access, index))
+  }
+  for (let index = firstIndex; index < firstIndex + PIPELINE; index++) launch(index)
+
+  const first: Uint8Array | null = await pending.get(firstIndex)!
+  if (!first || aborted()) {
+    // header 還沒送，來得及回一個乾淨的錯誤。
+    if (!socket.destroyed) {
+      socket.write(headerBlock("503 Service Unavailable", { "Content-Type": "text/plain", "Content-Length": "0" }))
+      socket.end()
+    }
+    return
+  }
+
+  socket.write(headerBlock(partial ? "206 Partial Content" : "200 OK", headers))
+
   for (let index = firstIndex; index <= lastIndex; index++) {
-    if (closed) return
-    const bytes: Uint8Array | null = index === firstIndex ? first : await pending.get(index) ?? null
+    if (aborted()) return
+    const bytes: Uint8Array | null = index === firstIndex ? first : await pending.get(index)!
     if (!bytes) {
+      // 已經宣告長度了，與其送半截讓播放器判 Invalid data，不如把連線切掉。
+      noteFailure(`片段 ${from}-${to} 第 ${index} 格拿不到`)
       socket.destroy()
       return
     }
-    launch(index + PIPELINE)
     const gridStart: number = index * window
     const sliceFrom: number = Math.max(0, from - gridStart)
     const sliceTo: number = Math.min(bytes.byteLength, to - gridStart + 1)
+    launch(index + PIPELINE)
     if (sliceTo > sliceFrom && !(await writeChunk(socket, bytes.subarray(sliceFrom, sliceTo)))) return
   }
   socket.end()
@@ -304,6 +338,7 @@ async function start(): Promise<number> {
 /** 註冊一個 HLS session，回傳 master playlist 的本地網址。 */
 export async function registerMediaSession(id: string, session: MediaSession): Promise<string> {
   const port: number = await start()
+  lastFailure = null
   sessions.set(id, { session, access: new Map() })
   return `http://127.0.0.1:${port}/media-hls/${id}/master.m3u8`
 }

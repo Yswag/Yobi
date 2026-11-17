@@ -1,7 +1,7 @@
 import { HStack, Text, VStack, useEffect, useState } from "scripting"
 import type { VirtualNode } from "scripting"
 import type { VideoQualityTrack } from "../types"
-import { currentDownloadBps, lastDownloadHost, prefetchedAheadBytes, prefetchWindow } from "../services"
+import { currentDownloadBps, lastDownloadHost, lastMediaFailure, prefetchedAheadBytes, prefetchWindow } from "../services"
 import { getPlayerController, usePlayerProgress, usePlayerStore } from "../state/playerStore"
 import { palette, type } from "../ui/theme"
 
@@ -122,6 +122,7 @@ export function PlaybackStatsPanel(): VirtualNode {
     { label: "碼率", value: join([formatMbps(quality?.bitrate ?? video?.bitRate)]) },
     { label: "來源", value: join([store.manifest?.delivery.toUpperCase(), info?.backend, info?.container]) },
     { label: "線路", value: lastDownloadHost() },
+    { label: "代理", value: lastMediaFailure() ?? "" },
   ].filter((row: { label: string; value: string }): boolean => row.value.length > 0)
 
   return (
