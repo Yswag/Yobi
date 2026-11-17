@@ -44,8 +44,13 @@ import { NetSpeedLabel, PlaybackStatsPanel } from "./PlaybackStats"
 export interface PlayerControlsOverlayProps {
   width: number
   height: number
+  // 下拉位移要量的座標空間名稱（掛在靜止的根層，不跟著卡片跑）。
+  dragSpace: string
   onOpenQualitySheet?: () => void
   onOpenDanmakuSheet?: () => void
+  // 下拉收成迷你播放器的位移回報，收合動畫由 PlayerHost 依這個值跟手。
+  onMinimizeDragChanged?: (dy: number, dx: number) => void
+  onMinimizeDragEnded?: (dy: number, dx: number, predictedDy: number) => void
 }
 
 const AUTO_HIDE_MS: number = 4000
@@ -56,7 +61,6 @@ const DOUBLE_TAP_MS: number = 230
 const TAP_HINT_MS: number = 650
 const PLAYBACK_RATES: number[] = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2]
 const EDGE_SCRIM_HEIGHT: number = 96
-const MINIMIZE_DRAG_DISTANCE: number = 70
 const SCRUBBER_HEIGHT: number = 22
 const SCRUBBER_TRACK: number = 3
 const SCRUBBER_KNOB: number = 11
@@ -205,11 +209,18 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
     else showControls()
   }
 
+  function handleDragChanged(d: DragGestureDetails): void {
+    if (store.isFullscreen) return
+    props.onMinimizeDragChanged?.(d.translation.height, d.translation.width)
+  }
+
   function handleDragEnded(d: DragGestureDetails): void {
-    const dy: number = d.translation.height
-    if (!store.isFullscreen && dy > MINIMIZE_DRAG_DISTANCE && dy > Math.abs(d.translation.width)) {
-      minimizeToMiniPlayer()
-    }
+    if (store.isFullscreen) return
+    props.onMinimizeDragEnded?.(
+      d.translation.height,
+      d.translation.width,
+      d.predictedEndTranslation.height,
+    )
   }
 
   function handleBack(): void {
@@ -644,8 +655,10 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
         frame={{ width: props.width, height: props.height }}
         onTapGesture={{ count: 1, coordinateSpace: "local", perform: handleTap }}
         onDragGesture={{
-          minDistance: 16,
-          coordinateSpace: "local",
+          minDistance: 10,
+          // 卡片自己會跟著手指移動又要縮小，對它自身量位移會愈拖愈偏；要對靜止的根層量。
+          coordinateSpace: props.dragSpace,
+          onChanged: handleDragChanged,
           onEnded: handleDragEnded,
         }}
       />

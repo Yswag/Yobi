@@ -6,6 +6,7 @@ import {
   ZStack,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "scripting"
@@ -15,6 +16,7 @@ import type { PlayerPresentationMode, PlayerProgressSnapshot, PlayerStoreSnapsho
 import {
   expandFromMiniPlayer,
   getPlayerController,
+  minimizeToMiniPlayer,
   usePlayerProgress,
   usePlayerStore,
 } from "../state/playerStore"
@@ -40,6 +42,35 @@ const MORPH_SECONDS: number = 0.38
 // so nothing is half-visible while the card is still changing shape.
 const FADE_OUT_SECONDS: number = 0.12
 const FADE_IN_SECONDS: number = 0.2
+// 手勢掛在會移動的卡片上，位移一定要對一個「靜止」的座標空間量，不然誤差會隨卡片下移累積。
+const PLAYER_DRAG_SPACE: string = "playerRoot"
+// 卡片上緣跟著手指 1:1 走，所以「拖到迷你播放器位置」剛好就是收完；放開時走過這個比例才收。
+const MINIMIZE_DRAG_RATIO: number = 0.45
+
+function clamp01(value: number): number {
+  return Math.max(0, Math.min(1, value))
+}
+
+function mix(from: number, to: number, t: number): number {
+  return from + (to - from) * t
+}
+
+/** Same shape at any point between expanded and mini, so the card can follow the finger. */
+function blendGeometry(from: CardGeometry, to: CardGeometry, t: number): CardGeometry {
+  return {
+    width: mix(from.width, to.width, t),
+    height: mix(from.height, to.height, t),
+    x: mix(from.x, to.x, t),
+    y: mix(from.y, to.y, t),
+    rowHeight: mix(from.rowHeight, to.rowHeight, t),
+    videoWidth: mix(from.videoWidth, to.videoWidth, t),
+    videoHeight: mix(from.videoHeight, to.videoHeight, t),
+    videoInset: mix(from.videoInset, to.videoInset, t),
+    videoRadius: mix(from.videoRadius, to.videoRadius, t),
+    topInset: mix(from.topInset, to.topInset, t),
+    radius: mix(from.radius, to.radius, t),
+  }
+}
 
 interface Insets {
   top: number
@@ -74,6 +105,10 @@ export function PlayerHost(props: {
   const progress: PlayerProgressSnapshot = usePlayerProgress()
   const [showQualitySheet, setShowQualitySheet] = useState<boolean>(false)
   const [showDanmakuSheet, setShowDanmakuSheet] = useState<boolean>(false)
+  // 拖曳過程中手指的垂直位移（pt）；null 代表手指不在畫面上。
+  const [dragTranslation, setDragTranslation] = useState<number | null>(null)
+  // 展開到迷你的垂直距離，每次重繪更新，回呼裡要用最新值。
+  const dragTravelRef = useRef<number>(1)
 
   // 這個元件隨播放進度重繪；給 WatchView 的回呼要固定，不然整個播放頁跟著重繪。
   const onOpenChannelRef = useRef(props.onOpenChannel)
@@ -86,6 +121,19 @@ export function PlayerHost(props: {
   )
   const openQualitySheet = useCallback((): void => setShowQualitySheet(true), [])
   const openDanmakuSheet = useCallback((): void => setShowDanmakuSheet(true), [])
+
+  // 垂直往下的拖曳才跟手；偏水平或往上就讓卡片留在展開位置。
+  const handleMinimizeDragChanged = useCallback((dy: number, dx: number): void => {
+    setDragTranslation(dy > 0 && dy > Math.abs(dx) ? dy : 0)
+  }, [])
+  const handleMinimizeDragEnded = useCallback((dy: number, dx: number, predictedDy: number): void => {
+    const travel: number = dragTravelRef.current
+    // 甩一下也算：預測位移最多多算 1/4 路程，免得小閃一下就收。
+    const projected: number = Math.max(dy, Math.min(predictedDy, dy + travel * 0.25))
+    // 先換模式再清位移：兩個更新若分成兩次重繪，中途也不會退回展開的幾何。
+    if (projected > travel * MINIMIZE_DRAG_RATIO && dy > Math.abs(dx)) minimizeToMiniPlayer()
+    setDragTranslation(null)
+  }, [])
 
   // Keep drawing the last video while the card slides away after closing.
   const lastItemRef = useRef<UnifiedVideoItem | null>(null)
@@ -148,7 +196,7 @@ export function PlayerHost(props: {
     radius: MINI_RADIUS,
   }
   const restsMini: boolean = restingModeRef.current === "mini"
-  const geometry: CardGeometry = mode === "mini"
+  const settled: CardGeometry = mode === "mini"
     ? mini
     : mode === "expanded"
       ? expanded
@@ -158,6 +206,32 @@ export function PlayerHost(props: {
 
   const isExpanded: boolean = mode === "expanded"
   const isMini: boolean = mode === "mini"
+  // 插值用的路程：卡片從展開位置走到迷你播放器要走多遠。
+  const dragTravel: number = Math.max(1, mini.y - expanded.y)
+  dragTravelRef.current = dragTravel
+  // 拖曳中、且還在展開狀態時才跟手；進度直接拿位移除以路程，卡片上緣才會貼著手指。
+  const drag: number | null = isExpanded && !fullscreen && dragTranslation !== null
+    ? clamp01(dragTranslation / dragTravel)
+    : null
+  const geometry: CardGeometry = drag === null ? settled : blendGeometry(expanded, mini, drag)
+  // 0 = 完全展開、1 = 完全收成迷你播放器；分層的不透明度都吃這個值。
+  const morph: number = drag !== null ? drag : isMini ? 1 : 0
+  const watchOpacity: number = isExpanded ? clamp01(1 - morph / 0.3) : 0
+  const controlsOpacity: number = 1 - clamp01(morph / 0.3)
+  const surfaceOpacity: number = 1 - clamp01((morph - 0.35) / 0.65)
+  const miniBarOpacity: number = clamp01((morph - 0.5) / 0.5)
+  // 跟手拖曳時這個元件每幀重繪；播放頁自己接 store，不必跟著重建。
+  const watchNode: VirtualNode = useMemo(
+    () => (
+      <WatchView
+        onOpenChannel={openChannel}
+        onOpenQualitySheet={openQualitySheet}
+        onOpenDanmakuSheet={openDanmakuSheet}
+      />
+    ),
+    [openChannel, openQualitySheet, openDanmakuSheet],
+  )
+
   const duration: number = progress.duration > 0 ? progress.duration : item?.duration ?? 0
   const ratio: number = duration > 0 ? progress.position / duration : 0
   const surfaceColor = fullscreen ? "black" : "systemBackground"
@@ -167,6 +241,7 @@ export function PlayerHost(props: {
   return (
     <ZStack
       alignment="topLeading"
+      coordinateSpace={PLAYER_DRAG_SPACE}
       // In landscape the root is shorter than the screen, so a fixed-size frame would be centered and leave a gap.
       frame={fullscreen
         ? { maxWidth: "infinity", maxHeight: "infinity", alignment: "topLeading" }
@@ -179,8 +254,16 @@ export function PlayerHost(props: {
         offset={{ x: geometry.x, y: geometry.y }}
         opacity={mode === "hidden" && restsMini ? 0 : 1}
         allowsHitTesting={mode !== "hidden"}
-        shadow={isMini ? { color: "rgba(0,0,0,0.25)", radius: 16, y: 6 } : { color: "rgba(0,0,0,0)", radius: 0 }}
-        animation={{ animation: Animation.smooth({ duration: MORPH_SECONDS }), value: `${mode}|${fullscreen}` }}
+        shadow={{
+          color: morph > 0 ? "rgba(0,0,0,0.25)" : "rgba(0,0,0,0)",
+          radius: 16 * morph,
+          y: 6 * morph,
+        }}
+        // 拖曳途中值不變，所以幾何直接貼著手指；放開後才用動畫收尾。
+        animation={{
+          animation: Animation.smooth({ duration: MORPH_SECONDS }),
+          value: `${mode}|${fullscreen}|${drag === null ? "settled" : "drag"}`,
+        }}
         sheet={{
           isPresented: showQualitySheet,
           onChanged: setShowQualitySheet,
@@ -196,12 +279,12 @@ export function PlayerHost(props: {
             fill="rgba(0,0,0,0.001)"
             frame={{ width: geometry.width, height: geometry.height }}
             glassEffect={{ glass: UIGlass.regular(), shape: { type: "rect", cornerRadius: geometry.radius } }}
-            opacity={isMini ? 1 : 0}
+            opacity={morph}
           />
           <Rectangle
             fill={surfaceColor}
             frame={{ width: geometry.width, height: geometry.height }}
-            opacity={isMini ? 0 : 1}
+            opacity={surfaceOpacity}
             animation={{ animation: isMini ? fadeInLate : fadeOut, value: isMini }}
           />
           <VStack spacing={0} alignment="leading" frame={{ width: geometry.width, height: geometry.height, alignment: "top" }}>
@@ -233,6 +316,7 @@ export function PlayerHost(props: {
                 )}
                 {isExpanded ? (
                   <ZStack
+                    opacity={controlsOpacity}
                     transition={Transition.asymmetric(
                       Transition.opacity().animation(fadeInLate),
                       Transition.opacity().animation(fadeOut),
@@ -241,8 +325,11 @@ export function PlayerHost(props: {
                     <PlayerControlsOverlay
                       width={geometry.videoWidth}
                       height={geometry.videoHeight}
+                      dragSpace={PLAYER_DRAG_SPACE}
                       onOpenQualitySheet={() => setShowQualitySheet(true)}
                       onOpenDanmakuSheet={() => setShowDanmakuSheet(true)}
+                      onMinimizeDragChanged={handleMinimizeDragChanged}
+                      onMinimizeDragEnded={handleMinimizeDragEnded}
                     />
                   </ZStack>
                 ) : (
@@ -255,7 +342,7 @@ export function PlayerHost(props: {
               </ZStack>
               <ZStack
                 frame={{ width: Math.max(0, geometry.width - geometry.videoWidth - geometry.videoInset), height: geometry.rowHeight }}
-                opacity={isMini ? 1 : 0}
+                opacity={miniBarOpacity}
                 animation={{ animation: isMini ? fadeInLate : fadeOut, value: isMini }}
                 allowsHitTesting={isMini}
                 clipped
@@ -271,15 +358,11 @@ export function PlayerHost(props: {
             {fullscreen ? null : (
               <ZStack
                 frame={{ width: geometry.width, maxHeight: "infinity", alignment: "top" }}
-                opacity={isExpanded ? 1 : 0}
+                opacity={watchOpacity}
                 animation={{ animation: isExpanded ? fadeInLate : fadeOut, value: isExpanded }}
                 allowsHitTesting={isExpanded}
               >
-                <WatchView
-                  onOpenChannel={openChannel}
-                  onOpenQualitySheet={openQualitySheet}
-                  onOpenDanmakuSheet={openDanmakuSheet}
-                />
+                {watchNode}
               </ZStack>
             )}
           </VStack>
