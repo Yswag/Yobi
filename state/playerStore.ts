@@ -568,44 +568,67 @@ export async function openVideo(item: UnifiedVideoItem, options: OpenVideoOption
   subtitleVttCache.clear()
   danmakuXmlCache.clear()
 
+  // 開片期間每一次 store 通知都會重建整個觀看頁（留言、推薦、描述）；
+  // 先收著，等第一幀出來再一次套用，開片那段就不會被重繪打斷。
+  const heldUpdates: (() => void)[] = []
+  let firstFrame: boolean = false
+  const applyLater = (update: () => void): void => {
+    if (firstFrame) {
+      update()
+      emitStore()
+      return
+    }
+    heldUpdates.push(update)
+  }
+  const releaseHeld = (): void => {
+    firstFrame = true
+    if (heldUpdates.length === 0) return
+    for (const update of heldUpdates.splice(0)) update()
+    emitStore()
+  }
+
   // Kick off detail, comments, and SponsorBlock in parallel so video opens as fast as possible
   void getVideoDetail(item.provider, item.rawId)
     .then((detail: VideoDetail) => {
       if (requestId !== openRequestSeq) return
-      const resolvedCid: number | undefined =
-        storeState.activeCid ?? detail.cid ?? detail.pages?.[0]?.cid
-      storeState.detail = detail
-      if (resolvedCid && !storeState.activeCid) {
-        storeState.activeCid = resolvedCid
-      }
-      if (detail.duration > 0 && progressState.duration <= 0) {
-        progressState.duration = detail.duration
-        emitProgress()
-      }
-      emitStore()
+      applyLater((): void => {
+        const resolvedCid: number | undefined =
+          storeState.activeCid ?? detail.cid ?? detail.pages?.[0]?.cid
+        storeState.detail = detail
+        if (resolvedCid && !storeState.activeCid) {
+          storeState.activeCid = resolvedCid
+        }
+        if (detail.duration > 0 && progressState.duration <= 0) {
+          progressState.duration = detail.duration
+          emitProgress()
+        }
+      })
     })
     .catch(() => {})
 
   void getCommentPage(item.provider, item.rawId, { sort: storeState.commentsSort })
     .then((page: CommentPage) => {
       if (requestId !== openRequestSeq) return
-      storeState.comments = page.comments
-      storeState.commentsCursor = page.cursor
-      storeState.commentsLoading = false
-      emitStore()
+      applyLater((): void => {
+        storeState.comments = page.comments
+        storeState.commentsCursor = page.cursor
+        storeState.commentsLoading = false
+      })
     })
     .catch(() => {
       if (requestId !== openRequestSeq) return
-      storeState.commentsLoading = false
-      emitStore()
+      applyLater((): void => {
+        storeState.commentsLoading = false
+      })
     })
 
   if (settings.sponsorBlockEnabled) {
     void fetchSponsorSegments(item.provider, item.rawId, settings.sponsorBlockCategories)
       .then((segments: SponsorSegment[]) => {
         if (requestId !== openRequestSeq) return
-        storeState.sponsorSegments = segments
-        emitStore()
+        applyLater((): void => {
+          storeState.sponsorSegments = segments
+        })
       })
       .catch(() => {})
   }
@@ -693,8 +716,24 @@ export async function openVideo(item: UnifiedVideoItem, options: OpenVideoOption
     }
 
     await ctrl.play()
+    if (requestId !== openRequestSeq) return
+    releaseHeld()
+    // 字幕不擋第一幀，開播後才去拿，拿到再補進 manifest。
+    const pendingSubtitles = manifest?.resolveSubtitles
+    if (pendingSubtitles) {
+      void pendingSubtitles()
+        .then((tracks: SubtitleTrackInfo[]) => {
+          if (requestId !== openRequestSeq) return
+          const current = storeState.manifest
+          if (!current) return
+          storeState.manifest = { ...current, subtitles: tracks }
+          emitStore()
+        })
+        .catch(() => {})
+    }
   } catch (err: unknown) {
     if (requestId !== openRequestSeq) return
+    releaseHeld()
     const message: string = err instanceof Error ? err.message : String(err)
     storeState.status = "error"
     storeState.errorText = message || "無法載入影片串流"

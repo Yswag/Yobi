@@ -476,13 +476,15 @@ export async function prepareBiliPlayback(
     return { media, mimeType, sourceId, localUrl, index: loaded ?? null }
   }
 
-  const videos: PreparedTrack[] = []
-  for (let index = 0; index < videoMedias.length; index++) {
-    videos.push(await build(videoMedias[index], "video/mp4", index))
-  }
-  const audio: PreparedTrack | null = audios[0]
-    ? await build(audios[0], "audio/mp4", 0)
-    : null
+  // 每條軌都要向 CDN 拿一次檔頭（init＋sidx）；並行拿，不然音軌得等影片軌回來。
+  const builds: Promise<PreparedTrack>[] = videoMedias.map(
+    (media: BiliDashMedia, index: number): Promise<PreparedTrack> => build(media, "video/mp4", index),
+  )
+  const audioMedia: BiliDashMedia | undefined = audios[0]
+  if (audioMedia) builds.push(build(audioMedia, "audio/mp4", 0))
+  const built: PreparedTrack[] = await Promise.all(builds)
+  const videos: PreparedTrack[] = built.slice(0, videoMedias.length)
+  const audio: PreparedTrack | null = audioMedia ? built[videoMedias.length] : null
   return { videos, audio }
 }
 

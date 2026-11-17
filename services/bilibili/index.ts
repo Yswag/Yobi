@@ -32,6 +32,25 @@ const VIEW_URL = `${API}/x/web-interface/view`
 const VIEW_DETAIL_URL = `${API}/x/web-interface/view/detail`
 const RELATED_URL = `${API}/x/web-interface/archive/related`
 
+/**
+ * `/x/web-interface/view` 的短期快取：開片時詳情與串流解析會同時要同一支影片，
+ * 共用同一個 promise 就少一次 round trip（這是主執行緒等最久的那一段）。
+ */
+const VIEW_CACHE_MS: number = 20_000
+const viewCache: Map<string, { at: number; promise: Promise<any> }> = new Map()
+
+function fetchView(bvid: string, params?: Record<string, string | number>): Promise<any> {
+  const now: number = Date.now()
+  const cached = viewCache.get(bvid)
+  if (cached && now - cached.at < VIEW_CACHE_MS) return cached.promise
+  const promise: Promise<any> = biliFetchJson<any>(VIEW_URL, params ?? { bvid })
+  viewCache.set(bvid, { at: now, promise })
+  promise.catch((): void => {
+    if (viewCache.get(bvid)?.promise === promise) viewCache.delete(bvid)
+  })
+  return promise
+}
+
 const BILI_HEADERS: Record<string, string> = {
   Referer: BILI_REFERER,
   "User-Agent": BILI_USER_AGENT,
@@ -403,7 +422,9 @@ export async function getBiliVideoDetail(bvidOrAid: string): Promise<VideoDetail
   }
 
   if (!view) {
-    const result: any = await biliFetchJson<any>(VIEW_URL, params)
+    const result: any = ids.bvid
+      ? await fetchView(ids.bvid, params)
+      : await biliFetchJson<any>(VIEW_URL, params)
     if (result?.code !== 0 || !result.data) {
       throw new Error(result?.message || "無法取得影片資訊")
     }
@@ -582,7 +603,7 @@ export async function resolveBiliStream(
   let fallbackAid = ids.aid
 
   if (!resolvedCid) {
-    const view: any = await biliFetchJson<any>(VIEW_URL, { bvid: resolvedBvid })
+    const view: any = await fetchView(resolvedBvid)
     if (view?.code !== 0 || !view.data?.cid) {
       throw new Error(view?.message || "無法取得影片資訊")
     }
@@ -614,7 +635,10 @@ export async function resolveBiliStream(
   const streamCid = Number(resolvedCid)
   const danmakuXmlUrl = `https://comment.bilibili.com/${streamCid}.xml`
   const dash: BiliDashPayload | undefined = data.dash
-  const subtitles: SubtitleTrackInfo[] = await fetchBiliSubtitleTracks(resolvedBvid, streamCid)
+  // 字幕不擋開播：manifest 先回，第一幀之後再用 resolveSubtitles 補上。
+  const resolveSubtitles = (): Promise<SubtitleTrackInfo[]> =>
+    fetchBiliSubtitleTracks(resolvedBvid, streamCid)
+  const subtitles: SubtitleTrackInfo[] = []
 
   if (dash && Array.isArray(dash.video) && dash.video.length) {
     const duration =
@@ -637,6 +661,7 @@ export async function resolveBiliStream(
       qualities,
       audioTracks,
       subtitles,
+      resolveSubtitles,
       danmakuXmlUrl,
       cid: streamCid,
       isLive: false,
@@ -683,6 +708,7 @@ export async function resolveBiliStream(
       qualities: [quality],
       audioTracks: [],
       subtitles,
+      resolveSubtitles,
       danmakuXmlUrl,
       cid: streamCid,
       isLive: false,

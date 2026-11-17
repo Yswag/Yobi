@@ -92,6 +92,8 @@ export interface StreamManifest {
   qualities: VideoQualityTrack[]
   audioTracks: AudioStreamTrack[]
   subtitles: SubtitleTrackInfo[]
+  /** 字幕清單不擋開播：第一幀之後才去拿，拿到再補進 manifest。 */
+  resolveSubtitles?: () => Promise<SubtitleTrackInfo[]>
   danmakuXmlUrl?: string
   cid?: number
   isLive?: boolean
