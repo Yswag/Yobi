@@ -57,6 +57,8 @@ export class Prefetcher {
   private readonly options: PrefetcherOptions
   private readonly cache: Map<number, Uint8Array> = new Map()
   private readonly inFlight: Map<number, InFlight> = new Map()
+  /** warm() 先抓的塊：不受 trimOutside 影響，播放器第一次要到時才轉進一般快取。 */
+  private readonly pinned: Map<number, { promise: Promise<Uint8Array | null>; controller: AbortController }> = new Map()
   private queue: Queued[] = []
   private running: number = 0
   /** 抓到 null 的最小塊號，之後不再往後預抓。 */
@@ -79,7 +81,13 @@ export class Prefetcher {
     this.trimOutside(index)
 
     const cached: Uint8Array | undefined = this.cache.get(index)
-    const result: Promise<Uint8Array | null> = cached ? Promise.resolve(cached) : this.wait(index)
+    const pinned = this.pinned.get(index)
+    if (pinned) this.pinned.delete(index)
+    const result: Promise<Uint8Array | null> = cached
+      ? Promise.resolve(cached)
+      : pinned
+        ? pinned.promise.then((bytes: Uint8Array | null) => (bytes ? this.keep(index, bytes) : this.wait(index)))
+        : this.wait(index)
     const count: number = Math.min(this.source.count() ?? Number.POSITIVE_INFINITY, this.endIndex)
     for (let ahead = 1; ahead <= this.options.ahead; ahead++) {
       const next: number = index + ahead
@@ -93,6 +101,27 @@ export class Prefetcher {
     if (bytes || index >= this.endIndex) return bytes
     // 第一次失敗通常是暫時性的，直接再抓一次。
     return this.cache.get(index) ?? this.wait(index)
+  }
+
+  /**
+   * 先把這塊抓好放著，給「開片後馬上要跳過去」的位置用（續播、換畫質）。
+   * 開片時播放器先讀檔頭，一般快取會以檔頭為中心清掉遠處的塊，所以另外放。
+   */
+  warm(index: number): void {
+    if (this.cache.has(index) || this.inFlight.has(index) || this.pinned.has(index)) return
+    if (index >= this.endIndex) return
+    this.lastRequestAt = Date.now()
+    const controller: AbortController = new AbortController()
+    const promise: Promise<Uint8Array | null> = this.source.fetch(index, controller.signal).catch(() => null)
+    this.pinned.set(index, { promise, controller })
+  }
+
+  private keep(index: number, bytes: Uint8Array): Uint8Array {
+    if (!this.cache.has(index)) {
+      this.cache.set(index, bytes)
+      this.cachedBytes += bytes.byteLength
+    }
+    return bytes
   }
 
   private async wait(index: number): Promise<Uint8Array | null> {
@@ -231,6 +260,8 @@ export class Prefetcher {
   }
 
   release(): void {
+    for (const entry of this.pinned.values()) entry.controller.abort()
+    this.pinned.clear()
     for (const flight of [...this.inFlight.values()]) flight.cancel()
     this.inFlight.clear()
     for (const entry of this.queue) entry.resolve(false)

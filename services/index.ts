@@ -41,6 +41,7 @@ import {
 export { parseYoutubeInput } from "./youtube"
 export { disposeYoutubePageMinter, warmYoutubePageMinter } from "./youtube/pageMinter"
 export { parseBiliInput, fetchBiliDanmakuXml, resolveBiliShortUrl } from "./bilibili/index"
+export { warmBiliStart as warmStreamStart } from "./bilibili/dashMpd"
 export * from "./storage"
 export * from "./auth"
 export * from "./sponsorblock"

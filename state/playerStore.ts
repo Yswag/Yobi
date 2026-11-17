@@ -26,13 +26,13 @@ import {
   getSavedPosition,
   getSettings,
   getVideoDetail,
-  logPlaybackEvent,
   recordWatchHistory,
   releaseAllPrefetchers,
   resolveOfflineSource,
   resolveStream,
   setBiliLineSwitchListener,
   updateSettings,
+  warmStreamStart,
 } from "../services"
 import { SPONSOR_CATEGORY_LABELS } from "../utils/format"
 import { toCleanVtt } from "../utils/subtitles"
@@ -191,15 +191,9 @@ const RESUME_SEEK_TIMEOUT_MS: number = 20_000
 const STOP_TIMEOUT_MS: number = 3000
 
 async function seekForResume(ctrl: VideoPlaybackController, seconds: number): Promise<void> {
-  const startedAt: number = Date.now()
-  logPlaybackEvent(`seek resume ${seconds.toFixed(1)}s`)
   try {
     const result: number | "timeout" = await withTimeout(ctrl.seek(seconds), RESUME_SEEK_TIMEOUT_MS)
-    if (result === "timeout") {
-      logPlaybackEvent(`seek resume timeout ${Date.now() - startedAt}ms`)
-      throw new Error("載入續播位置逾時")
-    }
-    logPlaybackEvent(`seek resume done ${Date.now() - startedAt}ms`)
+    if (result === "timeout") throw new Error("載入續播位置逾時")
   } catch (error) {
     if (error instanceof Error && error.message === "載入續播位置逾時") throw error
     // 其他 seek 失敗就從頭播
@@ -288,7 +282,6 @@ export function getPlayerController(): VideoPlaybackController {
   ctrl.on("state", (snap: VideoPlaybackSnapshot) => {
     const mapped: PlaybackStatus = mapControllerState(snap.state)
     if (storeState.status !== mapped) {
-      logPlaybackEvent(`state ${snap.state} at ${snap.position.toFixed(1)}s`)
       storeState.status = mapped
       emitStore()
     }
@@ -366,7 +359,6 @@ export function getPlayerController(): VideoPlaybackController {
   })
 
   ctrl.on("error", (err: { message: string }) => {
-    logPlaybackEvent(`error ${err.message}`)
     storeState.status = "error"
     storeState.errorText = err.message || "播放器發生錯誤"
     emitStore()
@@ -647,6 +639,16 @@ export async function openVideo(item: UnifiedVideoItem, options: OpenVideoOption
       blockedWords: settings.danmakuBlockedWords,
     })
 
+    // 續播點在開片前就知道，先把那裡的片段抓起來，跟 open() 同時進行。
+    let resumeAt: number = 0
+    if (options.startSeconds !== undefined && options.startSeconds > 0) {
+      resumeAt = options.startSeconds
+    } else if (options.resumeFromHistory !== false) {
+      const savedPos: number = getSavedPosition(item.id, activeCid)
+      const totalDur: number = manifest?.duration || offline?.duration || item.duration || 0
+      if (savedPos > 5 && (totalDur <= 0 || savedPos < totalDur - 8)) resumeAt = savedPos
+    }
+
     if (cachedSource) {
       await ctrl.open(cachedSource)
       if (requestId !== openRequestSeq) return
@@ -655,20 +657,14 @@ export async function openVideo(item: UnifiedVideoItem, options: OpenVideoOption
       const url: string = manifest.primaryUrl
       const backend = manifest.backend
       const headers = manifest.headers
+      if (resumeAt > 0) warmStreamStart(url, resumeAt)
       await ctrl.open(url, { backend, headers })
       if (requestId !== openRequestSeq) return
     }
 
-    if (options.startSeconds !== undefined && options.startSeconds > 0) {
-      await seekForResume(ctrl, options.startSeconds)
+    if (resumeAt > 0) {
+      await seekForResume(ctrl, resumeAt)
       if (requestId !== openRequestSeq) return
-    } else if (options.resumeFromHistory !== false) {
-      const savedPos: number = getSavedPosition(item.id, activeCid)
-      const totalDur: number = manifest?.duration || offline?.duration || item.duration || 0
-      if (savedPos > 5 && (totalDur <= 0 || savedPos < totalDur - 8)) {
-        await seekForResume(ctrl, savedPos)
-        if (requestId !== openRequestSeq) return
-      }
     }
 
     if (item.provider === "bili" && activeCid) {
@@ -779,6 +775,7 @@ export async function selectQuality(qualityId: string): Promise<void> {
     const url: string = resolved.url
     const backend = resolved.backend
     const headers = resolved.headers ?? manifest.headers
+    if (currentPos > 0.5) warmStreamStart(url, currentPos)
     await ctrl.open(url, { backend, headers })
     if (currentPos > 0.5) {
       try {
@@ -1034,8 +1031,7 @@ export async function closePlayer(): Promise<void> {
   // 先放掉預抓：播放器在等的代理請求會立刻失敗返回，stop 才有機會結束。
   releaseAllPrefetchers()
   try {
-    const result: void | "timeout" = await withTimeout(ctrl.stop(), STOP_TIMEOUT_MS)
-    if (result === "timeout") logPlaybackEvent(`stop timeout ${STOP_TIMEOUT_MS}ms`)
+    await withTimeout(ctrl.stop(), STOP_TIMEOUT_MS)
   } catch {
     // Ignore
   }
