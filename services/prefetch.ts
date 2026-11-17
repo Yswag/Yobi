@@ -71,6 +71,11 @@ export class Prefetcher {
   /** 播放器最近要的塊號。 */
   private lastIndex: number = -1
   cachedBytes: number = 0
+  /**
+   * 正在播的影片的軌：不當成閒置。播放器緩衝滿了會十幾秒不要資料，
+   * 音軌 1 MB 更是一分多鐘才要一格，不能因此被另一條軌清掉預抓。
+   */
+  held: boolean = false
 
   constructor(source: ChunkSource, options: PrefetcherOptions) {
     this.source = source
@@ -284,7 +289,7 @@ export class Prefetcher {
   }
 
   isIdle(now: number): boolean {
-    return now - this.lastRequestAt > IDLE_MS
+    return !this.held && now - this.lastRequestAt > IDLE_MS
   }
 
   release(): void {

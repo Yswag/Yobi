@@ -41,6 +41,8 @@ const IDLE_TIMEOUT_MS: number = 60000
 const GRID_TRIES: number = 3
 
 const sessions: Map<string, Session> = new Map()
+/** 最近註冊的 session 就是正在播的；只有它的預抓器會被保住。 */
+let currentSessionId: string | null = null
 let server: Server | null = null
 let serverPort: number = 0
 let starting: Promise<number> | null = null
@@ -59,19 +61,21 @@ function latin1(bytes: Uint8Array): string {
   return out
 }
 
+/**
+ * 背壓時等播放器讀完，不設時限：音軌一格 1 MB 要播一分多鐘才讀得完，暫停時更久。
+ * 播放器不要了會關連線，那時才算失敗。
+ */
 async function writeChunk(socket: Socket, bytes: Uint8Array): Promise<boolean> {
   if (socket.destroyed) return false
   if (socket.write(bytes)) return true
   return new Promise<boolean>((resolve): void => {
     const finish = (ok: boolean): void => {
-      clearTimeout(timer)
       socket.off("drain", onDrain)
       socket.off("close", onClose)
       resolve(ok)
     }
     const onDrain = (): void => finish(true)
     const onClose = (): void => finish(false)
-    const timer = setTimeout((): void => finish(false), IDLE_TIMEOUT_MS)
     socket.once("drain", onDrain)
     socket.once("close", onClose)
   })
@@ -88,12 +92,23 @@ export function lastMediaFailure(): string | null {
   return lastFailure
 }
 
+/** 播放器等一格超過這麼久就記下來，對照卡頓的時間點。 */
+const SLOW_GRID_MS: number = 1000
+
 /** 要一格；失敗就再要一次，換線路由 localProxy 自己處理。 */
 async function fetchGrid(access: BiliStreamAccess, index: number): Promise<Uint8Array | null> {
+  const startedAt: number = Date.now()
   for (let attempt = 0; attempt < GRID_TRIES; attempt++) {
     access.markWaiting(index)
     const bytes: Uint8Array | null = await access.prefetcher.get(index).catch((): null => null)
-    if (bytes && bytes.byteLength > 0) return bytes
+    if (bytes && bytes.byteLength > 0) {
+      const waited: number = Date.now() - startedAt
+      if (waited > SLOW_GRID_MS) {
+        const clock: string = new Date().toTimeString().slice(0, 8)
+        noteFailure(`${clock} 第 ${index} 格等了 ${(waited / 1000).toFixed(1)}s`)
+      }
+      return bytes
+    }
   }
   noteFailure(`第 ${index} 格（${index * access.windowBytes} 起）抓不到`)
   return null
@@ -168,6 +183,8 @@ async function streamRange(
   }
 
   socket.write(headerBlock(partial ? "206 Partial Content" : "200 OK", headers))
+  // 開始送 body 後就不再用閒置逾時：播放器照播放速度讀，長時間沒進度是正常的。
+  socket.setTimeout(0)
 
   for (let index = firstIndex; index <= lastIndex; index++) {
     if (aborted()) return
@@ -182,7 +199,10 @@ async function streamRange(
     const sliceFrom: number = Math.max(0, from - gridStart)
     const sliceTo: number = Math.min(bytes.byteLength, to - gridStart + 1)
     launch(index + PIPELINE)
-    if (sliceTo > sliceFrom && !(await writeChunk(socket, bytes.subarray(sliceFrom, sliceTo)))) return
+    if (sliceTo > sliceFrom && !(await writeChunk(socket, bytes.subarray(sliceFrom, sliceTo)))) {
+      socket.destroy()
+      return
+    }
   }
   socket.end()
 }
@@ -249,6 +269,7 @@ function route(socket: Socket, method: string, path: string, rangeHeader: string
     return
   }
   session.access.set(itag, access)
+  access.prefetcher.held = match[1] === currentSessionId
 
   if (init) {
     void streamRange(socket, track, access, track.initStart, track.initEnd, method === "HEAD", rangeHeader)
@@ -339,11 +360,17 @@ async function start(): Promise<number> {
 export async function registerMediaSession(id: string, session: MediaSession): Promise<string> {
   const port: number = await start()
   lastFailure = null
+  for (const old of sessions.values()) {
+    for (const access of old.access.values()) access.prefetcher.held = false
+  }
+  currentSessionId = id
   sessions.set(id, { session, access: new Map() })
   return `http://127.0.0.1:${port}/media-hls/${id}/master.m3u8`
 }
 
 export function unregisterMediaSession(id: string): void {
+  for (const access of sessions.get(id)?.access.values() ?? []) access.prefetcher.held = false
+  if (currentSessionId === id) currentSessionId = null
   sessions.delete(id)
 }
 
