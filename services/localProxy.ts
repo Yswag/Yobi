@@ -105,8 +105,30 @@ interface BiliFileSource {
 const biliFileSources: Map<string, BiliFileSource> = new Map()
 /** 一格 1 MB：播放器要等整格抓完才拿得到第一個位元組，格子越大起播越慢。 */
 const BILI_WINDOW_BYTES: number = 1024 * 1024
-/** 32 格約 32 MB，4K 約 20 秒；影音兩軌合計仍在共用的 96 MB 上限內。 */
-const BILI_PREFETCH_AHEAD: number = 32
+/** 32 格約 32 MB。現在實際值由碼率換算（見 prefetchAheadFor）。 */
+const BILI_PREFETCH_AHEAD_DEFAULT: number = 32
+/** 預抓目標：用碼率換算成「至少準備幾秒的資料」。 */
+const BILI_PREFETCH_SECONDS: number = 15
+/** 低碼率的片不需要 32MB；留一點下限避免每格都追著跑。 */
+const BILI_PREFETCH_MIN_AHEAD: number = 16
+/** 上限受 MAX_CACHED_BYTES（96MB）牽制；64 格＋音軌仍在預算內。 */
+const BILI_PREFETCH_MAX_AHEAD: number = 64
+const BILI_PREFETCH_CONCURRENCY: number = 4
+const BILI_PREFETCH_CONCURRENCY_HEAVY: number = 6
+/** 超過這個碼率就當作重流處理（4K 常見 13–25 Mbps，1080p 約 4–8 Mbps）。 */
+const BILI_HEAVY_BITRATE: number = 12_000_000
+
+/**
+ * 預抓窗口用時間算，不是用固定 MB：
+ * 20 Mbps 約 2.5 MB/s，預算 15 秒就是 ~38 格；6 Mbps 只需要 12 格（取下限 16）。
+ * 不知道碼率時退回 32 格。
+ */
+function prefetchAheadFor(bitrate: number): number {
+  if (!(bitrate > 0)) return BILI_PREFETCH_AHEAD_DEFAULT
+  const bytesPerSecond: number = bitrate / 8
+  const grids: number = Math.ceil((bytesPerSecond * BILI_PREFETCH_SECONDS) / BILI_WINDOW_BYTES)
+  return Math.min(BILI_PREFETCH_MAX_AHEAD, Math.max(BILI_PREFETCH_MIN_AHEAD, grids))
+}
 /** 帶明確結尾的請求最多拼這麼多；4K 13 Mbps 的 5 秒子片段約 8 MB。 */
 const BILI_MAX_RESPONSE_BYTES: number = 16 * 1024 * 1024
 /** 單筆抓這麼久還沒回來就放棄，換下一條線。 */
@@ -121,6 +143,9 @@ const BILI_HEDGE_MIN_MS: number = 800
 const BILI_HEDGE_MAX_MS: number = 4000
 const BILI_HEDGE_DEFAULT_MS: number = 1500
 const BILI_HEDGE_POLL_MS: number = 250
+/** 播放器正在等這格時的競速門檻：正常一格約 110ms，超過這個就值得多開一條。 */
+const BILI_HEDGE_WAITING_MIN_MS: number = 350
+const BILI_HEDGE_WAITING_FACTOR: number = 1.5
 /** 換主線路後至少待這麼久，除非它失敗被停用。 */
 const BILI_PRIMARY_DWELL_MS: number = 60_000
 /** 一格最多換幾條線重抓。 */
@@ -455,7 +480,12 @@ function buildBiliCandidates(issued: string[]): string[] {
 }
 
 /** 註冊虛擬 manifest 內容（m3u8 / mpd），回傳可播放的本地 URL。 */
-export function registerBiliFileSource(id: string, urls: string | string[], contentType: string): string {
+export function registerBiliFileSource(
+  id: string,
+  urls: string | string[],
+  contentType: string,
+  bitrate?: number,
+): string {
   const port: number = ensureLocalProxyStarted()
   const issued: string[] = (Array.isArray(urls) ? urls : [urls]).filter((value: string): boolean => !!value)
   const candidates: string[] = buildBiliCandidates(issued)
@@ -471,6 +501,7 @@ export function registerBiliFileSource(id: string, urls: string | string[], cont
       biliFileSources.delete(oldest)
     }
   }
+  const heavy: boolean = (bitrate ?? 0) >= BILI_HEAVY_BITRATE
   const source: BiliFileSource = {
     urls: candidates,
     primary: hostOfUrl(candidates[0] ?? ""),
@@ -485,13 +516,44 @@ export function registerBiliFileSource(id: string, urls: string | string[], cont
         count: (): number | null => (source.total === null ? null : Math.ceil(source.total / BILI_WINDOW_BYTES)),
         fetch: (index: number, signal: AbortSignal): Promise<Uint8Array | null> => fetchBiliChunk(source, index, signal),
       },
-      { ahead: BILI_PREFETCH_AHEAD, concurrency: 4 },
+      {
+        ahead: prefetchAheadFor(bitrate ?? 0),
+        concurrency: heavy ? BILI_PREFETCH_CONCURRENCY_HEAVY : BILI_PREFETCH_CONCURRENCY,
+        chunkBytes: BILI_WINDOW_BYTES,
+      },
     ),
   }
   // 之前的影片已經量過哪條線快，開播就直接用。
   refreshPrimary(source, false)
   biliFileSources.set(id, source)
   return `http://127.0.0.1:${port}/bili-file/${id}/file.m4s`
+}
+
+/**
+ * 給本機串流伺服器用：直接拿某個 bili 來源的預抓器，不必再繞一次 HTTP。
+ * 只讀；`total` 要等第一塊抓到後才知道。
+ */
+export interface BiliStreamAccess {
+  readonly id: string
+  readonly contentType: string
+  readonly windowBytes: number
+  readonly prefetcher: Prefetcher
+  total(): number | null
+  /** 播放器正在等這塊：更新 playhead 並取消試線，跟 HTTP 路由的行為一致。 */
+  markWaiting(index: number): void
+}
+
+export function getBiliStreamAccess(id: string): BiliStreamAccess | null {
+  const source: BiliFileSource | undefined = biliFileSources.get(id)
+  if (!source) return null
+  return {
+    id,
+    contentType: source.contentType,
+    windowBytes: BILI_WINDOW_BYTES,
+    prefetcher: source.prefetcher,
+    total: (): number | null => source.total,
+    markWaiting: (index: number): void => markWaiting(source, index),
+  }
 }
 
 /** setTimeout 在非主 JS 隊列會直接丟錯，這裡吞掉；沒計時器只是少了客戶端逾時。 */
@@ -648,8 +710,11 @@ async function fetchBiliHedged(
   start: number,
   signal: AbortSignal,
 ): Promise<BiliOutcome[]> {
+  const waiting: boolean = index - source.playhead <= 1
   const expected: number = lineScore(primary) ?? BILI_HEDGE_DEFAULT_MS
-  const delay: number = Math.min(BILI_HEDGE_MAX_MS, Math.max(BILI_HEDGE_MIN_MS, expected * 2))
+  const delay: number = waiting
+    ? Math.min(BILI_HEDGE_MAX_MS, Math.max(BILI_HEDGE_WAITING_MIN_MS, expected * BILI_HEDGE_WAITING_FACTOR))
+    : Math.min(BILI_HEDGE_MAX_MS, Math.max(BILI_HEDGE_MIN_MS, expected * 2))
   const first: AbortController = new AbortController()
   const second: AbortController = new AbortController()
   const relayAbort = (): void => {
@@ -762,10 +827,16 @@ async function fetchBiliChunk(source: BiliFileSource, index: number, signal: Abo
   for (let i = 0; i < order.length; i++) {
     const host: string = order[i]
     if (tried.has(host)) continue
-    // 救急只用量過的線；沒量過的可能很慢（實測有 6 秒一格的），交給遠處的試線格子去量。
-    // 都沒有就對同一條線重發。
-    const backup: string =
-      order.slice(i + 1).find((next: string): boolean => !tried.has(next) && lineScore(next) !== null) ?? host
+    // 救急優先挑量過的線；播放器已經在等這格時，沒量過的也接受（競速输了也只是多花一條的流量）。
+    // 都沒得挑才對同一條線重發。
+    const waiting: boolean = index - source.playhead <= 1
+    const scored: string | undefined = order
+      .slice(i + 1)
+      .find((next: string): boolean => !tried.has(next) && lineScore(next) !== null)
+    const untouched: string | undefined = waiting
+      ? order.slice(i + 1).find((next: string): boolean => !tried.has(next))
+      : undefined
+    const backup: string = scored ?? untouched ?? host
     const outcomes: BiliOutcome[] = await fetchBiliHedged(source, index, host, backup, start, signal)
     const winner: BiliOutcome = outcomes[0]
     if (winner.result.ok) {

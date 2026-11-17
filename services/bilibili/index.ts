@@ -19,7 +19,11 @@ import {
   getBiliRequestHeaders,
 } from "./wbi"
 import type { BiliDashMedia, BiliDashPayload } from "./dashMpd"
-import { writeBiliDashMpdFile } from "./dashMpd"
+import {
+  prepareBiliPlayback,
+  writeBiliDashMpdFromPrepared,
+} from "./dashMpd"
+import { writeBiliHlsManifest } from "./hls"
 
 const API = "https://api.bilibili.com"
 const VIEW_URL = `${API}/x/web-interface/view`
@@ -521,6 +525,30 @@ function pickDefaultQuality(
   return ascending[0]
 }
 
+/**
+ * 優先用 HLS：native 後端會提前抓下一段，段邊界不會露出空窗。
+ * 軌道只準備一次；沒有 sidx 或串流伺服器起不來就退回 SegmentList MPD。
+ */
+async function buildBiliPlayable(
+  bvid: string,
+  cid: number,
+  dash: BiliDashPayload,
+  qn: number,
+): Promise<{ url: string; delivery: "hls" | "dash" }> {
+  const prepared = await prepareBiliPlayback(bvid, cid, dash, qn)
+  if (prepared.videos[0]?.index) {
+    try {
+      return { url: await writeBiliHlsManifest(bvid, cid, qn, prepared), delivery: "hls" }
+    } catch {
+      // 串流伺服器起不來才走下面；軌道不必重做。
+    }
+  }
+  return {
+    url: await writeBiliDashMpdFromPrepared(bvid, cid, dash, qn, prepared),
+    delivery: "dash",
+  }
+}
+
 export async function resolveBiliStream(
   bvid: string,
   cid?: number,
@@ -576,14 +604,14 @@ export async function resolveBiliStream(
     const qualities = buildQualityTracks(dash)
     const selected = pickDefaultQuality(qualities, preferredHeight)
     const defaultQn = selected?.qn ?? Number(selected?.id) ?? 0
-    const primaryUrl = await writeBiliDashMpdFile(resolvedBvid, streamCid, dash, defaultQn)
+    const primary = await buildBiliPlayable(resolvedBvid, streamCid, dash, defaultQn)
     const audioTracks = buildAudioTracks(dash)
 
     const manifest: StreamManifest = {
       provider: "bili",
       rawId: resolvedBvid,
-      delivery: "dash",
-      primaryUrl,
+      delivery: primary.delivery,
+      primaryUrl: primary.url,
       backend: "native",
       headers: { ...BILI_HEADERS },
       qualities,
@@ -598,8 +626,9 @@ export async function resolveBiliStream(
         const qn = Number.isFinite(parsed) && qualities.some(track => track.qn === parsed)
           ? parsed
           : defaultQn
+        const next = await buildBiliPlayable(resolvedBvid, streamCid, dash, qn)
         return {
-          url: await writeBiliDashMpdFile(resolvedBvid, streamCid, dash, qn),
+          url: next.url,
           backend: "native",
           headers: { ...BILI_HEADERS },
         }

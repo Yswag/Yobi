@@ -46,7 +46,7 @@ export * from "./storage"
 export * from "./auth"
 export * from "./sponsorblock"
 export * from "./localProxy"
-export { prefetchedAheadBytes, releaseAllPrefetchers } from "./prefetch"
+export { prefetchedAheadBytes, prefetchWindow, releaseAllPrefetchers } from "./prefetch"
 export { currentDownloadBps, lastDownloadHost } from "./netMeter"
 export * from "./downloads"
 

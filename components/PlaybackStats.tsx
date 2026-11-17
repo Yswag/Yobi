@@ -1,7 +1,7 @@
 import { HStack, Text, VStack, useEffect, useState } from "scripting"
 import type { VirtualNode } from "scripting"
 import type { VideoQualityTrack } from "../types"
-import { currentDownloadBps, lastDownloadHost, prefetchedAheadBytes } from "../services"
+import { currentDownloadBps, lastDownloadHost, prefetchedAheadBytes, prefetchWindow } from "../services"
 import { getPlayerController, usePlayerProgress, usePlayerStore } from "../state/playerStore"
 import { palette, type } from "../ui/theme"
 
@@ -95,11 +95,13 @@ export function PlaybackStatsPanel(): VirtualNode {
     info?.hardwareAccelerated === true ? "硬體" : info?.hardwareAccelerated === false ? "軟體" : null
   // 播放器讀本機代理隨要隨到，自己只往前讀一點；真正的緩衝是預抓器裡的資料。
   const aheadBytes: number | null = prefetchedAheadBytes()
+  const window = prefetchWindow()
   const bitrate: number = quality?.bitrate ?? video?.bitRate ?? 0
   const buffered: string =
     aheadBytes !== null
       ? join([
           `${(aheadBytes / 1024 / 1024).toFixed(0)} MB`,
+          window ? `${window.grids} 格` : null,
           bitrate > 0 ? `≈ ${Math.round((aheadBytes * 8) / bitrate)} 秒` : null,
         ])
       : `${Math.max(0, progress.bufferedUntil - progress.position).toFixed(1)} 秒`

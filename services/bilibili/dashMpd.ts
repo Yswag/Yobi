@@ -410,59 +410,101 @@ async function loadSegmentIndex(
   }
 }
 
+export interface PreparedTrack {
+  media: BiliDashMedia
+  mimeType: string
+  sourceId: string
+  localUrl: string
+  /** sidx 讀不到時為 null；HLS 需要它，MPD 可以退回 SegmentBase。 */
+  index: BiliSegmentIndex | null
+}
+
+/**
+ * 把 dash payload 準備成可播放的軌：註冊本機代理、載入 sidx、預熟第一段。
+ * MPD 與 HLS 共用同一份準備結果，避免兩邊選到不同 track。
+ */
+export async function prepareBiliPlayback(
+  bvid: string,
+  cid: number,
+  dash: BiliDashPayload,
+  selectedVideoId?: number,
+): Promise<{ videos: PreparedTrack[]; audio: PreparedTrack | null }> {
+  const qn: number = selectedVideoId ?? 0
+  const safeBvid: string = (bvid || "unknown").replace(/[^A-Za-z0-9_-]/g, "")
+  const { videos: videoMedias, audios } = selectMedias(dash, selectedVideoId)
+
+  const build = async (
+    media: BiliDashMedia,
+    mimeType: string,
+    index: number,
+  ): Promise<PreparedTrack> => {
+    const urls: string[] = mediaUrls(media)
+    let localUrl: string = urls[0] ?? ""
+    let sourceId: string = ""
+    if (urls.length) {
+      const id: string = `bili_${safeBvid}_${cid}_${qn}_${media.id}_${index}`
+      try {
+        localUrl = registerBiliFileSource(id, urls, mimeType, Number(media.bandwidth) || 0)
+        sourceId = id
+      } catch {
+        // 代理起不來就直連
+      }
+    }
+    const loaded: BiliSegmentIndex | undefined = await loadSegmentIndex(
+      urls[0] ?? "",
+      media,
+      sourceId || undefined,
+    )
+    if (loaded && sourceId) {
+      // 播放器 open() 一定先依序讀完影片與音訊的第一段（就算接著要跳走），這裡先一起抓。
+      const first = loaded.sidx.entries[0]
+      warmBiliRange(sourceId, first.offset, first.offset + first.size - 1)
+    }
+    return { media, mimeType, sourceId, localUrl, index: loaded ?? null }
+  }
+
+  const videos: PreparedTrack[] = []
+  for (let index = 0; index < videoMedias.length; index++) {
+    videos.push(await build(videoMedias[index], "video/mp4", index))
+  }
+  const audio: PreparedTrack | null = audios[0]
+    ? await build(audios[0], "audio/mp4", 0)
+    : null
+  return { videos, audio }
+}
+
 export async function writeBiliDashMpdFile(
   bvid: string,
   cid: number,
   dash: BiliDashPayload,
   selectedVideoId?: number,
 ): Promise<string> {
+  const prepared = await prepareBiliPlayback(bvid, cid, dash, selectedVideoId)
+  return writeBiliDashMpdFromPrepared(bvid, cid, dash, selectedVideoId, prepared)
+}
+
+/** 用已準備好的軌道產 MPD；避免與 HLS 互為後備時重複準備。 */
+export async function writeBiliDashMpdFromPrepared(
+  bvid: string,
+  cid: number,
+  dash: BiliDashPayload,
+  selectedVideoId: number | undefined,
+  prepared: { videos: PreparedTrack[]; audio: PreparedTrack | null },
+): Promise<string> {
   const qn: number = selectedVideoId ?? 0
   const safeBvid: string = (bvid || "unknown").replace(/[^A-Za-z0-9_-]/g, "")
-
-  const localUrls: Map<BiliDashMedia, string> = new Map()
-  const sourceIds: Map<BiliDashMedia, string> = new Map()
-  const urlFor: BaseUrlResolver = (media: BiliDashMedia, mimeType: string, index: number): string => {
-    const known: string | undefined = localUrls.get(media)
-    if (known !== undefined) return known
-    const urls: string[] = mediaUrls(media)
-    let url: string = urls[0] ?? ""
-    if (urls.length) {
-      const id: string = `bili_${safeBvid}_${cid}_${qn}_${media.id}_${index}`
-      try {
-        url = registerBiliFileSource(id, urls, mimeType)
-        sourceIds.set(media, id)
-      } catch {
-        // 代理起不來就直連
-      }
-    }
-    localUrls.set(media, url)
-    return url
-  }
-
-  const { videos, audios } = selectMedias(dash, selectedVideoId)
+  const urls: Map<BiliDashMedia, string> = new Map()
   const indexes: Map<BiliDashMedia, BiliSegmentIndex> = new Map()
-  const entries: Array<[BiliDashMedia, string]> = [
-    ...videos.map((media: BiliDashMedia, index: number): [BiliDashMedia, string] => [media, urlFor(media, "video/mp4", index)]),
-    ...audios.map((media: BiliDashMedia, index: number): [BiliDashMedia, string] => [media, urlFor(media, "audio/mp4", index)]),
-  ]
-  await Promise.all(
-    entries.map(async ([media]): Promise<void> => {
-      const sourceId: string | undefined = sourceIds.get(media)
-      const index: BiliSegmentIndex | undefined = await loadSegmentIndex(mediaUrls(media)[0] ?? "", media, sourceId)
-      if (!index) return
-      indexes.set(media, index)
-      // 播放器 open() 一定先依序讀完影片與音訊的第一段（就算接著要跳走），這裡先一起抓。
-      const first = index.sidx.entries[0]
-      if (sourceId) warmBiliRange(sourceId, first.offset, first.offset + first.size - 1)
-    }),
-  )
-
-  const xml: string = buildBiliDashMpdXml(dash, selectedVideoId, urlFor, (media: BiliDashMedia) => indexes.get(media))
   const tracks: WarmTrack[] = []
-  for (const [media, index] of indexes) {
-    const sourceId: string | undefined = sourceIds.get(media)
-    if (sourceId) tracks.push({ sourceId, index })
+  for (const track of [...prepared.videos, prepared.audio]) {
+    if (!track) continue
+    urls.set(track.media, track.localUrl)
+    if (!track.index) continue
+    indexes.set(track.media, track.index)
+    if (track.sourceId) tracks.push({ sourceId: track.sourceId, index: track.index })
   }
+  const urlFor: BaseUrlResolver = (media: BiliDashMedia): string => urls.get(media) ?? ""
+  const xml: string = buildBiliDashMpdXml(dash, selectedVideoId, urlFor, (media: BiliDashMedia) => indexes.get(media))
   try {
     const manifestUrl: string = registerVirtualManifest(`bili_${safeBvid}_${cid}_${qn}`, xml, "application/dash+xml")
     warmTracks.delete(manifestUrl)
