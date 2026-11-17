@@ -36,11 +36,11 @@ import {
   parseBiliInput,
   resolveBiliStream,
   searchBiliVideos,
-} from "./bilibili"
+} from "./bilibili/index"
 
 export { parseYoutubeInput } from "./youtube"
 export { disposeYoutubePageMinter, warmYoutubePageMinter } from "./youtube/pageMinter"
-export { parseBiliInput, fetchBiliDanmakuXml, resolveBiliShortUrl } from "./bilibili"
+export { parseBiliInput, fetchBiliDanmakuXml, resolveBiliShortUrl } from "./bilibili/index"
 export * from "./storage"
 export * from "./auth"
 export * from "./sponsorblock"

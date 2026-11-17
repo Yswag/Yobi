@@ -199,9 +199,41 @@ function collectAudios(dash: BiliDashPayload): BiliDashMedia[] {
 }
 
 /**
+ * 播放器會把同一組 AdaptationSet 裡每個 Representation 都當一條軌去讀，
+ * bilibili 同一個畫質固定給 AVC/HEVC/AV1 三份，4K 時等於三倍流量把頻寬喫滿。
+ * 這裡只留一份：優先 AVC，再來 HEVC、AV1。
+ */
+function preferCodec(medias: BiliDashMedia[]): BiliDashMedia[] {
+  if (medias.length <= 1) return medias
+  const rank = (media: BiliDashMedia): number => {
+    const codecs: string = (media.codecs ?? "").toLowerCase()
+    if (codecs.startsWith("avc") || codecs.startsWith("h264")) return 3
+    if (codecs.startsWith("hev") || codecs.startsWith("hvc")) return 2
+    if (codecs.startsWith("av01") || codecs.startsWith("av1")) return 1
+    return 0
+  }
+  const best: BiliDashMedia = medias
+    .slice()
+    .sort((a, b) => rank(b) - rank(a) || (Number(b.bandwidth) || 0) - (Number(a.bandwidth) || 0))[0]
+  return [best]
+}
+
+/** 音訊也只留一條：優先原生 AAC（Dolby／FLAC 在 4K 只是多餘流量）。 */
+function preferAudio(dash: BiliDashPayload): BiliDashMedia[] {
+  const natives: BiliDashMedia[] = (dash.audio ?? []).filter(media => !!mediaUrl(media))
+  const pool: BiliDashMedia[] = natives.length ? natives : collectAudios(dash)
+  if (pool.length <= 1) return pool
+  let best: BiliDashMedia = pool[0]
+  for (const media of pool) {
+    if ((Number(media.bandwidth) || 0) > (Number(best.bandwidth) || 0)) best = media
+  }
+  return [best]
+}
+
+/**
  * Converts Bilibili's `dash` payload into a standards-compliant MPEG-DASH
  * manifest. When `selectedVideoId` (a Bilibili `qn`) is given, only that
- * quality is included — otherwise every available quality is emitted.
+ * quality is included — otherwise the highest codec of every quality.
  */
 export function buildBiliDashMpdXml(
   dash: BiliDashPayload,
@@ -209,11 +241,12 @@ export function buildBiliDashMpdXml(
   urlFor: BaseUrlResolver = mediaUrl,
 ): string {
   const allVideos = (dash.video ?? []).filter(media => !!mediaUrl(media))
-  const videos =
+  const matching =
     selectedVideoId === undefined
       ? allVideos
       : allVideos.filter(media => Number(media.id) === Number(selectedVideoId))
-  const audios = collectAudios(dash)
+  const videos = preferCodec(matching)
+  const audios = preferAudio(dash)
 
   const duration = dash.duration || 0
   const minBufferTime = dash.minBufferTime ?? dash.min_buffer_time ?? 1.5

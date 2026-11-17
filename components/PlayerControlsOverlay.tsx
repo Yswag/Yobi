@@ -22,6 +22,7 @@ import {
   openVideo,
   seekBy,
   seekTo,
+  selectQuality,
   selectSubtitle,
   setPlaybackRate,
   skipActiveSponsorSegment,
@@ -214,6 +215,11 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
 
   function handleRetry(): void {
     if (!store.currentItem) return
+    // 重試要重開使用者選的那個畫質，不能默默換回預設。
+    if (store.manifest) {
+      void selectQuality(store.selectedQualityId)
+      return
+    }
     void openVideo(store.currentItem, { cid: store.activeCid, page: store.activePage })
   }
 

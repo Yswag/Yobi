@@ -1,4 +1,4 @@
-import { fetch } from "scripting"
+import { AbortController, fetch } from "scripting"
 import type { AbortSignal } from "scripting"
 import { Prefetcher } from "./prefetch"
 
@@ -69,7 +69,7 @@ const hlsRelays: Map<string, HlsRelayHandler> = new Map()
 
 /**
  * bilibili 的 m4s 需要 Referer，只能由本機代理代抓。
- * 整個檔按固定 4 MB 切格子預抓；回應仍是「從起點最多 4 MB、不超過要求的結尾」，跨格就拼兩格。
+ * 整個檔按固定 1 MB 切格子預抓；回應仍是「從起點最多一格、不超過要求的結尾」，跨格就拼兩格。
  * DASH 的子片段是明確範圍，只回到格子邊界會截斷樣本，播放器回 Invalid data。
  */
 interface BiliFileSource {
@@ -81,7 +81,12 @@ interface BiliFileSource {
 }
 
 const biliFileSources: Map<string, BiliFileSource> = new Map()
-const BILI_WINDOW_BYTES: number = 4 * 1024 * 1024
+/** 一格 1 MB：4K 時單筆要的回應更短，卡住的尾巴也短。 */
+const BILI_WINDOW_BYTES: number = 1024 * 1024
+/** 一格變小，預抓就要拉長，不然可緩衝的秒數反而變少。 */
+const BILI_PREFETCH_AHEAD: number = 16
+/** 單筆抓這麼久還沒回來就放棄，交給預抓器重試。 */
+const BILI_CHUNK_TIMEOUT_MS: number = 12000
 const BILI_MAX_SOURCES: number = 48
 
 const BILI_REQUEST_HEADERS: Record<string, string> = {
@@ -162,7 +167,7 @@ function registerRoutes(target: HttpServer): void {
     return textResponse(manifest.content, manifest.contentType)
   })
 
-  // 播放器抓 MPD 片段時不會帶 Referer（來源是本機檔），由這裡補上；一次最多回 4 MB。
+  // 播放器抓 MPD 片段時不會帶 Referer（來源是本機檔），由這裡補上；一次最多回一格。
   target.registerAsyncHandler(
     "/bili-file/:id/file.m4s",
     async (req: HttpRequest): Promise<HttpResponse> => {
@@ -355,7 +360,7 @@ export function registerBiliFileSource(id: string, url: string, contentType: str
         count: (): number | null => (source.total === null ? null : Math.ceil(source.total / BILI_WINDOW_BYTES)),
         fetch: (index: number, signal: AbortSignal): Promise<Uint8Array | null> => fetchBiliChunk(source, index, signal),
       },
-      { ahead: 4, concurrency: 4 },
+      { ahead: BILI_PREFETCH_AHEAD, concurrency: 4 },
     ),
   }
   biliFileSources.set(id, source)
@@ -365,19 +370,37 @@ export function registerBiliFileSource(id: string, url: string, contentType: str
 async function fetchBiliChunk(source: BiliFileSource, index: number, signal: AbortSignal): Promise<Uint8Array | null> {
   const start: number = index * BILI_WINDOW_BYTES
   if (source.total !== null && start >= source.total) return null
-  const response = await fetch(source.url, {
-    headers: { ...BILI_REQUEST_HEADERS, Range: `bytes=${start}-${start + BILI_WINDOW_BYTES - 1}` },
-    signal,
-    debugLabel: "Yobi bili chunk",
-  })
-  if (response.status === 416) return null
-  if (!response.ok) throw new Error(`HTTP ${response.status}`)
-  const total: number = Number(response.headers.get("content-range")?.split("/")[1])
-  if (Number.isFinite(total) && total > 0) source.total = total
-  const bytes: Uint8Array = new Uint8Array(await response.arrayBuffer())
-  // 伺服器忽略 Range 回整個檔時，自己切出這一格。
-  if (response.status === 200 && start > 0) return bytes.slice(start, start + BILI_WINDOW_BYTES)
-  return bytes.byteLength > BILI_WINDOW_BYTES ? bytes.slice(0, BILI_WINDOW_BYTES) : bytes
+
+  const controller: AbortController = new AbortController()
+  const relayAbort = (): void => controller.abort()
+  signal.addEventListener("abort", relayAbort)
+  const timer: number = setTimeout((): void => controller.abort(), BILI_CHUNK_TIMEOUT_MS)
+
+  try {
+    const response: Awaited<ReturnType<typeof fetch>> = await fetch(source.url, {
+      headers: { ...BILI_REQUEST_HEADERS, Range: `bytes=${start}-${start + BILI_WINDOW_BYTES - 1}` },
+      signal: controller.signal,
+      debugLabel: "Yobi bili chunk",
+    })
+    if (response.status === 416) return null
+    if (!response.ok) throw new Error(`HTTP ${response.status}`)
+    const total: number = Number(response.headers.get("content-range")?.split("/")[1])
+    if (Number.isFinite(total) && total > 0) source.total = total
+    const bytes: Uint8Array = new Uint8Array(await response.arrayBuffer())
+    // 伺服器忽略 Range 回整個檔時，自己切出這一格。
+    if (response.status === 200 && start > 0) return bytes.slice(start, start + BILI_WINDOW_BYTES)
+    return bytes.byteLength > BILI_WINDOW_BYTES ? bytes.slice(0, BILI_WINDOW_BYTES) : bytes
+  } catch (error) {
+    if (signal.aborted) return null
+    throw error
+  } finally {
+    clearTimeout(timer)
+    try {
+      signal.removeEventListener("abort", relayAbort)
+    } catch {
+      // 移除失敗不影響資料
+    }
+  }
 }
 
 export function registerVirtualManifest(id: string, content: string, contentType: string): string {

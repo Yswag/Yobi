@@ -262,12 +262,38 @@ async function fetchBiliProfile(
   }
 }
 
+/** Hides the "App 内打开" pill and other app-download overlays on m.bilibili.com. */
+const BILI_APP_PROMPT_CSS = `
+.m-open-app, .fixed-openapp, .m-fixed-openapp, .m-navbar-openapp, .launch-app-btn {
+  display: none !important;
+}
+`
+
+/** Mobile feed hides its login entry under the sheet's title bar, so start at passport. */
+const BILI_LOGIN_URL =
+  "https://passport.bilibili.com/h5-app/passport/login?gourl=" +
+  encodeURIComponent("https://m.bilibili.com/")
+
 export async function loginWithWebView(provider: Provider): Promise<ProviderAuthState> {
   const controller = new WebViewController()
-  const homeUrl = provider === "bili" ? "https://m.bilibili.com" : "https://m.youtube.com"
+  const homeUrl = provider === "bili" ? BILI_LOGIN_URL : "https://m.youtube.com"
   const navigationTitle = provider === "bili" ? "登入 BiliBili" : "登入 YouTube"
 
   try {
+    if (provider === "bili") {
+      try {
+        await controller.addUserScript({
+          source: `const s = document.createElement("style"); s.textContent = ${JSON.stringify(
+            BILI_APP_PROMPT_CSS,
+          )}; document.documentElement.appendChild(s);`,
+          injectionTime: "documentEnd",
+          forMainFrameOnly: true,
+        })
+      } catch {
+        // Injection is a nicety; never block login on it.
+      }
+    }
+
     await controller.loadURL(homeUrl)
     await controller.present({ navigationTitle })
 
