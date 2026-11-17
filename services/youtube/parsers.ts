@@ -601,6 +601,151 @@ export function lastItemToken(items: unknown[]): string | null {
   return continuationTokenOf(asObject(items[items.length - 1]))
 }
 
+/**
+ * 續頁 token：把整棵樹的 token 都收起來，排除剛用掉的那個，取**最長**的。
+ * browse 的主 feed token 最長；取第一個／最深的那個會拿到子貨架的 token，YouTube 會回 400。
+ */
+function collectTokens(node: unknown, out: string[], depth: number = 0): void {
+  if (!node || typeof node !== "object" || depth > 30) return
+  if (Array.isArray(node)) {
+    for (const entry of node) collectTokens(entry, out, depth + 1)
+    return
+  }
+  const object = node as JsonObject
+  const token: string =
+    String(asObject(object["continuationCommand"])?.["token"] ?? "") ||
+    String(asObject(object["nextContinuationData"])?.["continuation"] ?? "") ||
+    String(asObject(object["reloadContinuationData"])?.["continuation"] ?? "") ||
+    String(asObject(asObject(object["continuationEndpoint"])?.["continuationCommand"])?.["token"] ?? "") ||
+    String(continuationTokenOf(object) ?? "")
+  if (token) out.push(token)
+  for (const key of Object.keys(object)) collectTokens(object[key], out, depth + 1)
+}
+
+export function findContinuationToken(response: JsonObject, currentToken: string = ""): string | null {
+  const tokens: string[] = []
+  collectTokens(response, tokens)
+  let best: string = ""
+  for (const token of tokens) {
+    if (!token || token === currentToken) continue
+    if (token.length > best.length) best = token
+  }
+  return best || null
+}
+
+/**
+ * 排序 chip 的清單（標題＋它自己的 continuation token）。
+ * 順序通常是 Latest / Popular / Oldest，但依標籤挑才不會因語系或頻道差異挑錯。
+ */
+export function extractSortChips(response: JsonObject): { label: string; token: string }[] {
+  const chips: JsonObject[] = []
+
+  const walk = (node: unknown, depth: number): void => {
+    if (!node || typeof node !== "object" || depth > 30) return
+    if (Array.isArray(node)) {
+      for (const entry of node) walk(entry, depth + 1)
+      return
+    }
+    const object = node as JsonObject
+    const chip: JsonObject | null = asObject(object["chipViewModel"])
+    if (chip) chips.push(chip)
+    for (const key of Object.keys(object)) walk(object[key], depth + 1)
+  }
+
+  walk(response, 0)
+  return chips.map((chip: JsonObject): { label: string; token: string } => {
+    const rawText: unknown = chip["text"]
+    const label: string =
+      typeof rawText === "string"
+        ? rawText
+        : String(asObject(rawText)?.["content"] ?? "")
+    const token: string = String(
+      asObject(asObject(asObject(chip["tapCommand"])?.["innertubeCommand"])?.["continuationCommand"])?.[
+        "token"
+      ] ?? "",
+    )
+    return { label, token }
+  })
+}
+
+/**
+ * 排序 chip 的 continuation token。保留給只需要 token 的呼叫端。
+ */
+export function extractSortTokens(response: JsonObject): string[] {
+  return extractSortChips(response).map((chip: { label: string; token: string }): string => chip.token)
+}
+
+/** 回應裡所有 continuation token（依出現順序）。 */
+export function collectContinuationTokens(response: JsonObject): string[] {
+  const tokens: string[] = []
+
+  const walk = (node: unknown, depth: number): void => {
+    if (!node || typeof node !== "object" || depth > 24) return
+    if (Array.isArray(node)) {
+      for (const entry of node) walk(entry, depth + 1)
+      return
+    }
+    const object = node as JsonObject
+    const command: JsonObject | null = asObject(object["continuationCommand"])
+    const token: unknown = command?.["token"]
+    if (typeof token === "string" && token && !tokens.includes(token)) tokens.push(token)
+    for (const key of Object.keys(object)) walk(object[key], depth + 1)
+  }
+
+  walk(response, 0)
+  return tokens
+}
+
+/**
+ * 頻道「關於」頁的資訊；`videoCountText` 是精確數字（例：`1,014 videos`）。
+ * header 上那行會被縮寫（mrbeast 顯示 `1K videos`），所以總數要從這裡拿。
+ */
+export interface AboutChannelInfo {
+  videoCountText?: string
+  subscriberCountText?: string
+  viewCountText?: string
+}
+
+export function parseAboutChannel(response: JsonObject): AboutChannelInfo | null {
+  let about: JsonObject | null = null
+
+  const walk = (node: unknown, depth: number): void => {
+    if (about || !node || typeof node !== "object" || depth > 24) return
+    if (Array.isArray(node)) {
+      for (const entry of node) walk(entry, depth + 1)
+      return
+    }
+    const object = node as JsonObject
+    const found: JsonObject | null = asObject(object["aboutChannelViewModel"])
+    if (found) {
+      about = found
+      return
+    }
+    for (const key of Object.keys(object)) walk(object[key], depth + 1)
+  }
+
+  walk(response, 0)
+  if (!about) return null
+  const info: JsonObject = about as JsonObject
+  const read = (key: string): string | undefined => {
+    const value: unknown = info[key]
+    return typeof value === "string" && value ? value : undefined
+  }
+  return {
+    videoCountText: read("videoCountText"),
+    subscriberCountText: read("subscriberCountText"),
+    viewCountText: read("viewCountText"),
+  }
+}
+
+/** 頻道影片分頁：續頁回應只要影片與下一個 token。 */
+export function parseChannelVideosPage(
+  response: JsonObject,
+  currentToken: string = "",
+): { videos: UnifiedVideoItem[]; next: string | null } {
+  return { videos: extractVideoItems(response), next: findContinuationToken(response, currentToken) }
+}
+
 /** 回應裡最後一組項目陣列的續頁 token（留言頁與回覆頁共用）。 */
 export function findPageCursor(response: JsonObject): string | null {
   let cursor: string | null = null
@@ -826,6 +971,23 @@ export function parseChannelDetail(channelId: string, browse: JsonObject): Chann
     }
   })
 
+  // metadata 那行是「527M subscribers · 1K videos」，拆成訂閱數與影片總數。
+  const headerMetadata: JsonObject | null = asObject(pageHeader["metadata"])
+  const metaParts: string[] = []
+  for (const row of asArray(asObject(headerMetadata?.["contentMetadataViewModel"])?.["metadataRows"])) {
+    for (const part of asArray(asObject(row)?.["metadataParts"])) {
+      const text: string = readText(asObject(part)?.["text"]).trim()
+      if (text) metaParts.push(text)
+    }
+  }
+  const subscriberText: string =
+    metaParts.find((part: string): boolean => /subscriber|訂閱|订阅|粉絲|粉丝/i.test(part)) ?? ""
+  const videosText: string = metaParts.find((part: string): boolean => /videos?|影片|视频/i.test(part)) ?? ""
+  const subscriberCount: string = subscriberText
+    .replace(/\s*(位)?(subscribers?|訂閱(者)?|订阅(者)?|粉絲|粉丝)\s*$/i, "")
+    .trim()
+  const videoCountText: string = videosText.replace(/\s*(videos?|影片|视频)\s*$/i, "").trim()
+
   return {
     id: `yt:${channelId}`,
     provider: "yt",
@@ -834,7 +996,8 @@ export function parseChannelDetail(channelId: string, browse: JsonObject): Chann
     avatarUrl: avatar,
     bannerUrl: banner || undefined,
     description: String(channelMetadata["description"] ?? microformat["description"] ?? ""),
-    subscriberCountText: readText(pageHeader["metadata"]) || undefined,
+    subscriberCountText: subscriberCount ? `${subscriberCount} 訂閱` : readText(pageHeader["metadata"]) || undefined,
+    videoCountText: videoCountText || undefined,
     videos,
   }
 }

@@ -162,6 +162,8 @@ export interface ChannelDetail {
   bannerUrl?: string
   description: string
   subscriberCountText?: string
+  /** 頻道總影片數的顯示字串（YouTube 是「1K」這種約數，bili 是實際數字）。 */
+  videoCountText?: string
   videos: UnifiedVideoItem[]
   nextPageToken?: string
 }

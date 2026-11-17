@@ -228,7 +228,7 @@ export function SubscriptionsView(props: SubscriptionsViewProps): VirtualNode {
 
     let cancelled: boolean = false
     setLoading(true)
-    Promise.allSettled(missing.map((ch: SubscriptionChannel) => getChannel(ch.provider, ch.rawId)))
+    Promise.allSettled(missing.map((ch: SubscriptionChannel) => getChannel(ch.provider, ch.rawId, { withAbout: false })))
       .then((results) => {
         if (cancelled) return
         const next: Record<string, ChannelDetail> = { ...cache }

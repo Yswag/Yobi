@@ -17,6 +17,7 @@ import type {
   YoutubeStreamPreference,
 } from "../../types"
 import {
+  fetchBrowseContinuation,
   fetchBrowseResponse,
   fetchNextResponse,
   fetchPlayerResponse,
@@ -32,14 +33,19 @@ import { decipherStreamingUrl } from "./nsig"
 import { getYoutubePageTokens, refreshYoutubePageToken } from "./pageMinter"
 import { getYoutubePoTokens, type YoutubePoTokens } from "./potoken"
 import {
+  collectContinuationTokens,
+  extractSortChips,
   extractVideoItems,
   findPageCursor,
+  parseAboutChannel,
   parseChannelDetail,
+  parseChannelVideosPage,
   parseComments,
   parseRelatedVideos,
   parseSubtitleTracks,
   parseVideoDetail,
 } from "./parsers"
+import type { AboutChannelInfo } from "./parsers"
 import { resolveHlsManifest } from "./hls"
 import {
   audioTrackOf,
@@ -329,9 +335,131 @@ export async function getYoutubeCommentReplies(videoId: string, cursor: string):
 const CHANNEL_VIDEOS_PARAMS: string = "EgZ2aWRlb3PyBgQKAjoA"
 
 /** 頻道頁。 */
-export async function getYoutubeChannel(channelId: string): Promise<ChannelDetail> {
+export async function getYoutubeChannel(
+  channelId: string,
+  options: { withAbout?: boolean } = {},
+): Promise<ChannelDetail> {
+  const withAbout: boolean = options.withAbout !== false
+  // videos 分頁與 base 頁互不依賴，並行打：總共三支請求但只有兩次往返。
+  const [response, base] = await Promise.all([
+    fetchBrowseResponse(channelId, CHANNEL_VIDEOS_PARAMS),
+    withAbout ? fetchBrowseResponse(channelId) : Promise.resolve(null),
+  ])
+
+  const detail: ChannelDetail = parseChannelDetail(channelId, response)
+  const next: string | null = parseChannelVideosPage(response).next
+  if (next) detail.nextPageToken = next
+  if (!withAbout) return detail
+
+  // header 那行已經精確（沒有 K/M/萬/億）就不用再打關於頁，例如小頻道的「23 videos」。
+  if (detail.videoCountText && !/[KMB]|萬|億/i.test(detail.videoCountText)) return detail
+
+  const info: AboutChannelInfo | null = await channelAboutInfo(channelId, base)
+  if (info?.videoCountText) {
+    const count: string = info.videoCountText.replace(/\s*(videos?|部影片|视频)\s*$/i, "").trim()
+    if (count) detail.videoCountText = count
+  }
+  if (info?.subscriberCountText) {
+    const subs: string = info.subscriberCountText
+      .replace(/\s*(位)?(subscribers?|訂閱(者)?|订阅(者)?|粉絲|粉丝)\s*$/i, "")
+      .trim()
+    if (subs) detail.subscriberCountText = `${subs} 訂閱`
+  }
+  return detail
+}
+
+/** 關於頁的資訊；token 就在 base browse 的 continuation 裡（videos 分頁沒有）。 */
+const aboutCache: Map<string, { info: AboutChannelInfo | null; at: number }> = new Map()
+const ABOUT_TTL: number = 10 * 60 * 1000
+
+async function channelAboutInfo(
+  channelId: string,
+  base: JsonObject | null,
+): Promise<AboutChannelInfo | null> {
+  const hit = aboutCache.get(channelId)
+  if (hit && Date.now() - hit.at < ABOUT_TTL) return hit.info
+  try {
+    const source: JsonObject = base ?? (await fetchBrowseResponse(channelId))
+    const tokens: string[] = collectContinuationTokens(source)
+    // base 頁的 continuation 就是關於頁（實測兩個都是），只試第一個。
+    for (const token of tokens.slice(0, 1)) {
+      const page: JsonObject = await fetchBrowseContinuation(token)
+      const info: AboutChannelInfo | null = parseAboutChannel(page)
+      if (info) {
+        aboutCache.set(channelId, { info, at: Date.now() })
+        return info
+      }
+    }
+  } catch {
+    // 抓不到就讓 header 的縮寫值留著
+  }
+  aboutCache.set(channelId, { info: null, at: Date.now() })
+  return null
+}
+
+/** 頻道影片的下一頁；cursor 是上一頁回來的 nextPageToken。 */
+export async function getYoutubeChannelPage(
+  cursor: string,
+): Promise<{ videos: UnifiedVideoItem[]; nextPageToken?: string }> {
+  const response: JsonObject = await fetchBrowseContinuation(cursor)
+  const page = parseChannelVideosPage(response, cursor)
+  return page.next ? { videos: page.videos, nextPageToken: page.next } : { videos: page.videos }
+}
+
+/** 排序 chip 的快取：省掉「熱門」每次第一頁都要先探測 chipBar。 */
+const SORT_TOKEN_TTL: number = 10 * 60 * 1000
+const sortTokenCache: Map<string, { chips: { label: string; token: string }[]; at: number }> = new Map()
+
+async function channelSortChips(channelId: string): Promise<{ label: string; token: string }[]> {
+  const hit = sortTokenCache.get(channelId)
+  if (hit && Date.now() - hit.at < SORT_TOKEN_TTL) return hit.chips
+  const base: JsonObject = await fetchBrowseResponse(channelId, CHANNEL_VIDEOS_PARAMS)
+  const chips = extractSortChips(base)
+  if (chips.some((chip: { token: string }): boolean => chip.token.length > 0)) {
+    sortTokenCache.set(channelId, { chips, at: Date.now() })
+  }
+  return chips
+}
+
+/** 「熱門」「最早」那顆 chip；用標籤挑，找不到才退位置（實測順序是 Latest / Popular / Oldest）。 */
+const SORT_CHIPS: Record<"popular" | "oldest", { pattern: RegExp; fallback: number }> = {
+  popular: { pattern: /popular/i, fallback: 1 },
+  oldest: { pattern: /oldest/i, fallback: 2 },
+}
+
+function sortChipToken(chips: { label: string; token: string }[], sort: "popular" | "oldest"): string {
+  const rule = SORT_CHIPS[sort]
+  const matched = chips.find((chip: { label: string }): boolean => rule.pattern.test(chip.label))
+  const chosen = matched ?? chips[rule.fallback]
+  return chosen?.token ?? ""
+}
+
+/**
+ * 頻道影片的第一頁（依排序）或續頁。
+ * 排序不是 browse params：用 chipBar 上那個 chip 自己的 continuation token 當第一頁。
+ */
+export async function getYoutubeChannelVideos(
+  channelId: string,
+  cursor: string | undefined,
+  sort: "latest" | "popular" | "oldest",
+): Promise<{ videos: UnifiedVideoItem[]; nextPageToken?: string }> {
+  if (cursor) return getYoutubeChannelPage(cursor)
+
+  if (sort !== "latest") {
+    const token: string = sortChipToken(await channelSortChips(channelId), sort)
+    if (token) {
+      const response: JsonObject = await fetchBrowseContinuation(token)
+      const page = parseChannelVideosPage(response, token)
+      if (page.videos.length > 0 || page.next) {
+        return page.next ? { videos: page.videos, nextPageToken: page.next } : { videos: page.videos }
+      }
+      sortTokenCache.delete(channelId)
+    }
+  }
+
   const response: JsonObject = await fetchBrowseResponse(channelId, CHANNEL_VIDEOS_PARAMS)
-  return parseChannelDetail(channelId, response)
+  const page = parseChannelVideosPage(response)
+  return page.next ? { videos: page.videos, nextPageToken: page.next } : { videos: page.videos }
 }
 
 interface SabrPlayerInfo {

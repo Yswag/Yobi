@@ -1179,7 +1179,11 @@ async function fetchChannelProfile(mid: string): Promise<ChannelProfile | null> 
   return null
 }
 
-async function fetchChannelVideos(mid: string, page: number): Promise<UnifiedVideoItem[]> {
+async function fetchChannelVideos(
+  mid: string,
+  page: number,
+  order: string,
+): Promise<{ videos: UnifiedVideoItem[]; total: number }> {
   const attempts: Array<() => Promise<any>> = [
     () =>
       biliFetchJson<any>(
@@ -1188,7 +1192,7 @@ async function fetchChannelVideos(mid: string, page: number): Promise<UnifiedVid
           mid,
           ps: 30,
           pn: page,
-          order: "pubdate",
+          order,
           platform: "web",
           web_location: 1550101,
         },
@@ -1199,7 +1203,7 @@ async function fetchChannelVideos(mid: string, page: number): Promise<UnifiedVid
         mid,
         ps: 30,
         pn: page,
-        order: "pubdate",
+        order,
       }),
   ]
 
@@ -1209,25 +1213,35 @@ async function fetchChannelVideos(mid: string, page: number): Promise<UnifiedVid
       if (result?.code === 0) {
         const list = result.data?.list
         const items = mapItems(list?.vlist ?? list)
-        if (items.length) return items
+        const total: number = Number(result.data?.page?.count) || 0
+        if (items.length) return { videos: items, total }
       }
     } catch {
       // try the next endpoint
     }
   }
-  return []
+  return { videos: [], total: 0 }
 }
 
-export async function getBiliChannel(mid: string, page = 1): Promise<ChannelDetail> {
-  const rawMid = String(mid ?? "").trim()
+export async function getBiliChannel(
+  mid: string,
+  page = 1,
+  sort: "latest" | "popular" | "oldest" = "latest",
+): Promise<ChannelDetail> {
+  const rawMid: string = String(mid ?? "").trim()
   if (!rawMid) throw new Error("缺少 UP 主 ID")
+  // bili 的 order 只有 pubdate / click，沒有「最早」；UI 也不對 bili 顯示這個選項。
+  const order: string = sort === "popular" ? "click" : "pubdate"
 
   const profile = await fetchChannelProfile(rawMid)
-  let videos = await fetchChannelVideos(rawMid, page)
+  const firstPage = await fetchChannelVideos(rawMid, page, order)
+  let videos: UnifiedVideoItem[] = firstPage.videos
+  let total: number = firstPage.total
 
   if (!videos.length && profile?.name) {
     // Risk-control fallback: search the UP 主's published works by name.
     videos = await searchBiliVideos(profile.name, page)
+    total = 0
   }
 
   return {
@@ -1239,7 +1253,9 @@ export async function getBiliChannel(mid: string, page = 1): Promise<ChannelDeta
     description: profile?.sign ?? "",
     subscriberCountText:
       profile?.fans !== undefined ? `${formatCount(profile.fans)} 粉絲` : undefined,
+    videoCountText: total > 0 ? formatCount(total) : undefined,
     videos,
-    nextPageToken: videos.length ? String(page + 1) : undefined,
+    // 一頁滿 30 筆才可能有下一頁；不足就是到底了。
+    nextPageToken: videos.length >= 30 ? String(page + 1) : undefined,
   }
 }

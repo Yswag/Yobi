@@ -354,6 +354,11 @@ export async function fetchBrowseResponse(browseId: string, params?: string): Pr
   return innertubePost("browse", payload, { client: "WEB" })
 }
 
+/** browse 的續頁（頻道影片、播放清單）。 */
+export async function fetchBrowseContinuation(continuation: string): Promise<JsonObject> {
+  return innertubePost("browse", { continuation }, { client: "WEB" })
+}
+
 /** next（推薦、章節、留言）。 */
 export async function fetchNextResponse(videoId: string, continuation?: string): Promise<JsonObject> {
   if (continuation) {

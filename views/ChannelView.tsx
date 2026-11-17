@@ -2,6 +2,7 @@ import {
   HStack,
   Image,
   LazyVStack,
+  ProgressView,
   Rectangle,
   ScrollView,
   Spacer,
@@ -12,11 +13,12 @@ import {
   useRef,
   useState,
 } from "scripting"
-import type { Point, VirtualNode } from "scripting"
+import type { Point, ScrollGeometry, ScrollPhase, ScrollPhaseChangeContext, VirtualNode } from "scripting"
 import type { ChannelDetail, Provider, UnifiedVideoItem } from "../types"
 import { VideoCard, VideoCardSkeleton } from "../components/VideoCard"
 import {
   getChannel,
+  getChannelVideos,
   getSavedPosition,
   isSubscribed,
   subscribeStorageChanges,
@@ -46,33 +48,27 @@ export interface ChannelViewProps {
   onOpenChannel?: (provider: Provider, authorId: string, authorName: string, avatarUrl?: string) => void
 }
 
-type SortMode = "latest" | "popular"
+type SortMode = "latest" | "popular" | "oldest"
 type LayoutMode = "row" | "grid"
 
 const BANNER_HEIGHT: number = 132
 const AVATAR_SIZE: number = 76
+/** 離底部這麼近就自動抓下一頁。 */
+const LOAD_MORE_DISTANCE: number = 320
 /** 名字上緣大約在這個位移（封面 132 + 間距 20）之後看不見。 */
 const TITLE_REVEAL_OFFSET: number = 140
 
-const SORT_OPTIONS: ChipOption<SortMode>[] = [
+// bili 的 arc/search 只有 pubdate / click，所以「最早」只給 YouTube。
+const SORT_OPTIONS_YT: ChipOption<SortMode>[] = [
+  { key: "latest", label: "最新" },
+  { key: "popular", label: "熱門" },
+  { key: "oldest", label: "最早" },
+]
+
+const SORT_OPTIONS_BILI: ChipOption<SortMode>[] = [
   { key: "latest", label: "最新" },
   { key: "popular", label: "熱門" },
 ]
-
-function sortVideos(list: UnifiedVideoItem[], mode: SortMode): UnifiedVideoItem[] {
-  const next: UnifiedVideoItem[] = list.slice()
-  if (mode === "popular") {
-    return next.sort((a: UnifiedVideoItem, b: UnifiedVideoItem): number => (b.viewCount ?? 0) - (a.viewCount ?? 0))
-  }
-  return next.sort((a: UnifiedVideoItem, b: UnifiedVideoItem): number => {
-    const aTime: number | undefined = a.publishedAt
-    const bTime: number | undefined = b.publishedAt
-    if (aTime === undefined && bTime === undefined) return 0
-    if (aTime === undefined) return 1
-    if (bTime === undefined) return -1
-    return bTime - aTime
-  })
-}
 
 export function ChannelView(props: ChannelViewProps): VirtualNode {
   const [detail, setDetail] = useState<ChannelDetail | null>(null)
@@ -86,6 +82,12 @@ export function ChannelView(props: ChannelViewProps): VirtualNode {
   // 導覽列標題跟頻道名走：名字還在畫面上就不顯示，捲出去才浮出來。
   const [titleVisible, setTitleVisible] = useState<boolean>(false)
   const titleShownRef = useRef<boolean>(false)
+  // 影片清單：排序由 provider 決定，所以獨立於 detail 存（換排序就整份重抓）。
+  const [videos, setVideos] = useState<UnifiedVideoItem[]>([])
+  const [listLoading, setListLoading] = useState<boolean>(false)
+  const [nextToken, setNextToken] = useState<string | undefined>(undefined)
+  const [loadingMore, setLoadingMore] = useState<boolean>(false)
+  const loadingMoreRef = useRef<boolean>(false)
   const requestSeq = useRef<number>(0)
 
   const subscriptionId: string = `${props.provider}:${props.channelId}`
@@ -98,6 +100,9 @@ export function ChannelView(props: ChannelViewProps): VirtualNode {
       const next: ChannelDetail = await getChannel(props.provider, props.channelId)
       if (seq !== requestSeq.current) return
       setDetail(next)
+      setVideos(next.videos)
+      setNextToken(next.nextPageToken)
+      setSortMode("latest")
     } catch {
       if (seq !== requestSeq.current) return
       setDetail(null)
@@ -118,15 +123,64 @@ export function ChannelView(props: ChannelViewProps): VirtualNode {
 
   const currentName: string = detail?.name || props.initialName || props.channelId
   const currentAvatar: string = detail?.avatarUrl || props.initialAvatar || ""
-  const videos: UnifiedVideoItem[] = detail?.videos ?? []
   const keyword: string = query.trim().toLowerCase()
-  const searchedVideos: UnifiedVideoItem[] = keyword.length === 0
+  const filteredVideos: UnifiedVideoItem[] = keyword.length === 0
     ? videos
     : videos.filter((video: UnifiedVideoItem): boolean => {
       const haystack: string = `${video.title} ${video.authorName}`.toLowerCase()
       return haystack.includes(keyword)
     })
-  const filteredVideos: UnifiedVideoItem[] = sortVideos(searchedVideos, sortMode)
+
+  // 頻道影片清單本來就不帶作者，用目前頻道的資料補上。
+  const patchVideos = (incoming: UnifiedVideoItem[]): UnifiedVideoItem[] =>
+    incoming.map((video: UnifiedVideoItem): UnifiedVideoItem => {
+      if (video.authorName && video.authorId) return video
+      return {
+        ...video,
+        authorName: video.authorName || currentName,
+        authorId: video.authorId || props.channelId,
+        authorAvatar: video.authorAvatar || currentAvatar || undefined,
+      }
+    })
+
+  const loadMore = async (): Promise<void> => {
+    if (loadingMoreRef.current || !nextToken) return
+    loadingMoreRef.current = true
+    setLoadingMore(true)
+    try {
+      const page = await getChannelVideos(props.provider, props.channelId, nextToken, sortMode)
+      setVideos((previous: UnifiedVideoItem[]): UnifiedVideoItem[] => [
+        ...previous,
+        ...patchVideos(page.videos),
+      ])
+      setNextToken(page.nextPageToken)
+    } catch {
+      // 保留 token，使用者可以再滑一次重試
+    } finally {
+      loadingMoreRef.current = false
+      setLoadingMore(false)
+    }
+  }
+
+  // 換排序 = 伺服器重算第一頁（bili 的 order、YouTube 的 chip token），把累積清掉重來。
+  const changeSort = async (mode: SortMode): Promise<void> => {
+    if (mode === sortMode) return
+    const seq: number = ++requestSeq.current
+    setSortMode(mode)
+    setListLoading(true)
+    setVideos([])
+    setNextToken(undefined)
+    try {
+      const page = await getChannelVideos(props.provider, props.channelId, undefined, mode)
+      if (seq !== requestSeq.current) return
+      setVideos(patchVideos(page.videos))
+      setNextToken(page.nextPageToken)
+    } catch {
+      // 失敗就留在空清單，使用者可以換回其他排序
+    } finally {
+      if (seq === requestSeq.current) setListLoading(false)
+    }
+  }
 
   const handleToggleSubscription = (): void => {
     const next: boolean = toggleSubscription({
@@ -151,7 +205,8 @@ export function ChannelView(props: ChannelViewProps): VirtualNode {
 
   const metaParts: string[] = [providerFullName(props.provider)]
   if (detail?.subscriberCountText) metaParts.push(detail.subscriberCountText)
-  if (detail) metaParts.push(`${videos.length} 部影片`)
+  // 只顯示頻道總數；抓不到就不寫，不要拿已載入數量充當總數。
+  if (detail?.videoCountText) metaParts.push(`${detail.videoCountText} 部影片`)
 
   const banner: VirtualNode = detail?.bannerUrl
     ? (
@@ -228,8 +283,18 @@ export function ChannelView(props: ChannelViewProps): VirtualNode {
     <SearchField value={query} prompt="在頻道中搜尋" onChange={setQuery} />
   )
 
+  const footer: VirtualNode | null = nextToken ? (
+    <VStack padding={{ vertical: 18 }} frame={{ maxWidth: "infinity" }}>
+      {loadingMore ? (
+        <ProgressView />
+      ) : (
+        <PillButton label="載入更多影片" icon="chevron.down" onTap={() => void loadMore()} />
+      )}
+    </VStack>
+  ) : null
+
   let listContent: VirtualNode
-  if (loading && videos.length === 0) {
+  if ((loading && videos.length === 0) || (listLoading && videos.length === 0)) {
     listContent = <VideoCardSkeleton layout={layoutMode} />
   } else if (errorText) {
     listContent = (
@@ -284,6 +349,19 @@ export function ChannelView(props: ChannelViewProps): VirtualNode {
           setTitleVisible(shouldShow)
         },
       }}
+      onScrollPhaseChange={(
+        _old: ScrollPhase,
+        next: ScrollPhase,
+        context: ScrollPhaseChangeContext,
+      ): void => {
+        if (String(next) !== "idle") return
+        if (!nextToken || loadingMoreRef.current) return
+        const geometry: ScrollGeometry = context.geometry
+        const remaining: number =
+          geometry.contentSize.height - geometry.contentOffset.y - geometry.containerSize.height
+        if (remaining > LOAD_MORE_DISTANCE) return
+        void loadMore()
+      }}
       toolbar={{
         principal: (
           <Text
@@ -307,13 +385,14 @@ export function ChannelView(props: ChannelViewProps): VirtualNode {
             {filterField}
           </VStack>
           <ChipBar
-            options={SORT_OPTIONS}
+            options={props.provider === "yt" ? SORT_OPTIONS_YT : SORT_OPTIONS_BILI}
             value={sortMode}
-            onChange={setSortMode}
+            onChange={(mode: SortMode) => void changeSort(mode)}
             trailing={<LayoutToggle layout={layoutMode} onChange={setLayoutMode} />}
           />
         </VStack>
         {listContent}
+        {footer}
       </VStack>
     </ScrollView>
   )

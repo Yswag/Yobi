@@ -17,6 +17,7 @@ import type {
 } from "../types"
 import {
   getYoutubeChannel,
+  getYoutubeChannelVideos,
   getYoutubeCommentPage,
   getYoutubeCommentReplies,
   getYoutubeSearchSuggestions,
@@ -182,8 +183,39 @@ export async function getCommentReplies(
   return getYoutubeCommentReplies(rawId, cursor)
 }
 
-/** 頻道 / UP 主。 */
-export async function getChannel(provider: Provider, rawId: string): Promise<ChannelDetail> {
+/** 頻道 / UP 主。`withAbout: false` 跳過精確總數那一支請求（例如訂閱頁補資料）。 */
+export async function getChannel(
+  provider: Provider,
+  rawId: string,
+  options: { withAbout?: boolean } = {},
+): Promise<ChannelDetail> {
   if (provider === "bili") return getBiliChannel(rawId)
-  return getYoutubeChannel(rawId)
+  return getYoutubeChannel(rawId, options)
+}
+
+export interface ChannelVideoPage {
+  videos: UnifiedVideoItem[]
+  /** 下一頁的 cursor；沒有就是到底了。 */
+  nextPageToken?: string
+}
+
+export type ChannelSort = "latest" | "popular" | "oldest"
+
+/**
+ * 頻道影片：cursor 沒有就是該排序的第一頁。
+ * 排序交給 provider（bili 用 order、YouTube 用 chipBar 的 token），不在地端排序。
+ */
+export async function getChannelVideos(
+  provider: Provider,
+  rawId: string,
+  cursor: string | undefined,
+  sort: ChannelSort = "latest",
+): Promise<ChannelVideoPage> {
+  if (provider === "bili") {
+    const detail: ChannelDetail = await getBiliChannel(rawId, Number.parseInt(cursor ?? "1", 10) || 1, sort)
+    return detail.nextPageToken
+      ? { videos: detail.videos, nextPageToken: detail.nextPageToken }
+      : { videos: detail.videos }
+  }
+  return getYoutubeChannelVideos(rawId, cursor, sort)
 }
