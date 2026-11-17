@@ -61,8 +61,8 @@ export function TabStack(props: {
         navigationDestination={
           <NavigationDestination>
             {(route: string) => (
-              // Settings is a native Form and uses the system navigation bar; other pages draw their own header.
-              <Group toolbarVisibility={route === SETTINGS_ROUTE ? "automatic" : "hidden"} safeAreaPadding={bottomPadding}>
+              // 推入頁都用系統導覽列：邊緣返回、標題截斷、捲動材質都靠它，自己畫標頭拿不到這些。
+              <Group toolbarVisibility="automatic" safeAreaPadding={bottomPadding}>
                 {renderRoute(route)}
               </Group>
             )}

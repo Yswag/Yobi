@@ -12,7 +12,7 @@ import {
   useRef,
   useState,
 } from "scripting"
-import type { VirtualNode } from "scripting"
+import type { Point, VirtualNode } from "scripting"
 import type { ChannelDetail, Provider, UnifiedVideoItem } from "../types"
 import { VideoCard, VideoCardSkeleton } from "../components/VideoCard"
 import {
@@ -29,7 +29,6 @@ import {
   Avatar,
   ChipBar,
   EmptyState,
-  GlassIconButton,
   LayoutToggle,
   PillButton,
   SearchField,
@@ -42,6 +41,7 @@ export interface ChannelViewProps {
   channelId: string
   initialName?: string
   initialAvatar?: string
+  /** 保留給非推入式的呼叫端；推入頁的返回由系統導覽列提供。 */
   onClose?: () => void
   onOpenChannel?: (provider: Provider, authorId: string, authorName: string, avatarUrl?: string) => void
 }
@@ -51,6 +51,8 @@ type LayoutMode = "row" | "grid"
 
 const BANNER_HEIGHT: number = 132
 const AVATAR_SIZE: number = 76
+/** 名字上緣大約在這個位移（封面 132 + 間距 20）之後看不見。 */
+const TITLE_REVEAL_OFFSET: number = 140
 
 const SORT_OPTIONS: ChipOption<SortMode>[] = [
   { key: "latest", label: "最新" },
@@ -81,6 +83,9 @@ export function ChannelView(props: ChannelViewProps): VirtualNode {
   const [sortMode, setSortMode] = useState<SortMode>("latest")
   const [layoutMode, setLayoutMode] = useState<LayoutMode>("row")
   const [descriptionExpanded, setDescriptionExpanded] = useState<boolean>(false)
+  // 導覽列標題跟頻道名走：名字還在畫面上就不顯示，捲出去才浮出來。
+  const [titleVisible, setTitleVisible] = useState<boolean>(false)
+  const titleShownRef = useRef<boolean>(false)
   const requestSeq = useRef<number>(0)
 
   const subscriptionId: string = `${props.provider}:${props.channelId}`
@@ -104,7 +109,6 @@ export function ChannelView(props: ChannelViewProps): VirtualNode {
   useEffect(() => {
     void load()
   }, [props.provider, props.channelId])
-
   useEffect(() => {
     setSubscribed(isSubscribed(subscriptionId))
     return subscribeStorageChanges(() => {
@@ -262,38 +266,55 @@ export function ChannelView(props: ChannelViewProps): VirtualNode {
   }
 
   return (
-    <ZStack alignment="topLeading" frame={{ maxWidth: "infinity", maxHeight: "infinity" }}>
-      <ScrollView
-        axes="vertical"
-        scrollIndicator="hidden"
-        scrollDismissesKeyboard="immediately"
-        frame={{ maxWidth: "infinity", maxHeight: "infinity" }}
-        refreshable={load}
-      >
-        <VStack spacing={20} frame={{ maxWidth: "infinity" }} padding={{ bottom: 16 }}>
-          {banner}
-          {hero}
-          <VStack spacing={12} frame={{ maxWidth: "infinity" }}>
-            <VStack padding={{ horizontal: space.page }} frame={{ maxWidth: "infinity" }}>
-              {filterField}
-            </VStack>
-            <ChipBar
-              options={SORT_OPTIONS}
-              value={sortMode}
-              onChange={setSortMode}
-              trailing={<LayoutToggle layout={layoutMode} onChange={setLayoutMode} />}
-            />
+    <ScrollView
+      axes="vertical"
+      scrollIndicator="hidden"
+      scrollDismissesKeyboard="immediately"
+      frame={{ maxWidth: "infinity", maxHeight: "infinity" }}
+      refreshable={load}
+      navigationBarTitleDisplayMode="inline"
+      scrollEdgeEffectStyle="soft"
+      // 只訂閱位移；轉成布林後用 ref 去重，SwiftUI 每幀都回呼但只有跨過門檻才重繪。
+      onScrollGeometryChange={{
+        of: "contentOffset",
+        onChanged: (_old: Readonly<Point>, next: Readonly<Point>): void => {
+          const shouldShow: boolean = next.y > TITLE_REVEAL_OFFSET
+          if (titleShownRef.current === shouldShow) return
+          titleShownRef.current = shouldShow
+          setTitleVisible(shouldShow)
+        },
+      }}
+      toolbar={{
+        principal: (
+          <Text
+            font={type.cardTitle}
+            fontWeight="semibold"
+            foregroundStyle="label"
+            lineLimit={1}
+            opacity={titleVisible ? 1 : 0}
+            animation={{ animation: Animation.easeIn(0.18), value: titleVisible }}
+          >
+            {currentName}
+          </Text>
+        ),
+      }}
+    >
+      <VStack spacing={20} frame={{ maxWidth: "infinity" }} padding={{ bottom: 16 }}>
+        {banner}
+        {hero}
+        <VStack spacing={12} frame={{ maxWidth: "infinity" }}>
+          <VStack padding={{ horizontal: space.page }} frame={{ maxWidth: "infinity" }}>
+            {filterField}
           </VStack>
-          {listContent}
+          <ChipBar
+            options={SORT_OPTIONS}
+            value={sortMode}
+            onChange={setSortMode}
+            trailing={<LayoutToggle layout={layoutMode} onChange={setLayoutMode} />}
+          />
         </VStack>
-      </ScrollView>
-
-      {props.onClose ? (
-        <HStack padding={{ horizontal: space.page, top: 6 }} frame={{ maxWidth: "infinity", alignment: "leading" }}>
-          <GlassIconButton icon="chevron.left" onTap={props.onClose} />
-          <Spacer />
-        </HStack>
-      ) : null}
-    </ZStack>
+        {listContent}
+      </VStack>
+    </ScrollView>
   )
 }

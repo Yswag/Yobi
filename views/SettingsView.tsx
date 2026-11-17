@@ -365,12 +365,31 @@ export function SettingsView(props: SettingsViewProps): VirtualNode {
     showToast("已清空觀看紀錄")
   }
 
+  // 結束 App 現在也放在上面，不用滑到最底。
+  const handleExit = async (): Promise<void> => {
+    if (!props.onExitApp) return
+    const index: number | null = await Dialog.actionSheet({
+      title: "結束 Yobi",
+      actions: [{ label: "結束", destructive: true }],
+    })
+    if (typeof index !== "number") return
+    props.onExitApp()
+  }
+
   return (
     <Form
       formStyle="grouped"
       tint={palette.brand}
       navigationTitle="設定"
       navigationBarTitleDisplayMode="large"
+      scrollEdgeEffectStyle="soft"
+      toolbar={{
+        topBarTrailing: props.onExitApp ? (
+          <Button role="destructive" buttonStyle="plain" action={() => void handleExit()}>
+            <Image systemName="power" font={17} fontWeight="semibold" foregroundStyle={palette.danger} />
+          </Button>
+        ) : undefined,
+      }}
       toast={{
         message: statusMessage ?? "",
         position: "bottom",
