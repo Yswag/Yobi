@@ -516,7 +516,7 @@ export function WatchView(props: WatchViewProps): VirtualNode {
 
   return (
     <VStack
-      spacing={8}
+      spacing={0}
       frame={{ maxWidth: "infinity", maxHeight: "infinity", alignment: "top" }}
       toast={{
         message: toast ?? "",
@@ -528,18 +528,24 @@ export function WatchView(props: WatchViewProps): VirtualNode {
       }}
     >
       {/* 頁首當真正的兄弟，佔實際空間（不疊上去、不靠安全區）。 */}
-      <Picker
-        title="內容"
-        value={tab}
-        onChanged={(next: number) => withAnimation(() => setTab(next))}
-        pickerStyle="segmented"
-        frame={{ maxWidth: "infinity", height: 32 }}
+      {/* 材質要鋪在外層，否則上下內距會露出卡片底色（深色下就是一條黑邊）。 */}
+      <VStack
+        spacing={0}
+        frame={{ maxWidth: "infinity" }}
         padding={{ horizontal: space.page, top: 6, bottom: 6 }}
         background="systemBackground"
       >
-        <Text tag={TAB_RELATED}>詳情</Text>
-        <Text tag={TAB_COMMENTS}>留言</Text>
-      </Picker>
+        <Picker
+          title="內容"
+          value={tab}
+          onChanged={(next: number) => withAnimation(() => setTab(next))}
+          pickerStyle="segmented"
+          frame={{ maxWidth: "infinity", height: 32 }}
+        >
+          <Text tag={TAB_RELATED}>詳情</Text>
+          <Text tag={TAB_COMMENTS}>留言</Text>
+        </Picker>
+      </VStack>
       {/* TabView 不會回報自己需要多少高，要自己量。
           兩頁改成「填滿且靠上」：寫死高度時頁面比容器高，SwiftUI 會把它垂直置中，
           上緣就溢出到容器外 → 最上面那排內容看起來被切掉。 */}
