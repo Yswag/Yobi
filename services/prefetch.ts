@@ -62,6 +62,8 @@ export class Prefetcher {
   /** 抓到 null 的最小塊號，之後不再往後預抓。 */
   private endIndex: number = Number.POSITIVE_INFINITY
   private lastRequestAt: number = 0
+  /** 播放器最近要的塊號。 */
+  private lastIndex: number = -1
   cachedBytes: number = 0
 
   constructor(source: ChunkSource, options: PrefetcherOptions) {
@@ -72,6 +74,7 @@ export class Prefetcher {
 
   async get(index: number): Promise<Uint8Array | null> {
     this.lastRequestAt = Date.now()
+    this.lastIndex = index
     dropIdle(this)
     this.trimOutside(index)
 
@@ -213,6 +216,16 @@ export class Prefetcher {
     }
   }
 
+  /** 播放位置之後連續已抓好的位元組；中間缺一塊就停，缺塊之後的對播放還沒用。 */
+  aheadBytes(): number {
+    let total: number = 0
+    for (let index = this.lastIndex + 1; ; index++) {
+      const bytes: Uint8Array | undefined = this.cache.get(index)
+      if (!bytes) return total
+      total += bytes.byteLength
+    }
+  }
+
   isIdle(now: number): boolean {
     return now - this.lastRequestAt > IDLE_MS
   }
@@ -230,6 +243,20 @@ export class Prefetcher {
     this.release()
     prefetchers.delete(this)
   }
+}
+
+/**
+ * 正在用的預抓器裡，播放位置之後最多的連續位元組；沒有就回 null。
+ * 取最多的那個是影片軌：音軌位元組少，換算秒數會失真。
+ */
+export function prefetchedAheadBytes(): number | null {
+  const now: number = Date.now()
+  let best: number | null = null
+  for (const prefetcher of prefetchers) {
+    if (prefetcher.isIdle(now)) continue
+    best = Math.max(best ?? 0, prefetcher.aheadBytes())
+  }
+  return best
 }
 
 /** 停止播放時釋放所有預抓的資料。 */

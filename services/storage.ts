@@ -36,6 +36,7 @@ export const DEFAULT_SETTINGS: PlayerSettings = {
   danmakuSpeed: 1,
   danmakuArea: 0.5,
   danmakuBlockedWords: [],
+  biliLineSwitch: false,
 }
 
 const listeners = new Set<() => void>()
@@ -82,6 +83,7 @@ function normalizeSettings(patch: Partial<PlayerSettings>): PlayerSettings {
   if (typeof merged.preferredQualityHeight !== "number") {
     merged.preferredQualityHeight = DEFAULT_SETTINGS.preferredQualityHeight
   }
+  if (typeof merged.biliLineSwitch !== "boolean") merged.biliLineSwitch = DEFAULT_SETTINGS.biliLineSwitch
   return merged
 }
 

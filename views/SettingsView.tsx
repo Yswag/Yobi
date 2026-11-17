@@ -426,6 +426,17 @@ export function SettingsView(props: SettingsViewProps): VirtualNode {
       </Section>
 
       <Section
+        header={<Text>BiliBili 線路</Text>}
+        footer={<Text>依實際下載速度挑最快的伺服器，失敗或卡住時立刻換一條。</Text>}
+      >
+        <Toggle
+          title="自動切換線路"
+          value={settings.biliLineSwitch}
+          onChanged={(value: boolean) => patchSettings({ biliLineSwitch: value })}
+        />
+      </Section>
+
+      <Section
         header={<Text>SponsorBlock</Text>}
         footer={<Text>只作用於 YouTube。關閉自動跳過時，片段開始會顯示跳過按鈕。</Text>}
       >

@@ -9,6 +9,8 @@
 
 import { fetch } from "scripting"
 import type { AudioStreamTrack, VideoQualityTrack } from "../../types"
+import { recordDownload } from "../netMeter"
+import { parseSidx, type SidxEntry, type SidxIndex } from "../sidx"
 import {
   INNERTUBE_CLIENTS,
   getYoutubeAuth,
@@ -498,79 +500,6 @@ export function decodeSabrRedirect(bytes: Uint8Array): string | undefined {
 }
 
 /* ------------------------------------------------------------------ *
- * 直連 Range + sidx
- * ------------------------------------------------------------------ */
-
-interface SidxEntry {
-  offset: number
-  size: number
-  durationUs: number
-}
-
-interface SidxIndex {
-  timescale: number
-  entries: SidxEntry[]
-}
-
-/** 解析 ISO BMFF `sidx` box（indexRange 開頭的位元組）。 */
-export function parseSidx(bytes: Uint8Array, baseOffset: number): SidxIndex | null {
-  if (bytes.length < 16) return null
-  const view: DataView = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
-  let cursor: number = 0
-  let sidxStart: number = -1
-  while (cursor + 8 <= bytes.length) {
-    const size: number = view.getUint32(cursor)
-    const type: string = String.fromCharCode(
-      bytes[cursor + 4],
-      bytes[cursor + 5],
-      bytes[cursor + 6],
-      bytes[cursor + 7],
-    )
-    if (type === "sidx") {
-      sidxStart = cursor
-      break
-    }
-    if (size <= 0) break
-    cursor += size
-  }
-  if (sidxStart < 0) return null
-
-  let offset: number = sidxStart + 8
-  const version: number = bytes[offset]
-  offset += 4 // version + flags
-  offset += 4 // reference_ID
-  const timescale: number = view.getUint32(offset)
-  offset += 4
-  if (version === 0) {
-    offset += 8 // earliest_presentation_time + first_offset
-  } else {
-    offset += 16
-  }
-  offset += 2 // reserved
-  const referenceCount: number = view.getUint16(offset)
-  offset += 2
-
-  const boxSize: number = view.getUint32(sidxStart)
-  const firstOffset: number = version === 0 ? view.getUint32(sidxStart + 8 + 4 + 4 + 4 + 4) : 0
-  let mediaOffset: number = baseOffset + sidxStart + boxSize + firstOffset
-
-  const entries: SidxEntry[] = []
-  for (let i = 0; i < referenceCount; i++) {
-    if (offset + 12 > bytes.length) break
-    const reference: number = view.getUint32(offset)
-    const duration: number = view.getUint32(offset + 4)
-    offset += 12
-    const referenceType: number = reference >>> 31
-    const size: number = reference & 0x7fffffff
-    if (referenceType === 0) {
-      entries.push({ offset: mediaOffset, size, durationUs: Math.round((duration / timescale) * 1_000_000) })
-      mediaOffset += size
-    }
-  }
-  return { timescale, entries }
-}
-
-/* ------------------------------------------------------------------ *
  * Session 設定
  * ------------------------------------------------------------------ */
 
@@ -898,6 +827,7 @@ export class SabrSession {
     }
 
     const buffer: ArrayBuffer = await response.arrayBuffer()
+    recordDownload(buffer.byteLength, this.endpoint())
     const parts: UmpPart[] = parseUmpParts(new Uint8Array(buffer))
     this.lastParts = parts.map((part: UmpPart): number => part.type)
     const headers: Map<number, SabrMediaHeader> = new Map()
@@ -1101,6 +1031,7 @@ async function fetchRange(
   })
   if (!response.ok && response.status !== 206) return null
   const buffer: ArrayBuffer = await response.arrayBuffer()
+  recordDownload(buffer.byteLength, url)
   return new Uint8Array(buffer)
 }
 

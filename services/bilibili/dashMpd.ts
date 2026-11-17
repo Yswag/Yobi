@@ -1,5 +1,6 @@
-import { Path } from "scripting"
+import { Path, fetch } from "scripting"
 import { registerBiliFileSource, registerVirtualManifest } from "../localProxy"
+import { parseSidx, type SidxIndex } from "../sidx"
 
 /**
  * Minimal shape of the `dash` object returned by
@@ -65,6 +66,30 @@ function durationToIso(seconds: number): string {
 
 type BaseUrlResolver = (media: BiliDashMedia, mimeType: string, index: number) => string
 
+/** 每個子片段的位元組範圍與時長，取自 sidx。 */
+export interface BiliSegmentIndex {
+  initRange: string
+  sidx: SidxIndex
+}
+
+type SegmentIndexLookup = (media: BiliDashMedia) => BiliSegmentIndex | undefined
+
+const SIDX_TIMESCALE: number = 1_000_000
+/** 片段長短差超過這個比例就不用 SegmentList：單一 duration 會讓 seek 跳錯位置。 */
+const MAX_SEGMENT_SPREAD: number = 1.1
+
+/** 去掉最後一段（通常較短）後的平均時長。 */
+function segmentDurationOf(index: BiliSegmentIndex): number {
+  const body = index.sidx.entries.slice(0, -1)
+  return Math.round(body.reduce((sum, entry) => sum + entry.durationUs, 0) / body.length)
+}
+
+function hasUniformSegments(sidx: SidxIndex): boolean {
+  const body: number[] = sidx.entries.slice(0, -1).map(entry => entry.durationUs)
+  if (body.length < 1) return false
+  return Math.max(...body) <= Math.min(...body) * MAX_SEGMENT_SPREAD
+}
+
 /** bilibili 不給 Initialization range，慣例是 0 到 indexRange 起點前一個位元組。 */
 function implicitInitRange(indexRange: string | undefined): string | undefined {
   if (!indexRange) return undefined
@@ -79,6 +104,19 @@ function mediaUrl(media: BiliDashMedia): string {
   const backups = media.backupUrl || media.backup_url
   if (backups && backups.length) return backups[0]
   return ""
+}
+
+/** baseUrl 加上 backupUrl，順序就是 bili 自己的優先序。 */
+function mediaUrls(media: BiliDashMedia): string[] {
+  const out: string[] = []
+  const push = (value: string | undefined): void => {
+    if (typeof value !== "string" || !value) return
+    const normalized: string = value.startsWith("//") ? `https:${value}` : value.replace(/^http:/, "https:")
+    if (!out.includes(normalized)) out.push(normalized)
+  }
+  push(media.baseUrl || media.base_url)
+  for (const value of media.backupUrl || media.backup_url || []) push(value)
+  return out
 }
 
 function segmentBase(media: BiliDashMedia): BiliDashSegmentBase | undefined {
@@ -116,11 +154,31 @@ function mimeTypeOf(media: BiliDashMedia, fallback: string): string {
   return media.mimeType || media.mime_type || fallback
 }
 
+/**
+ * 播放器對 SegmentBase 把整個檔當一段讀，seek 只能從檔頭線性讀到目標（4K 中段要讀上百 MB）。
+ * 拆成 SegmentList 後每個子片段有明確範圍，seek 直接跳過去。
+ * 播放器不認 SegmentList 裡的 SegmentTimeline（會從頭走並報 preroll 錯誤），只能給單一 duration；
+ * bili 影片片段固定 5 秒、音訊 4.992／5.013 交替，取平均不會累積誤差。
+ */
+function segmentListXml(index: BiliSegmentIndex): string[] {
+  const entries = index.sidx.entries
+  const lines: string[] = [
+    `        <SegmentList timescale="${SIDX_TIMESCALE}" duration="${segmentDurationOf(index)}">`,
+    `          <Initialization range="${escapeXml(index.initRange)}"/>`,
+  ]
+  for (const entry of entries) {
+    lines.push(`          <SegmentURL mediaRange="${entry.offset}-${entry.offset + entry.size - 1}"/>`)
+  }
+  lines.push(`        </SegmentList>`)
+  return lines
+}
+
 function representationXml(
   media: BiliDashMedia,
   mimeType: string,
   index: number,
   urlFor: BaseUrlResolver,
+  indexFor: SegmentIndexLookup,
 ): string {
   const url = urlFor(media, mimeType, index)
   const attributes: string[] = [
@@ -141,9 +199,12 @@ function representationXml(
   const lines: string[] = [`      <Representation ${attributes.join(" ")}>`]
   if (url) lines.push(`        <BaseURL>${escapeXml(url)}</BaseURL>`)
 
+  const segmentIndex: BiliSegmentIndex | undefined = indexFor(media)
   const indexRange = indexRangeOf(media)
   const initRange = initRangeOf(media) ?? implicitInitRange(indexRange)
-  if (indexRange || initRange) {
+  if (segmentIndex) {
+    lines.push(...segmentListXml(segmentIndex))
+  } else if (indexRange || initRange) {
     if (indexRange) {
       lines.push(`        <SegmentBase indexRange="${escapeXml(indexRange)}">`)
     } else {
@@ -164,6 +225,7 @@ function adaptationSetXml(
   medias: BiliDashMedia[],
   contentType: "video" | "audio",
   urlFor: BaseUrlResolver,
+  indexFor: SegmentIndexLookup,
 ): string {
   const attributes = [
     `mimeType="${escapeXml(mimeType)}"`,
@@ -175,7 +237,7 @@ function adaptationSetXml(
   }
   const lines: string[] = [`    <AdaptationSet ${attributes.join(" ")}>`]
   medias.forEach((media, index) => {
-    lines.push(representationXml(media, mimeType, index, urlFor))
+    lines.push(representationXml(media, mimeType, index, urlFor, indexFor))
   })
   lines.push(`    </AdaptationSet>`)
   return lines.join("\n")
@@ -235,18 +297,22 @@ function preferAudio(dash: BiliDashPayload): BiliDashMedia[] {
  * manifest. When `selectedVideoId` (a Bilibili `qn`) is given, only that
  * quality is included — otherwise the highest codec of every quality.
  */
-export function buildBiliDashMpdXml(
-  dash: BiliDashPayload,
-  selectedVideoId?: number,
-  urlFor: BaseUrlResolver = mediaUrl,
-): string {
+function selectMedias(dash: BiliDashPayload, selectedVideoId?: number): { videos: BiliDashMedia[]; audios: BiliDashMedia[] } {
   const allVideos = (dash.video ?? []).filter(media => !!mediaUrl(media))
   const matching =
     selectedVideoId === undefined
       ? allVideos
       : allVideos.filter(media => Number(media.id) === Number(selectedVideoId))
-  const videos = preferCodec(matching)
-  const audios = preferAudio(dash)
+  return { videos: preferCodec(matching), audios: preferAudio(dash) }
+}
+
+export function buildBiliDashMpdXml(
+  dash: BiliDashPayload,
+  selectedVideoId?: number,
+  urlFor: BaseUrlResolver = mediaUrl,
+  indexFor: SegmentIndexLookup = (): undefined => undefined,
+): string {
+  const { videos, audios } = selectMedias(dash, selectedVideoId)
 
   const duration = dash.duration || 0
   const minBufferTime = dash.minBufferTime ?? dash.min_buffer_time ?? 1.5
@@ -258,10 +324,10 @@ export function buildBiliDashMpdXml(
   ]
 
   if (videos.length) {
-    lines.push(adaptationSetXml("video/mp4", videos, "video", urlFor))
+    lines.push(adaptationSetXml("video/mp4", videos, "video", urlFor, indexFor))
   }
   if (audios.length) {
-    lines.push(adaptationSetXml("audio/mp4", audios, "audio", urlFor))
+    lines.push(adaptationSetXml("audio/mp4", audios, "audio", urlFor, indexFor))
   }
 
   lines.push(`  </Period>`)
@@ -293,27 +359,67 @@ function pruneDashFiles(keep: string): void {
  * 因此 BaseURL 一律指向本機位元組代理；MPD 則交給 localProxy 供檔（回應必須帶
  * `Content-Length`，DASH 解析器才讀得懂）。
  */
-export function writeBiliDashMpdFile(
+/**
+ * 透過本機代理讀 sidx：它在第一格裡，播放器開片本來就要抓，這裡只是先抓進預抓快取。
+ * 讀不到就回 undefined，退回 SegmentBase。
+ */
+async function loadSegmentIndex(localUrl: string, media: BiliDashMedia): Promise<BiliSegmentIndex | undefined> {
+  const indexRange: string | undefined = indexRangeOf(media)
+  const initRange: string | undefined = initRangeOf(media) ?? implicitInitRange(indexRange)
+  if (!indexRange || !initRange || !localUrl.startsWith("http://127.0.0.1")) return undefined
+  const [start, end] = indexRange.split("-").map(Number)
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return undefined
+  try {
+    const response = await fetch(localUrl, { headers: { Range: `bytes=${start}-${end}` }, timeout: 15 })
+    if (!response.ok) return undefined
+    const sidx: SidxIndex | null = parseSidx(new Uint8Array(await response.arrayBuffer()), start)
+    if (!sidx || sidx.entries.length < 2 || !hasUniformSegments(sidx)) return undefined
+    return { initRange, sidx }
+  } catch {
+    return undefined
+  }
+}
+
+export async function writeBiliDashMpdFile(
   bvid: string,
   cid: number,
   dash: BiliDashPayload,
   selectedVideoId?: number,
-): string {
+): Promise<string> {
   const qn: number = selectedVideoId ?? 0
   const safeBvid: string = (bvid || "unknown").replace(/[^A-Za-z0-9_-]/g, "")
 
+  const localUrls: Map<BiliDashMedia, string> = new Map()
   const urlFor: BaseUrlResolver = (media: BiliDashMedia, mimeType: string, index: number): string => {
-    const direct: string = mediaUrl(media)
-    if (!direct) return ""
-    try {
-      const id: string = `bili_${safeBvid}_${cid}_${qn}_${media.id}_${index}`
-      return registerBiliFileSource(id, direct, mimeType)
-    } catch {
-      return direct
+    const known: string | undefined = localUrls.get(media)
+    if (known !== undefined) return known
+    const urls: string[] = mediaUrls(media)
+    let url: string = urls[0] ?? ""
+    if (urls.length) {
+      try {
+        url = registerBiliFileSource(`bili_${safeBvid}_${cid}_${qn}_${media.id}_${index}`, urls, mimeType)
+      } catch {
+        // 代理起不來就直連
+      }
     }
+    localUrls.set(media, url)
+    return url
   }
 
-  const xml: string = buildBiliDashMpdXml(dash, selectedVideoId, urlFor)
+  const { videos, audios } = selectMedias(dash, selectedVideoId)
+  const indexes: Map<BiliDashMedia, BiliSegmentIndex> = new Map()
+  const entries: Array<[BiliDashMedia, string]> = [
+    ...videos.map((media: BiliDashMedia, index: number): [BiliDashMedia, string] => [media, urlFor(media, "video/mp4", index)]),
+    ...audios.map((media: BiliDashMedia, index: number): [BiliDashMedia, string] => [media, urlFor(media, "audio/mp4", index)]),
+  ]
+  await Promise.all(
+    entries.map(async ([media, url]): Promise<void> => {
+      const index: BiliSegmentIndex | undefined = await loadSegmentIndex(url, media)
+      if (index) indexes.set(media, index)
+    }),
+  )
+
+  const xml: string = buildBiliDashMpdXml(dash, selectedVideoId, urlFor, (media: BiliDashMedia) => indexes.get(media))
   try {
     return registerVirtualManifest(`bili_${safeBvid}_${cid}_${qn}`, xml, "application/dash+xml")
   } catch {

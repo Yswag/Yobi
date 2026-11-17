@@ -26,10 +26,12 @@ import {
   getSavedPosition,
   getSettings,
   getVideoDetail,
+  logPlaybackEvent,
   recordWatchHistory,
   releaseAllPrefetchers,
   resolveOfflineSource,
   resolveStream,
+  setBiliLineSwitchListener,
   updateSettings,
 } from "../services"
 import { SPONSOR_CATEGORY_LABELS } from "../utils/format"
@@ -77,6 +79,8 @@ export interface PlayerStoreSnapshot {
   pipAvailable: boolean
   danmakuEnabled: boolean
   danmakuCount: number
+  /** 播放器左上角的網速與檔案資訊面板。 */
+  statsVisible: boolean
   queue: UnifiedVideoItem[]
   queueIndex: number
   settings: PlayerSettings
@@ -85,6 +89,8 @@ export interface PlayerStoreSnapshot {
 export interface PlayerProgressSnapshot {
   position: number
   duration: number
+  /** 播放器已緩衝到的時間點（秒）。 */
+  bufferedUntil: number
   activeChapter: VideoChapter | null
 }
 
@@ -129,6 +135,7 @@ let storeState: PlayerStoreSnapshot = {
   pipAvailable: false,
   danmakuEnabled: true,
   danmakuCount: 0,
+  statsVisible: false,
   queue: [],
   queueIndex: -1,
   settings: getSettings(),
@@ -137,6 +144,7 @@ let storeState: PlayerStoreSnapshot = {
 let progressState: PlayerProgressSnapshot = {
   position: 0,
   duration: 0,
+  bufferedUntil: 0,
   activeChapter: null,
 }
 
@@ -159,6 +167,42 @@ function emitProgress(): void {
     } catch {
       // Ignore listener errors
     }
+  }
+}
+
+/** 播放器的 seek／stop 在等代理回資料時可能一直不回來，不能讓介面跟著等。 */
+function withTimeout<T>(task: Promise<T>, ms: number): Promise<T | "timeout"> {
+  return new Promise((resolve: (value: T | "timeout") => void, reject: (reason: unknown) => void): void => {
+    const timer: number = setTimeout((): void => resolve("timeout"), ms)
+    task.then(
+      (value: T): void => {
+        clearTimeout(timer)
+        resolve(value)
+      },
+      (error: unknown): void => {
+        clearTimeout(timer)
+        reject(error)
+      },
+    )
+  })
+}
+
+const RESUME_SEEK_TIMEOUT_MS: number = 20_000
+const STOP_TIMEOUT_MS: number = 3000
+
+async function seekForResume(ctrl: VideoPlaybackController, seconds: number): Promise<void> {
+  const startedAt: number = Date.now()
+  logPlaybackEvent(`seek resume ${seconds.toFixed(1)}s`)
+  try {
+    const result: number | "timeout" = await withTimeout(ctrl.seek(seconds), RESUME_SEEK_TIMEOUT_MS)
+    if (result === "timeout") {
+      logPlaybackEvent(`seek resume timeout ${Date.now() - startedAt}ms`)
+      throw new Error("載入續播位置逾時")
+    }
+    logPlaybackEvent(`seek resume done ${Date.now() - startedAt}ms`)
+  } catch (error) {
+    if (error instanceof Error && error.message === "載入續播位置逾時") throw error
+    // 其他 seek 失敗就從頭播
   }
 }
 
@@ -236,9 +280,15 @@ export function getPlayerController(): VideoPlaybackController {
   const ctrl: VideoPlaybackController = new VideoPlaybackController()
   controllerInstance = ctrl
 
+  // bili 線路在代理層自己換，這裡只負責告知。
+  setBiliLineSwitchListener((): void => {
+    showSkippedToast("已切換線路")
+  })
+
   ctrl.on("state", (snap: VideoPlaybackSnapshot) => {
     const mapped: PlaybackStatus = mapControllerState(snap.state)
     if (storeState.status !== mapped) {
+      logPlaybackEvent(`state ${snap.state} at ${snap.position.toFixed(1)}s`)
       storeState.status = mapped
       emitStore()
     }
@@ -270,6 +320,7 @@ export function getPlayerController(): VideoPlaybackController {
 
     progressState.position = pos
     progressState.duration = dur
+    progressState.bufferedUntil = Number.isFinite(snap.bufferedUntil) ? snap.bufferedUntil : 0
     progressState.activeChapter = findChapterAt(storeState.detail?.chapters, pos)
     emitProgress()
 
@@ -315,6 +366,7 @@ export function getPlayerController(): VideoPlaybackController {
   })
 
   ctrl.on("error", (err: { message: string }) => {
+    logPlaybackEvent(`error ${err.message}`)
     storeState.status = "error"
     storeState.errorText = err.message || "播放器發生錯誤"
     emitStore()
@@ -451,6 +503,7 @@ export async function openVideo(item: UnifiedVideoItem, options: OpenVideoOption
   progressState = {
     position: Math.max(0, options.startSeconds ?? 0),
     duration: item.duration || 0,
+    bufferedUntil: 0,
     activeChapter: null,
   }
   emitProgress()
@@ -607,20 +660,14 @@ export async function openVideo(item: UnifiedVideoItem, options: OpenVideoOption
     }
 
     if (options.startSeconds !== undefined && options.startSeconds > 0) {
-      try {
-        await ctrl.seek(options.startSeconds)
-      } catch {
-        // Ignore initial seek failure
-      }
+      await seekForResume(ctrl, options.startSeconds)
+      if (requestId !== openRequestSeq) return
     } else if (options.resumeFromHistory !== false) {
       const savedPos: number = getSavedPosition(item.id, activeCid)
       const totalDur: number = manifest?.duration || offline?.duration || item.duration || 0
       if (savedPos > 5 && (totalDur <= 0 || savedPos < totalDur - 8)) {
-        try {
-          await ctrl.seek(savedPos)
-        } catch {
-          // Ignore initial seek failure
-        }
+        await seekForResume(ctrl, savedPos)
+        if (requestId !== openRequestSeq) return
       }
     }
 
@@ -842,6 +889,7 @@ export async function selectPage(pagePart: VideoPagePart): Promise<void> {
   progressState = {
     position: 0,
     duration: pagePart.duration || progressState.duration,
+    bufferedUntil: 0,
     activeChapter: null,
   }
   emitProgress()
@@ -874,6 +922,12 @@ export async function selectPage(pagePart: VideoPagePart): Promise<void> {
     storeState.errorText = err instanceof Error ? err.message : "切換分P失敗"
     emitStore()
   }
+}
+
+export function setStatsVisible(visible: boolean): void {
+  if (storeState.statsVisible === visible) return
+  storeState.statsVisible = visible
+  emitStore()
 }
 
 export function toggleDanmaku(): void {
@@ -975,12 +1029,16 @@ export async function closePlayer(): Promise<void> {
     setFullscreen(false)
   }
   const ctrl: VideoPlaybackController = getPlayerController()
+  // 讓還在跑的開片流程停在下一個檢查點。
+  openRequestSeq++
+  // 先放掉預抓：播放器在等的代理請求會立刻失敗返回，stop 才有機會結束。
+  releaseAllPrefetchers()
   try {
-    await ctrl.stop()
+    const result: void | "timeout" = await withTimeout(ctrl.stop(), STOP_TIMEOUT_MS)
+    if (result === "timeout") logPlaybackEvent(`stop timeout ${STOP_TIMEOUT_MS}ms`)
   } catch {
     // Ignore
   }
-  releaseAllPrefetchers()
   storeState.presentationMode = "hidden"
   storeState.currentItem = null
   storeState.pipAvailable = false

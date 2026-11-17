@@ -18,6 +18,7 @@ import {
   getPlayerController,
   selectQuality,
   selectYoutubeStreamMode,
+  setStatsVisible,
   updateDanmakuSettings,
   usePlayerStore,
 } from "../state/playerStore"
@@ -135,6 +136,10 @@ export function QualitySheet(props: { onDone: () => void }): VirtualNode {
             </Button>
           )
         })}
+      </Section>
+
+      <Section>
+        <Toggle title="播放統計" value={store.statsVisible} onChanged={(value: boolean) => setStatsVisible(value)} />
       </Section>
     </SheetShell>
   )

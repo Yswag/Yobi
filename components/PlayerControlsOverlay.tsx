@@ -39,6 +39,7 @@ import {
   formatDuration,
 } from "../utils/format"
 import { palette, type } from "../ui/theme"
+import { NetSpeedLabel, PlaybackStatsPanel } from "./PlaybackStats"
 
 export interface PlayerControlsOverlayProps {
   width: number
@@ -61,6 +62,9 @@ const SCRUBBER_TRACK: number = 3
 const SCRUBBER_KNOB: number = 11
 // 64pt 以下一律放大到 44pt 的觸控框（HIG 最小值），視覺尺寸不變。
 const MIN_HIT_SIZE: number = 44
+const SPINNER_BOX: number = 60
+// 網速掛在轉圈正下方；用 offset 不佔版面，控制列開著或收著都對得齊。
+const SPEED_OFFSET_Y: number = 44
 
 function GlassCircle(props: { icon: string; size: number; iconSize: number; onTap: () => void }): VirtualNode {
   const hit: number = Math.max(MIN_HIT_SIZE, props.size)
@@ -394,9 +398,10 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
           <HStack spacing={store.isFullscreen ? 44 : 28}>
             <GlassCircle icon="gobackward.10" size={44} iconSize={18} onTap={() => void seekBy(-10)} />
             {loading ? (
-              <VStack frame={{ width: 60, height: 60 }}>
+              <ZStack frame={{ width: SPINNER_BOX, height: SPINNER_BOX }}>
                 <ProgressView tint="white" controlSize="large" />
-              </VStack>
+                <NetSpeedLabel offsetY={SPEED_OFFSET_Y} />
+              </ZStack>
             ) : (
               <GlassCircle icon={playing ? "pause.fill" : "play.fill"} size={60} iconSize={26} onTap={() => void togglePlayPause()} />
             )}
@@ -489,7 +494,22 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
 
         {loading && !controlsVisible ? (
           <ZStack frame={{ width: props.width, height: props.height }}>
-            <ProgressView tint="white" controlSize="large" />
+            <ZStack frame={{ width: SPINNER_BOX, height: SPINNER_BOX }}>
+              <ProgressView tint="white" controlSize="large" />
+              <NetSpeedLabel offsetY={SPEED_OFFSET_Y} />
+            </ZStack>
+          </ZStack>
+        ) : null}
+
+        {store.statsVisible ? (
+          <ZStack
+            frame={{ width: props.width, height: props.height, alignment: "topLeading" }}
+            allowsHitTesting={false}
+          >
+            {/* 控制列開著時讓出頂列，收起時貼頂。 */}
+            <VStack padding={{ leading: edgeInset, top: controlsVisible ? (store.isFullscreen ? 64 : 56) : 10 }}>
+              <PlaybackStatsPanel />
+            </VStack>
           </ZStack>
         ) : null}
 

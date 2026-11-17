@@ -576,7 +576,7 @@ export async function resolveBiliStream(
     const qualities = buildQualityTracks(dash)
     const selected = pickDefaultQuality(qualities, preferredHeight)
     const defaultQn = selected?.qn ?? Number(selected?.id) ?? 0
-    const primaryUrl = writeBiliDashMpdFile(resolvedBvid, streamCid, dash, defaultQn)
+    const primaryUrl = await writeBiliDashMpdFile(resolvedBvid, streamCid, dash, defaultQn)
     const audioTracks = buildAudioTracks(dash)
 
     const manifest: StreamManifest = {
@@ -599,7 +599,7 @@ export async function resolveBiliStream(
           ? parsed
           : defaultQn
         return {
-          url: writeBiliDashMpdFile(resolvedBvid, streamCid, dash, qn),
+          url: await writeBiliDashMpdFile(resolvedBvid, streamCid, dash, qn),
           backend: "native",
           headers: { ...BILI_HEADERS },
         }

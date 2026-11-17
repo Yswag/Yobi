@@ -1,6 +1,17 @@
 import { AbortController, fetch } from "scripting"
 import type { AbortSignal } from "scripting"
 import { Prefetcher } from "./prefetch"
+import { recordDownload } from "./netMeter"
+import { getSettings } from "./storage"
+import {
+  isLineBanned,
+  lineScore,
+  noteLineFailure,
+  noteLineSample,
+  pickLineToExplore,
+  rankLines,
+  shouldPromote,
+} from "./bilibili/lines"
 
 /**
  * 本機 HttpServer 代理。
@@ -73,7 +84,16 @@ const hlsRelays: Map<string, HlsRelayHandler> = new Map()
  * DASH 的子片段是明確範圍，只回到格子邊界會截斷樣本，播放器回 Invalid data。
  */
 interface BiliFileSource {
-  url: string
+  /** [0] 是 bili 發的線路，後面是它自己的備援與可以互換的鏡像。 */
+  urls: string[]
+  /** 大部分格子走的主線路 host。 */
+  primary: string
+  /** 上次換主線路的時間；主線路沒被停用就至少待滿 BILI_PRIMARY_DWELL_MS。 */
+  primarySince: number
+  /** 播放器最近要的格子；離它夠遠的預抓才拿去試別條線。 */
+  playhead: number
+  /** 正在試線的格子；播放器追上來就取消，改走主線路。 */
+  exploring: Map<number, { host: string; controller: AbortController }>
   contentType: string
   /** 檔案總長，第一次拿到 Content-Range 後才知道。 */
   total: number | null
@@ -81,12 +101,39 @@ interface BiliFileSource {
 }
 
 const biliFileSources: Map<string, BiliFileSource> = new Map()
-/** 一格 1 MB：4K 時單筆要的回應更短，卡住的尾巴也短。 */
+/** 一格 1 MB：播放器要等整格抓完才拿得到第一個位元組，格子越大起播越慢。 */
 const BILI_WINDOW_BYTES: number = 1024 * 1024
-/** 一格變小，預抓就要拉長，不然可緩衝的秒數反而變少。 */
-const BILI_PREFETCH_AHEAD: number = 16
-/** 單筆抓這麼久還沒回來就放棄，交給預抓器重試。 */
+/** 32 格約 32 MB，4K 約 20 秒；影音兩軌合計仍在共用的 96 MB 上限內。 */
+const BILI_PREFETCH_AHEAD: number = 32
+/** 帶明確結尾的請求最多拼這麼多；4K 13 Mbps 的 5 秒子片段約 8 MB。 */
+const BILI_MAX_RESPONSE_BYTES: number = 16 * 1024 * 1024
+/** 單筆抓這麼久還沒回來就放棄，換下一條線。 */
 const BILI_CHUNK_TIMEOUT_MS: number = 12000
+/** 每幾格撥一格去試別條線，而且要離播放位置至少這麼多格。 */
+const BILI_EXPLORE_EVERY: number = 8
+const BILI_EXPLORE_MIN_AHEAD: number = 6
+/** 試線的格子可以放棄得早：實測正常線路 1 MB 不到 1.3 秒。 */
+const BILI_EXPLORE_TIMEOUT_MS: number = 4000
+/** 一格超過預期的 2 倍（夹在這區間）、而且播放器在等，就同時向下一條要。 */
+const BILI_HEDGE_MIN_MS: number = 800
+const BILI_HEDGE_MAX_MS: number = 4000
+const BILI_HEDGE_DEFAULT_MS: number = 1500
+const BILI_HEDGE_POLL_MS: number = 250
+/** 換主線路後至少待這麼久，除非它失敗被停用。 */
+const BILI_PRIMARY_DWELL_MS: number = 60_000
+/** 一格最多換幾條線重抓。 */
+const BILI_MAX_TRIES: number = 3
+/** 上游是 UPOS 時彼此可以互換 host；Akamai 只吃自己發的網址。各線路快慢會隨時間變，交給實際下載的分數決定。 */
+const BILI_CANDIDATE_POOL: string[] = [
+  "upos-sz-mirrorcosov.bilivideo.com",
+  "upos-sz-mirroraliov.bilivideo.com",
+  "upos-sz-mirrorhwov.bilivideo.com",
+  "upos-sz-mirrorali.bilivideo.com",
+  "upos-tf-all-hw.bilivideo.com",
+  "upos-sz-mirrorhw.bilivideo.com",
+  "upos-sz-mirrorcos.bilivideo.com",
+  "upos-tf-all-tx.bilivideo.com",
+]
 const BILI_MAX_SOURCES: number = 48
 
 const BILI_REQUEST_HEADERS: Record<string, string> = {
@@ -187,6 +234,11 @@ function registerRoutes(target: HttpServer): void {
       const requested = parseByteRange(req.headers["range"] ?? req.headers["Range"])
       const start: number = requested.start
       const first: number = Math.floor(start / BILI_WINDOW_BYTES)
+      const servedAt: number = Date.now()
+      source.playhead = first
+      for (const [index, entry] of source.exploring) {
+        if (index <= first + 1) entry.controller.abort()
+      }
       const head: Uint8Array | null = await source.prefetcher.get(first)
       const offset: number = start - first * BILI_WINDOW_BYTES
       if (!head || offset >= head.byteLength) {
@@ -195,22 +247,44 @@ function registerRoutes(target: HttpServer): void {
             headers: { ...BASE_HEADERS, "Content-Range": `bytes */${source.total}` },
           })
         }
+        logPlaybackEvent(`serve 502 ${req.params["id"]} #${first} ${Date.now() - servedAt}ms`)
         return badGateway("upstream failed")
       }
 
-      let end: number = Math.min(requested.end ?? Number.POSITIVE_INFINITY, start + BILI_WINDOW_BYTES - 1)
+      // SegmentList 的子片段帶明確結尾，要拼滿整段：截短會讓播放器回 Invalid data。
+      // 沒有結尾的開放請求最多回一格，播放器會自己接著要。
+      const limit: number = requested.end !== undefined ? BILI_MAX_RESPONSE_BYTES : BILI_WINDOW_BYTES
+      let end: number = Math.min(requested.end ?? Number.POSITIVE_INFINITY, start + limit - 1)
       if (source.total !== null) end = Math.min(end, source.total - 1)
-      const headEnd: number = first * BILI_WINDOW_BYTES + head.byteLength - 1
+      const parts: Uint8Array[] = [head.subarray(offset)]
+      let have: number = head.byteLength - offset
+      for (let index = first + 1; start + have - 1 < end; index++) {
+        const next: Uint8Array | null = await source.prefetcher.get(index)
+        if (!next || next.byteLength === 0) break
+        parts.push(next)
+        have += next.byteLength
+      }
+      const length: number = Math.min(have, end - start + 1)
       let bytes: Uint8Array
-      if (end <= headEnd) {
-        bytes = offset === 0 && end === headEnd ? head : head.slice(offset, end - first * BILI_WINDOW_BYTES + 1)
+      if (parts.length === 1 && offset === 0 && length === head.byteLength) {
+        bytes = head
       } else {
-        // 跨格：接上下一格（已在預抓範圍內）。
-        const tail: Uint8Array | null = await source.prefetcher.get(first + 1)
-        const tailLength: number = tail ? Math.min(tail.byteLength, end - headEnd) : 0
-        bytes = new Uint8Array(head.byteLength - offset + tailLength)
-        bytes.set(head.subarray(offset), 0)
-        if (tail && tailLength > 0) bytes.set(tail.subarray(0, tailLength), head.byteLength - offset)
+        bytes = new Uint8Array(length)
+        let written: number = 0
+        for (const part of parts) {
+          if (written >= length) break
+          const take: number = Math.min(part.byteLength, length - written)
+          bytes.set(part.subarray(0, take), written)
+          written += take
+        }
+      }
+      const serveMs: number = Date.now() - servedAt
+      if (traceBiliRequests) {
+        logPlaybackEvent(
+          `serve ${req.params["id"].slice(-12)} req=${start}-${requested.end ?? ""} -> ${bytes.byteLength} total=${source.total} ${serveMs}ms`,
+        )
+      } else if (serveMs > 2000) {
+        logPlaybackEvent(`serve slow ${req.params["id"]} #${first} ${serveMs}ms`)
       }
       return HttpResponse.raw(206, "Partial Content", {
         headers: {
@@ -338,11 +412,54 @@ export function ensureLocalProxyStarted(): number {
   }
 }
 
+function hostOfUrl(value: string): string {
+  try {
+    return new URL(value).host.toLowerCase()
+  } catch {
+    return ""
+  }
+}
+
+function isUposHost(host: string): boolean {
+  return /^upos-[a-z0-9-]+\.bilivideo\.com$/.test(host)
+}
+
+function swappedUrl(url: string, host: string): string | null {
+  try {
+    const next = new URL(url)
+    next.host = host
+    return next.toString()
+  } catch {
+    return null
+  }
+}
+
+/** 開關關掉時只留 bili 發的第一條線路。 */
+function buildBiliCandidates(issued: string[]): string[] {
+  if (!getSettings().biliLineSwitch) return issued.length ? [issued[0]] : []
+  const out: string[] = []
+  for (const url of issued) {
+    if (url && !out.includes(url)) out.push(url)
+  }
+  const uposUrl: string | undefined = issued.find((url: string): boolean => isUposHost(hostOfUrl(url)))
+  if (uposUrl) {
+    for (const host of BILI_CANDIDATE_POOL) {
+      const url: string | null = swappedUrl(uposUrl, host)
+      if (url && !out.includes(url)) out.push(url)
+    }
+  }
+  return out
+}
+
 /** 註冊虛擬 manifest 內容（m3u8 / mpd），回傳可播放的本地 URL。 */
-export function registerBiliFileSource(id: string, url: string, contentType: string): string {
+export function registerBiliFileSource(id: string, urls: string | string[], contentType: string): string {
   const port: number = ensureLocalProxyStarted()
+  const issued: string[] = (Array.isArray(urls) ? urls : [urls]).filter((value: string): boolean => !!value)
+  const candidates: string[] = buildBiliCandidates(issued)
   const existing: BiliFileSource | undefined = biliFileSources.get(id)
-  if (existing && existing.url === url) return `http://127.0.0.1:${port}/bili-file/${id}/file.m4s`
+  if (existing && existing.urls.join(" ") === candidates.join(" ")) {
+    return `http://127.0.0.1:${port}/bili-file/${id}/file.m4s`
+  }
   existing?.prefetcher.dispose()
   if (!existing && biliFileSources.size >= BILI_MAX_SOURCES) {
     const oldest: string | undefined = biliFileSources.keys().next().value
@@ -352,7 +469,11 @@ export function registerBiliFileSource(id: string, url: string, contentType: str
     }
   }
   const source: BiliFileSource = {
-    url,
+    urls: candidates,
+    primary: hostOfUrl(candidates[0] ?? ""),
+    primarySince: 0,
+    playhead: 0,
+    exploring: new Map(),
     contentType,
     total: null,
     prefetcher: new Prefetcher(
@@ -363,44 +484,316 @@ export function registerBiliFileSource(id: string, url: string, contentType: str
       { ahead: BILI_PREFETCH_AHEAD, concurrency: 4 },
     ),
   }
+  // 之前的影片已經量過哪條線快，開播就直接用。
+  refreshPrimary(source, false)
   biliFileSources.set(id, source)
   return `http://127.0.0.1:${port}/bili-file/${id}/file.m4s`
 }
 
-async function fetchBiliChunk(source: BiliFileSource, index: number, signal: AbortSignal): Promise<Uint8Array | null> {
-  const start: number = index * BILI_WINDOW_BYTES
-  if (source.total !== null && start >= source.total) return null
+/** 換線路的實驗紀錄；只記決策，不記每一格，寫入用 append 避免同步重寫整個檔。 */
+const BILI_LINE_LOG: string = "yobi-bili-lines.log"
 
+function logBiliLine(line: string): void {
+  if (!getSettings().biliLineSwitch) return
+  logPlaybackEvent(line)
+}
+
+let traceBiliRequests: boolean = false
+
+/** 除錯用：每個 bili 片段請求都寫進紀錄。 */
+export function setBiliRequestTrace(enabled: boolean): void {
+  traceBiliRequests = enabled
+}
+
+/** 開片、seek、關閉與慢請求寫進同一份紀錄，卡住時才對得上時間線。 */
+export function logPlaybackEvent(line: string): void {
+  try {
+    FileManager.appendTextSync(
+      FileManager.appGroupDocumentsDirectory + "/" + BILI_LINE_LOG,
+      `${new Date().toISOString()} ${line}\n`,
+    )
+  } catch {
+    // 紀錄失敗不影響播放
+  }
+}
+
+/** setTimeout 在非主 JS 隊列會直接丟錯，這裡吞掉；沒計時器只是少了客戶端逾時。 */
+function armTimeout(callback: () => void, ms: number): number {
+  try {
+    return setTimeout(callback, ms)
+  } catch {
+    return -1
+  }
+}
+
+function disarmTimeout(id: number): void {
+  if (id < 0) return
+  try {
+    clearTimeout(id)
+  } catch {
+    // 已經沒了
+  }
+}
+
+type BiliAttemptResult =
+  | { ok: true; bytes: Uint8Array; ms: number; total: number | null }
+  | { ok: false; ms: number; reason: string }
+
+async function fetchBiliAttempt(
+  url: string,
+  start: number,
+  budgetMs: number,
+  signal: AbortSignal,
+  trackHost: boolean,
+): Promise<BiliAttemptResult> {
   const controller: AbortController = new AbortController()
   const relayAbort = (): void => controller.abort()
   signal.addEventListener("abort", relayAbort)
-  const timer: number = setTimeout((): void => controller.abort(), BILI_CHUNK_TIMEOUT_MS)
+  let timedOut: boolean = false
+  const timer: number = armTimeout((): void => {
+    timedOut = true
+    controller.abort()
+  }, budgetMs)
+  const startedAt: number = Date.now()
 
   try {
-    const response: Awaited<ReturnType<typeof fetch>> = await fetch(source.url, {
+    const response: Awaited<ReturnType<typeof fetch>> = await fetch(url, {
       headers: { ...BILI_REQUEST_HEADERS, Range: `bytes=${start}-${start + BILI_WINDOW_BYTES - 1}` },
       signal: controller.signal,
       debugLabel: "Yobi bili chunk",
     })
-    if (response.status === 416) return null
-    if (!response.ok) throw new Error(`HTTP ${response.status}`)
+    if (response.status === 416) return { ok: false, ms: Date.now() - startedAt, reason: "416" }
+    if (!response.ok) return { ok: false, ms: Date.now() - startedAt, reason: `HTTP ${response.status}` }
     const total: number = Number(response.headers.get("content-range")?.split("/")[1])
-    if (Number.isFinite(total) && total > 0) source.total = total
     const bytes: Uint8Array = new Uint8Array(await response.arrayBuffer())
+    // 試線的格子算進網速，但不是主線路，不更新面板上的「線路」。
+    recordDownload(bytes.byteLength, trackHost ? url : "")
     // 伺服器忽略 Range 回整個檔時，自己切出這一格。
-    if (response.status === 200 && start > 0) return bytes.slice(start, start + BILI_WINDOW_BYTES)
-    return bytes.byteLength > BILI_WINDOW_BYTES ? bytes.slice(0, BILI_WINDOW_BYTES) : bytes
+    const sliced: Uint8Array =
+      response.status === 200 && start > 0
+        ? bytes.slice(start, start + BILI_WINDOW_BYTES)
+        : bytes.byteLength > BILI_WINDOW_BYTES
+          ? bytes.slice(0, BILI_WINDOW_BYTES)
+          : bytes
+    return { ok: true, bytes: sliced, ms: Date.now() - startedAt, total: Number.isFinite(total) && total > 0 ? total : null }
   } catch (error) {
-    if (signal.aborted) return null
-    throw error
+    return {
+      ok: false,
+      ms: Date.now() - startedAt,
+      reason: signal.aborted ? "aborted" : timedOut ? `timeout ${budgetMs}ms` : String(error),
+    }
   } finally {
-    clearTimeout(timer)
+    disarmTimeout(timer)
     try {
       signal.removeEventListener("abort", relayAbort)
     } catch {
       // 移除失敗不影響資料
     }
   }
+}
+
+let biliLineSwitchListener: ((host: string) => void) | null = null
+
+/** 播放器想在第一行顯示「已切換線路」時掛上來。 */
+export function setBiliLineSwitchListener(listener: ((host: string) => void) | null): void {
+  biliLineSwitchListener = listener
+}
+
+function hostsOf(source: BiliFileSource): string[] {
+  return source.urls.map(hostOfUrl)
+}
+
+function urlOfHost(source: BiliFileSource, host: string): string {
+  return source.urls.find((url: string): boolean => hostOfUrl(url) === host) ?? source.urls[0]
+}
+
+/** 換到目前最快的可用線路；開播前依舊紀錄選線時不提示。 */
+function refreshPrimary(source: BiliFileSource, announce: boolean): void {
+  const best: string | undefined = rankLines(hostsOf(source))[0]
+  if (!best || !shouldPromote(best, source.primary)) return
+  const forced: boolean = isLineBanned(source.primary)
+  if (!forced && Date.now() - source.primarySince < BILI_PRIMARY_DWELL_MS) return
+  const from: string = source.primary
+  source.primary = best
+  source.primarySince = Date.now()
+  logBiliLine(
+    `primary ${from} ${Math.round(lineScore(from) ?? 0)} -> ${best} ${Math.round(lineScore(best) ?? 0)}ms/MB${forced ? " (banned)" : ""}`,
+  )
+  if (!announce || !biliLineSwitchListener) return
+  try {
+    biliLineSwitchListener(best)
+  } catch {
+    // 提示失敗不影響播放
+  }
+}
+
+interface BiliOutcome {
+  host: string
+  result: BiliAttemptResult
+}
+
+/** 抓一格並記分；取消與 416 不算線路的錯。 */
+async function attemptBiliLine(
+  source: BiliFileSource,
+  host: string,
+  start: number,
+  budgetMs: number,
+  signal: AbortSignal,
+  trackHost: boolean,
+): Promise<BiliOutcome> {
+  const result: BiliAttemptResult = await fetchBiliAttempt(urlOfHost(source, host), start, budgetMs, signal, trackHost)
+  if (result.ok) {
+    if (result.total !== null) source.total = result.total
+    noteLineSample(host, result.ms, result.bytes.byteLength, BILI_WINDOW_BYTES)
+  } else if (result.reason !== "aborted" && result.reason !== "416") {
+    noteLineFailure(host)
+    logBiliLine(`fail ${host} ${result.reason}`)
+  }
+  return { host, result }
+}
+
+/**
+ * 主線路超過預期還沒回來、而且播放器已經在等這格，就同時向下一條要，先到先用。
+ * 預抓發出的格子也適用：發出時還很遠，卡住後播放器可能已經追上來。
+ */
+async function fetchBiliHedged(
+  source: BiliFileSource,
+  index: number,
+  primary: string,
+  backup: string,
+  start: number,
+  signal: AbortSignal,
+): Promise<BiliOutcome[]> {
+  const expected: number = lineScore(primary) ?? BILI_HEDGE_DEFAULT_MS
+  const delay: number = Math.min(BILI_HEDGE_MAX_MS, Math.max(BILI_HEDGE_MIN_MS, expected * 2))
+  const first: AbortController = new AbortController()
+  const second: AbortController = new AbortController()
+  const relayAbort = (): void => {
+    first.abort()
+    second.abort()
+  }
+  signal.addEventListener("abort", relayAbort)
+  const startedAt: number = Date.now()
+  const outcomes: BiliOutcome[] = []
+  let timer: number = -1
+
+  try {
+    const winner: BiliOutcome = await new Promise<BiliOutcome>((resolve: (outcome: BiliOutcome) => void): void => {
+      let launched: number = 1
+      let failures: number = 0
+      let done: boolean = false
+      const settle = (outcome: BiliOutcome): void => {
+        outcomes.push(outcome)
+        if (done) return
+        if (outcome.result.ok) {
+          done = true
+          resolve(outcome)
+          return
+        }
+        failures++
+        if (failures >= launched) {
+          done = true
+          resolve(outcome)
+        }
+      }
+      void attemptBiliLine(source, primary, start, BILI_CHUNK_TIMEOUT_MS, first.signal, true).then(settle)
+      const check = (): void => {
+        if (done) return
+        if (index - source.playhead > 1) {
+          timer = armTimeout(check, BILI_HEDGE_POLL_MS)
+          return
+        }
+        launched++
+        logBiliLine(`hedge #${index} ${primary} +${Date.now() - startedAt}ms -> ${backup}`)
+        void attemptBiliLine(source, backup, start, BILI_CHUNK_TIMEOUT_MS, second.signal, true).then(settle)
+      }
+      timer = armTimeout(check, delay)
+    })
+    if (winner.result.ok && winner.host === backup) {
+      // 主線路沒抓完就被取消，用它已經花掉的時間記一筆，分數才會反映它變慢了。
+      noteLineSample(primary, Date.now() - startedAt, BILI_WINDOW_BYTES, BILI_WINDOW_BYTES)
+      first.abort()
+    } else {
+      second.abort()
+    }
+    return [winner, ...outcomes.filter((outcome: BiliOutcome): boolean => outcome !== winner)]
+  } finally {
+    disarmTimeout(timer)
+    try {
+      signal.removeEventListener("abort", relayAbort)
+    } catch {
+      // 移除失敗不影響資料
+    }
+  }
+}
+
+async function fetchBiliChunk(source: BiliFileSource, index: number, signal: AbortSignal): Promise<Uint8Array | null> {
+  const start: number = index * BILI_WINDOW_BYTES
+  if (source.total !== null && start >= source.total) return null
+  if (!source.urls.length) return null
+  const hosts: string[] = hostsOf(source)
+  const distance: number = index - source.playhead
+  const tried: Set<string> = new Set()
+
+  // 離播放位置夠遠的格子才拿去試別條線；試輸了也還來得及用主線路補。
+  if (hosts.length > 1 && distance >= BILI_EXPLORE_MIN_AHEAD && index % BILI_EXPLORE_EVERY === 0) {
+    const busy: string[] = [...source.exploring.values()].map((entry): string => entry.host)
+    const host: string | null = pickLineToExplore(hosts, source.primary, busy)
+    if (host) {
+      const controller: AbortController = new AbortController()
+      const relayAbort = (): void => controller.abort()
+      signal.addEventListener("abort", relayAbort)
+      source.exploring.set(index, { host, controller })
+      const startedAt: number = Date.now()
+      let outcome: BiliOutcome
+      try {
+        outcome = await attemptBiliLine(source, host, start, BILI_EXPLORE_TIMEOUT_MS, controller.signal, false)
+      } finally {
+        source.exploring.delete(index)
+        try {
+          signal.removeEventListener("abort", relayAbort)
+        } catch {
+          // 移除失敗不影響資料
+        }
+      }
+      if (outcome.result.ok) {
+        refreshPrimary(source, true)
+        return outcome.result.bytes
+      }
+      if (signal.aborted || outcome.result.reason === "416") return null
+      if (outcome.result.reason === "aborted") {
+        // 沒抓完就被搬回來：至少這麼慢，記一筆，明顯慢的線就不會马上又被拿去試。
+        // 只知道「至少這麼慢」，當整格記分會冤枉剛好被打斷的快線，不記。
+        logBiliLine(`preempt ${host} ${Date.now() - startedAt}ms`)
+      }
+      tried.add(host)
+    }
+  }
+
+  refreshPrimary(source, true)
+  const order: string[] = [source.primary, ...rankLines(hosts).filter((host: string): boolean => host !== source.primary)]
+    .filter((host: string): boolean => !tried.has(host))
+    .slice(0, BILI_MAX_TRIES)
+  let lastReason: string = "no line"
+  for (let i = 0; i < order.length; i++) {
+    const host: string = order[i]
+    if (tried.has(host)) continue
+    const backup: string | undefined = order.slice(i + 1).find((next: string): boolean => !tried.has(next))
+    const outcomes: BiliOutcome[] = backup
+      ? await fetchBiliHedged(source, index, host, backup, start, signal)
+      : [await attemptBiliLine(source, host, start, BILI_CHUNK_TIMEOUT_MS, signal, true)]
+    const winner: BiliOutcome = outcomes[0]
+    if (winner.result.ok) {
+      refreshPrimary(source, true)
+      return winner.result.bytes
+    }
+    if (signal.aborted || winner.result.reason === "416") return null
+    for (const outcome of outcomes) tried.add(outcome.host)
+    tried.add(host)
+    lastReason = winner.result.reason
+  }
+  // 丟例外而不是回 null：回 null 會被預抓器當成檔案結尾。
+  throw new Error(`bili chunk ${index}: ${lastReason}`)
 }
 
 export function registerVirtualManifest(id: string, content: string, contentType: string): string {

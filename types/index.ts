@@ -219,6 +219,8 @@ export interface PlayerSettings {
   danmakuSpeed: number // 0.5 .. 2.0
   danmakuArea: number // 0.25 | 0.5 | 0.75 | 1.0
   danmakuBlockedWords: string[]
+  /** bili 播放中自動換 CDN 線路。 */
+  biliLineSwitch: boolean
 }
 
 export interface ProviderAuthState {

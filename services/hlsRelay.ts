@@ -2,6 +2,7 @@ import { fetch } from "scripting"
 import type { AbortSignal } from "scripting"
 import { registerHlsRelayHandler, unregisterHlsRelayHandler, type HlsRelayHandler } from "./localProxy"
 import { Prefetcher } from "./prefetch"
+import { recordDownload } from "./netMeter"
 
 /** HLS 媒體清單轉手：清單裡的片段改指向本機代理，片段由共用預抓器先抓好。 */
 
@@ -48,7 +49,9 @@ function parsePlaylist(text: string, baseUrl: string): ParsedPlaylist {
 async function download(url: string, signal?: AbortSignal): Promise<Uint8Array> {
   const response = await fetch(url, { signal, timeout: FETCH_TIMEOUT_SECONDS, debugLabel: "Yobi HLS relay segment" })
   if (!response.ok) throw new Error(`HTTP ${response.status}`)
-  return new Uint8Array(await response.arrayBuffer())
+  const bytes: Uint8Array = new Uint8Array(await response.arrayBuffer())
+  recordDownload(bytes.byteLength, url)
+  return bytes
 }
 
 class HlsRelay implements HlsRelayHandler {
