@@ -192,7 +192,8 @@ function route(socket: Socket, method: string, path: string, rangeHeader: string
 
   const init = /^\/media-init\/([A-Za-z0-9_-]+)\/(\d+)\/init\.mp4$/.exec(path)
   const segment = /^\/media-seg\/([A-Za-z0-9_-]+)\/(\d+)\/(\d+)\/seg\.mp4$/.exec(path)
-  const match: RegExpExecArray | null = init ?? segment
+  const audio = /^\/media-audio\/([A-Za-z0-9_-]+)\/(\d+)\/audio\.mp4$/.exec(path)
+  const match: RegExpExecArray | null = init ?? segment ?? audio
   if (!match) {
     socket.write(headerBlock("404 Not Found", { "Content-Length": "0" }))
     socket.end()
@@ -217,6 +218,26 @@ function route(socket: Socket, method: string, path: string, rangeHeader: string
 
   if (init) {
     void streamRange(socket, track, access, track.initStart, track.initEnd, method === "HEAD", rangeHeader)
+    return
+  }
+  if (audio) {
+    // 音軌不切段：整條當一片送，避免每個接縫的 AAC priming 造成雜音。
+    const head: SidxEntry | undefined = track.entries[0]
+    const tail: SidxEntry | undefined = track.entries[track.entries.length - 1]
+    if (!head || !tail) {
+      socket.write(headerBlock("404 Not Found", { "Content-Length": "0" }))
+      socket.end()
+      return
+    }
+    void streamRange(
+      socket,
+      track,
+      access,
+      head.offset,
+      tail.offset + tail.size - 1,
+      method === "HEAD",
+      rangeHeader,
+    )
     return
   }
   const entry: SidxEntry | undefined = track.entries[Number(match[3]) - 1]
@@ -296,11 +317,13 @@ export function mediaPaths(id: string, itag: number, sequence: number): {
   media: string
   init: string
   segment: string
+  audio: string
 } {
   return {
     media: `/media-hls/${id}/${itag}.m3u8`,
     init: `/media-init/${id}/${itag}/init.mp4`,
     segment: `/media-seg/${id}/${itag}/${sequence}/seg.mp4`,
+    audio: `/media-audio/${id}/${itag}/audio.mp4`,
   }
 }
 

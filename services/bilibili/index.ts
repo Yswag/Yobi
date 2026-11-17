@@ -47,7 +47,7 @@ const QN_HEIGHTS: Record<number, number> = {
   120: 2160,
   125: 2160,
   126: 2160,
-  127: 2160,
+  127: 4320,
 }
 
 const AUDIO_LABELS: Record<number, string> = {
@@ -150,9 +150,22 @@ function codecName(media: BiliDashMedia): string {
   return media.codecs || "unknown"
 }
 
+function isUhd(media: BiliDashMedia): boolean {
+  const height = Number(media.height) || QN_HEIGHTS[Number(media.id)] || 0
+  return height >= 2160
+}
+
+/** 4K 以上的 H.264 不要：4K60 要 13～29 Mbps，native 管線解不動，音訊會沙沙。
+ *  8K 反而要 AV1：HEVC 8K native 開不起來（Invalid argument），AV1 可以。 */
 function codecScore(media: BiliDashMedia): number {
   const name = codecName(media)
-  if (name === "AVC") return 3
+  const height = Number(media.height) || QN_HEIGHTS[Number(media.id)] || 0
+  if (height >= 4320) {
+    if (name === "AV1") return 3
+    if (name === "HEVC") return 2
+    return 0
+  }
+  if (name === "AVC") return height >= 2160 ? 0 : 3
   if (name === "HEVC") return 2
   if (name === "AV1") return 1
   return 0
@@ -162,6 +175,7 @@ function qualityLabel(media: BiliDashMedia): string {
   const height = Number(media.height) || QN_HEIGHTS[Number(media.id)] || 0
   const fps = parseFrameRate(media.frameRate ?? media.frame_rate)
   const fpsSuffix = fps >= 50 ? "60" : ""
+  if (height >= 4320) return `8K${fpsSuffix}`
   if (height >= 2160) return `4K${fpsSuffix}`
   if (height >= 1440) return `2K${fpsSuffix}`
   if (height > 0) return `${height}p${fpsSuffix}`
@@ -480,7 +494,10 @@ function buildQualityTracks(dash: BiliDashPayload): VideoQualityTrack[] {
 
   const tracks: VideoQualityTrack[] = []
   for (const [qn, list] of grouped) {
-    const best = list
+    // 4K 以上排除 AVC；連一份替代編碼都沒有就整條畫質不給。
+    const pool = isUhd(list[0]) ? list.filter(media => codecName(media) !== "AVC") : list
+    if (!pool.length) continue
+    const best = pool
       .slice()
       .sort(
         (a, b) =>

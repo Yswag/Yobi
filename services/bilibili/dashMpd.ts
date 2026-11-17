@@ -259,14 +259,27 @@ function collectAudios(dash: BiliDashPayload): BiliDashMedia[] {
  * 播放器會把同一組 AdaptationSet 裡每個 Representation 都當一條軌去讀，
  * bilibili 同一個畫質固定給 AVC/HEVC/AV1 三份，4K 時等於三倍流量把頻寬喫滿。
  * 這裡只留一份：優先 AVC，再來 HEVC、AV1。
+ * 4K 以上不取 AVC：H.264 在 4K60 要 13Mbps，播放器解不動，音訊會一直 underrun。
+ * 8K 反過來優先 AV1：HEVC 8K native 開不起來。
  */
 function preferCodec(medias: BiliDashMedia[]): BiliDashMedia[] {
   if (medias.length <= 1) return medias
+  const heightOf = (media: BiliDashMedia): number =>
+    Number(media.height) || (Number(media.id) >= 120 ? 2160 : 0)
   const rank = (media: BiliDashMedia): number => {
     const codecs: string = (media.codecs ?? "").toLowerCase()
-    if (codecs.startsWith("avc") || codecs.startsWith("h264")) return 3
-    if (codecs.startsWith("hev") || codecs.startsWith("hvc")) return 2
-    if (codecs.startsWith("av01") || codecs.startsWith("av1")) return 1
+    const height: number = heightOf(media)
+    const isAvc: boolean = codecs.startsWith("avc") || codecs.startsWith("h264")
+    const isHevc: boolean = codecs.startsWith("hev") || codecs.startsWith("hvc")
+    const isAv1: boolean = codecs.startsWith("av01") || codecs.startsWith("av1")
+    if (height >= 4320) {
+      if (isAv1) return 3
+      if (isHevc) return 2
+      return 0
+    }
+    if (isAvc) return height >= 2160 ? 0 : 3
+    if (isHevc) return 2
+    if (isAv1) return 1
     return 0
   }
   const best: BiliDashMedia = medias

@@ -45,6 +45,30 @@ function toMediaTrack(track: PreparedTrack, itag: number): MediaTrack {
   }
 }
 
+/**
+ * 音軌整條當一片：AAC 在 fMP4 是每個 segment 各自帶 priming，
+ * 切段播放會在每個接縫出現雜音；ATV-Bilibili-demo 也是這樣做。
+ */
+function audioPlaylist(sessionId: string, track: MediaTrack): string {
+  const total: number = track.entries.reduce(
+    (sum: number, entry): number => sum + entry.durationUs,
+    0,
+  ) / 1_000_000
+  return [
+    "#EXTM3U",
+    "#EXT-X-VERSION:7",
+    `#EXT-X-TARGETDURATION:${Math.max(1, Math.ceil(total))}`,
+    "#EXT-X-MEDIA-SEQUENCE:1",
+    "#EXT-X-PLAYLIST-TYPE:VOD",
+    "#EXT-X-INDEPENDENT-SEGMENTS",
+    `#EXT-X-MAP:URI="${mediaPaths(sessionId, track.itag, 1).init}"`,
+    `#EXTINF:${total.toFixed(3)},`,
+    mediaPaths(sessionId, track.itag, 1).audio,
+    "#EXT-X-ENDLIST",
+    "",
+  ].join("\n")
+}
+
 function mediaPlaylist(sessionId: string, track: MediaTrack): string {
   const durations: number[] = track.entries.map(
     (entry): number => entry.durationUs / 1_000_000,
@@ -85,7 +109,7 @@ function masterPlaylist(
   let frameRate: string = frameRateOf(media) || "25"
   if (isHDR10) {
     videoRange = "PQ"
-    if (Number(frameRate) > 30) frameRate = "30"
+    // 不壓幀率：那是 tvOS 的 4K60 HDR 限制；iPhone 支援，宣告真實值才不會跟串流對不上。
   }
   // DoVi 不能直接宣告 dvh1；要改回 hvc1 並用 SUPPLEMENTAL-CODECS 描述。
   if (videoCodec === "dvh1.08.07" || videoCodec === "dvh1.08.03") {
@@ -160,7 +184,7 @@ export async function writeBiliHlsManifest(
 
   const media: Map<number, string> = new Map()
   media.set(video.itag, mediaPlaylist(sessionId, video))
-  if (audio) media.set(audio.itag, mediaPlaylist(sessionId, audio))
+  if (audio) media.set(audio.itag, audioPlaylist(sessionId, audio))
 
   const session: MediaSession = {
     master: masterPlaylist(sessionId, selected, prepared.audio),
