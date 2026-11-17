@@ -9,11 +9,12 @@ import {
 } from "scripting"
 import type { VirtualNode } from "scripting"
 import type { UnifiedVideoItem } from "../types"
-import type { PlayerStoreSnapshot } from "../state/playerStore"
+import type { PlayerProgressSnapshot, PlayerStoreSnapshot } from "../state/playerStore"
 import {
   closePlayer,
   expandFromMiniPlayer,
   togglePlayPause,
+  usePlayerProgress,
   usePlayerStore,
 } from "../state/playerStore"
 import { ProgressTrack } from "../ui/primitives"
@@ -36,13 +37,16 @@ function MiniButton(props: { action: () => void; children: VirtualNode }): Virtu
 export function MiniPlayerBar(props: {
   item: UnifiedVideoItem | null
   height: number
-  progress: number
   trailingInset: number
 }): VirtualNode {
   const store: PlayerStoreSnapshot = usePlayerStore()
+  // 進度自己訂閱：PlayerHost 不必為了這條細進度條跟著每次 timeupdate 重畫。
+  const progress: PlayerProgressSnapshot = usePlayerProgress()
   const item: UnifiedVideoItem | null = props.item
   const isLoading: boolean = store.status === "loading" || store.status === "buffering"
   const isPlaying: boolean = store.status === "playing"
+  const duration: number = progress.duration > 0 ? progress.duration : item?.duration ?? 0
+  const ratio: number = duration > 0 ? progress.position / duration : 0
 
   return (
     <HStack spacing={0} padding={{ leading: 12, trailing: props.trailingInset }} frame={{ maxWidth: "infinity", height: props.height }}>
@@ -60,7 +64,7 @@ export function MiniPlayerBar(props: {
         <Text font={type.caption} foregroundStyle="secondaryLabel" lineLimit={1}>
           {item?.authorName ?? ""}
         </Text>
-        <ProgressTrack ratio={props.progress} color={palette.brand} height={2} padding={{ top: 2 }} />
+        <ProgressTrack ratio={ratio} color={palette.brand} height={2} padding={{ top: 2 }} />
       </VStack>
 
       <MiniButton action={() => void togglePlayPause()}>

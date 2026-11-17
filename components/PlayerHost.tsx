@@ -12,12 +12,11 @@ import {
 } from "scripting"
 import type { VirtualNode } from "scripting"
 import type { Provider, UnifiedVideoItem } from "../types"
-import type { PlayerPresentationMode, PlayerProgressSnapshot, PlayerStoreSnapshot } from "../state/playerStore"
+import type { PlayerPresentationMode, PlayerStoreSnapshot } from "../state/playerStore"
 import {
   expandFromMiniPlayer,
   getPlayerController,
   minimizeToMiniPlayer,
-  usePlayerProgress,
   usePlayerStore,
 } from "../state/playerStore"
 import { MINI_BUTTON_SIZE, MiniPlayerBar } from "./MiniPlayerBar"
@@ -102,7 +101,6 @@ export function PlayerHost(props: {
   onOpenChannel: (provider: Provider, authorId: string, authorName: string, avatarUrl?: string) => void
 }): VirtualNode {
   const store: PlayerStoreSnapshot = usePlayerStore()
-  const progress: PlayerProgressSnapshot = usePlayerProgress()
   const [showQualitySheet, setShowQualitySheet] = useState<boolean>(false)
   const [showDanmakuSheet, setShowDanmakuSheet] = useState<boolean>(false)
   // 拖曳過程中手指的垂直位移（pt）；null 代表手指不在畫面上。
@@ -232,8 +230,6 @@ export function PlayerHost(props: {
     [openChannel, openQualitySheet, openDanmakuSheet],
   )
 
-  const duration: number = progress.duration > 0 ? progress.duration : item?.duration ?? 0
-  const ratio: number = duration > 0 ? progress.position / duration : 0
   const surfaceColor = fullscreen ? "black" : "systemBackground"
   const fadeOut: Animation = Animation.easeOut(FADE_OUT_SECONDS)
   const fadeInLate: Animation = Animation.easeOut(FADE_IN_SECONDS).delay(MORPH_SECONDS - FADE_IN_SECONDS)
@@ -350,7 +346,6 @@ export function PlayerHost(props: {
                 <MiniPlayerBar
                   item={item}
                   height={MINI_HEIGHT}
-                  progress={ratio}
                   trailingInset={MINI_RADIUS - MINI_BUTTON_SIZE / 2}
                 />
               </ZStack>

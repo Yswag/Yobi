@@ -123,17 +123,147 @@ function rateLabel(rate: number): string {
   return `${rate === Math.floor(rate) ? rate.toFixed(0) : String(rate)}×`
 }
 
-export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): VirtualNode {
+/** 拖曳進度條時的預覽；null 代表沒在拖。 */
+export interface ScrubPreview {
+  seconds: number
+  duration: number
+}
+
+/**
+ * 底部時間、進度條與全螢幕鈕。只有這塊需要跟著 timeupdate 重畫，所以自己訂閱 progress；
+ * 控制列其餘部分（標題、按鈕、Menu）不必每個 tick 重建。
+ */
+function ProgressBar(props: {
+  trackWidth: number
+  barWidth: number
+  edgeInset: number
+  bottomInset: number
+  fullscreen: boolean
+  scrub: ScrubPreview | null
+  onScrub: (preview: ScrubPreview | null) => void
+}): VirtualNode {
   const store: PlayerStoreSnapshot = usePlayerStore()
   const progress: PlayerProgressSnapshot = usePlayerProgress()
+  const duration: number = progress.duration || 0
+  const scrubWidthRef = useRef<number>(1)
+  const scrubTargetRef = useRef<number | null>(null)
+
+  function handleScrubChanged(d: DragGestureDetails): void {
+    if (duration <= 0) return
+    const x: number = Math.max(0, Math.min(scrubWidthRef.current, d.location.x))
+    const value: number = (x / scrubWidthRef.current) * duration
+    // 拖動時只預覽，放開才 seek：逐格 seek 會把本機代理灌滿分段請求。
+    scrubTargetRef.current = value
+    props.onScrub({ seconds: value, duration })
+  }
+
+  function handleScrubEnded(): void {
+    const target: number | null = scrubTargetRef.current
+    scrubTargetRef.current = null
+    props.onScrub(null)
+    if (target !== null) void seekTo(target)
+  }
+
+  function renderSponsorBlocks(fullWidth: number, blockHeight: number): VirtualNode[] {
+    if (duration <= 0) return []
+    return store.sponsorSegments.map((seg: SponsorSegment) => {
+      const leftRatio: number = Math.max(0, Math.min(1, seg.startTime / duration))
+      const widthRatio: number = Math.max(0, Math.min(1 - leftRatio, (seg.endTime - seg.startTime) / duration))
+      return (
+        <Rectangle
+          key={seg.uuid}
+          fill={SPONSOR_CATEGORY_COLORS[seg.category]}
+          frame={{ width: Math.max(2, fullWidth * widthRatio), height: blockHeight }}
+          offset={{ x: fullWidth * leftRatio, y: 0 }}
+        />
+      )
+    })
+  }
+
+  // 細進度條：拖曳直接用位置換算，圓點標出目前播放位置。
+  function renderScrubber(width: number): VirtualNode | null {
+    if (duration <= 0) return null
+    scrubWidthRef.current = width
+    const value: number = props.scrub ? props.scrub.seconds : Math.min(progress.position, duration)
+    const ratio: number = Math.max(0, Math.min(1, value / duration))
+    const knob: number = props.scrub ? SCRUBBER_KNOB + 4 : SCRUBBER_KNOB
+    const knobX: number = Math.max(knob / 2, Math.min(width - knob / 2, width * ratio)) - knob / 2
+    return (
+      <ZStack
+        alignment="leading"
+        frame={{ width, height: SCRUBBER_HEIGHT, alignment: "leading" }}
+        contentShape="rect"
+        onDragGesture={{
+          minDistance: 0,
+          coordinateSpace: "local",
+          onChanged: handleScrubChanged,
+          onEnded: handleScrubEnded,
+        }}
+      >
+        <ZStack alignment="leading" frame={{ width, height: SCRUBBER_KNOB, alignment: "leading" }} allowsHitTesting={false}>
+          <Rectangle
+            fill="rgba(255,255,255,0.24)"
+            frame={{ width, height: SCRUBBER_TRACK }}
+            clipShape={{ type: "rect", cornerRadius: SCRUBBER_TRACK / 2 }}
+          />
+          <Rectangle
+            fill={palette.brand}
+            frame={{ width: width * ratio, height: SCRUBBER_TRACK }}
+            clipShape={{ type: "rect", cornerRadius: SCRUBBER_TRACK / 2 }}
+          />
+          {renderSponsorBlocks(width, SCRUBBER_TRACK)}
+          <Rectangle
+            fill="white"
+            frame={{ width: knob, height: knob }}
+            clipShape={{ type: "rect", cornerRadius: knob / 2 }}
+            offset={{ x: knobX, y: 0 }}
+            shadow={{ color: "rgba(0,0,0,0.35)", radius: 3, y: 1 }}
+          />
+        </ZStack>
+      </ZStack>
+    )
+  }
+
+  return (
+    <VStack spacing={2} padding={{ horizontal: props.edgeInset, bottom: props.bottomInset }} frame={{ width: props.trackWidth }}>
+      <HStack spacing={4} frame={{ width: props.trackWidth }}>
+        <Text font={type.caption} monospacedDigit foregroundStyle={palette.onMedia}>
+          {formatDuration(props.scrub ? props.scrub.seconds : progress.position)}
+        </Text>
+        <Text font={type.caption} monospacedDigit foregroundStyle={palette.onMediaDim}>
+          {`/ ${formatDuration(progress.duration)}`}
+        </Text>
+        {progress.activeChapter ? (
+          <Text font={type.caption} foregroundStyle={palette.onMediaDim} lineLimit={1}>
+            {`· ${progress.activeChapter.title}`}
+          </Text>
+        ) : null}
+        <Spacer />
+      </HStack>
+      <HStack spacing={4} frame={{ width: props.trackWidth }}>
+        {renderScrubber(props.barWidth)}
+        <Button action={() => toggleFullscreen()} buttonStyle="plain">
+          <VStack frame={{ width: MIN_HIT_SIZE, height: 30 }} contentShape="rect">
+            <Image
+              systemName={props.fullscreen ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right"}
+              font={16}
+              foregroundStyle={palette.onMedia}
+            />
+          </VStack>
+        </Button>
+      </HStack>
+    </VStack>
+  )
+}
+
+export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): VirtualNode {
+  const store: PlayerStoreSnapshot = usePlayerStore()
 
   const [controlsVisible, setControlsVisible] = useState<boolean>(false)
-  const [scrubPreviewSec, setScrubPreviewSec] = useState<number>(0)
-  const [isScrubbing, setIsScrubbing] = useState<boolean>(false)
+  const [scrub, setScrub] = useState<ScrubPreview | null>(null)
   const [tapHint, setTapHint] = useState<"left" | "right" | null>(null)
 
   const lastTapAtRef = useRef<number | null>(null)
-  const scrubTargetRef = useRef<number | null>(null)
   const hideTimerRef = useRef<number | null>(null)
   const hintTimerRef = useRef<number | null>(null)
   const statusRef = useRef<string>(store.status)
@@ -146,13 +276,11 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
     }
   }, [])
 
-  const duration: number = progress.duration || 0
   const sideSafeInset: number = Math.max(Device.safeAreaInsets?.leading ?? 0, Device.safeAreaInsets?.trailing ?? 0)
   const edgeInset: number = store.isFullscreen ? Math.max(24, sideSafeInset) : 12
   const trackWidth: number = Math.max(1, props.width - edgeInset * 2)
   // 底列是「進度條＋全螢幕」，進度條吃掉剩下的寬。
   const barWidth: number = Math.max(1, trackWidth - 4 - MIN_HIT_SIZE)
-  const scrubWidthRef = useRef<number>(1)
 
   function clearAutoHide(): void {
     if (hideTimerRef.current !== null) {
@@ -182,6 +310,13 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
   function showControls(): void {
     setControlsVisible(true)
     armAutoHide()
+  }
+
+  // 拖進度條時先把自動隱藏停掉，放開才重新計時。
+  function handleScrub(preview: ScrubPreview | null): void {
+    setScrub(preview)
+    if (preview) clearAutoHide()
+    else armAutoHide()
   }
 
   function hideControls(): void {
@@ -236,41 +371,6 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
       return
     }
     void openVideo(store.currentItem, { cid: store.activeCid, page: store.activePage })
-  }
-
-  function handleScrubChanged(d: DragGestureDetails): void {
-    if (duration <= 0) return
-    const x: number = Math.max(0, Math.min(scrubWidthRef.current, d.location.x))
-    const value: number = (x / scrubWidthRef.current) * duration
-    // 拖動時只預覽，放開才 seek：逐格 seek 會把本機代理灌滿分段請求。
-    scrubTargetRef.current = value
-    setScrubPreviewSec(value)
-    setIsScrubbing(true)
-    clearAutoHide()
-  }
-
-  function handleScrubEnded(): void {
-    const target: number | null = scrubTargetRef.current
-    scrubTargetRef.current = null
-    if (target !== null) void seekTo(target)
-    setIsScrubbing(false)
-    armAutoHide()
-  }
-
-  function renderSponsorBlocks(fullWidth: number, blockHeight: number): VirtualNode[] {
-    if (duration <= 0) return []
-    return store.sponsorSegments.map((seg: SponsorSegment) => {
-      const leftRatio: number = Math.max(0, Math.min(1, seg.startTime / duration))
-      const widthRatio: number = Math.max(0, Math.min(1 - leftRatio, (seg.endTime - seg.startTime) / duration))
-      return (
-        <Rectangle
-          key={seg.uuid}
-          fill={SPONSOR_CATEGORY_COLORS[seg.category]}
-          frame={{ width: Math.max(2, fullWidth * widthRatio), height: blockHeight }}
-          offset={{ x: fullWidth * leftRatio, y: 0 }}
-        />
-      )
-    })
   }
 
   function renderScrims(): VirtualNode {
@@ -421,34 +521,15 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
 
           <Spacer />
 
-          <VStack spacing={2} padding={{ horizontal: edgeInset, bottom: store.isFullscreen ? 10 : 4 }} frame={{ width: trackWidth }}>
-            <HStack spacing={4} frame={{ width: trackWidth }}>
-              <Text font={type.caption} monospacedDigit foregroundStyle={palette.onMedia}>
-                {formatDuration(isScrubbing ? scrubPreviewSec : progress.position)}
-              </Text>
-              <Text font={type.caption} monospacedDigit foregroundStyle={palette.onMediaDim}>
-                {`/ ${formatDuration(progress.duration)}`}
-              </Text>
-              {progress.activeChapter ? (
-                <Text font={type.caption} foregroundStyle={palette.onMediaDim} lineLimit={1}>
-                  {`· ${progress.activeChapter.title}`}
-                </Text>
-              ) : null}
-              <Spacer />
-            </HStack>
-            <HStack spacing={4} frame={{ width: trackWidth }}>
-              {renderScrubber(barWidth)}
-              <Button action={() => toggleFullscreen()} buttonStyle="plain">
-                <VStack frame={{ width: MIN_HIT_SIZE, height: 30 }} contentShape="rect">
-                  <Image
-                    systemName={store.isFullscreen ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right"}
-                    font={16}
-                    foregroundStyle={palette.onMedia}
-                  />
-                </VStack>
-              </Button>
-            </HStack>
-          </VStack>
+          <ProgressBar
+            trackWidth={trackWidth}
+            barWidth={barWidth}
+            edgeInset={edgeInset}
+            bottomInset={store.isFullscreen ? 10 : 4}
+            fullscreen={store.isFullscreen}
+            scrub={scrub}
+            onScrub={handleScrub}
+          />
         </VStack>
       </ZStack>
     )
@@ -490,14 +571,14 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
           </ZStack>
         ) : null}
 
-        {isScrubbing ? (
+        {scrub ? (
           <ZStack frame={{ width: props.width, height: props.height }}>
             <OverlayCapsule>
               <Text font={type.cardTitle} fontWeight="semibold" monospacedDigit foregroundStyle={palette.onMedia}>
-                {formatDuration(scrubPreviewSec)}
+                {formatDuration(scrub.seconds)}
               </Text>
               <Text font={type.cardTitle} monospacedDigit foregroundStyle={palette.onMediaDim}>
-                {`/ ${formatDuration(duration)}`}
+                {`/ ${formatDuration(scrub.duration)}`}
               </Text>
             </OverlayCapsule>
           </ZStack>
@@ -600,50 +681,6 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
             </HStack>
           </ZStack>
         ) : null}
-      </ZStack>
-    )
-  }
-
-  // 細進度條：拖曳直接用位置換算，圓點標出目前播放位置。
-  function renderScrubber(width: number): VirtualNode | null {
-    if (duration <= 0) return null
-    scrubWidthRef.current = width
-    const value: number = isScrubbing ? scrubPreviewSec : Math.min(progress.position, duration)
-    const ratio: number = Math.max(0, Math.min(1, value / duration))
-    const knob: number = isScrubbing ? SCRUBBER_KNOB + 4 : SCRUBBER_KNOB
-    const knobX: number = Math.max(knob / 2, Math.min(width - knob / 2, width * ratio)) - knob / 2
-    return (
-      <ZStack
-        alignment="leading"
-        frame={{ width, height: SCRUBBER_HEIGHT, alignment: "leading" }}
-        contentShape="rect"
-        onDragGesture={{
-          minDistance: 0,
-          coordinateSpace: "local",
-          onChanged: handleScrubChanged,
-          onEnded: handleScrubEnded,
-        }}
-      >
-        <ZStack alignment="leading" frame={{ width, height: SCRUBBER_KNOB, alignment: "leading" }} allowsHitTesting={false}>
-          <Rectangle
-            fill="rgba(255,255,255,0.24)"
-            frame={{ width, height: SCRUBBER_TRACK }}
-            clipShape={{ type: "rect", cornerRadius: SCRUBBER_TRACK / 2 }}
-          />
-          <Rectangle
-            fill={palette.brand}
-            frame={{ width: width * ratio, height: SCRUBBER_TRACK }}
-            clipShape={{ type: "rect", cornerRadius: SCRUBBER_TRACK / 2 }}
-          />
-          {renderSponsorBlocks(width, SCRUBBER_TRACK)}
-          <Rectangle
-            fill="white"
-            frame={{ width: knob, height: knob }}
-            clipShape={{ type: "rect", cornerRadius: knob / 2 }}
-            offset={{ x: knobX, y: 0 }}
-            shadow={{ color: "rgba(0,0,0,0.35)", radius: 3, y: 1 }}
-          />
-        </ZStack>
       </ZStack>
     )
   }

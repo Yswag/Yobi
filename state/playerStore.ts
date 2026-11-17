@@ -148,8 +148,28 @@ let progressState: PlayerProgressSnapshot = {
   activeChapter: null,
 }
 
+/** 上次送出的快照；用來在「什麼都沒變」時不要吵醒訂閱者。 */
+let lastEmittedStore: PlayerStoreSnapshot | null = null
+
+function sameSnapshot(next: PlayerStoreSnapshot, previous: PlayerStoreSnapshot | null): boolean {
+  if (previous === null) return false
+  const keys: (keyof PlayerStoreSnapshot)[] = Object.keys(next) as (keyof PlayerStoreSnapshot)[]
+  if (keys.length !== Object.keys(previous).length) return false
+  for (const key of keys) {
+    if (!Object.is(next[key], previous[key])) return false
+  }
+  return true
+}
+
 function emitStore(): void {
-  storeState = { ...storeState }
+  const next: PlayerStoreSnapshot = { ...storeState }
+  // 很多欄位（彈幕數、供應片段）會在每個 timeupdate 被重寫成同一個值；
+  // 那種時候 notify 只會讓播放頁與控制列白重畫一次。
+  if (sameSnapshot(next, lastEmittedStore)) return
+  // next 與 storeState 必須是不同物件：storeState 之後會被就地改寫，
+  // 拿去當基準就會把改動也一起改掉，永遠比對不到差異。
+  lastEmittedStore = next
+  storeState = { ...next }
   for (const listener of Array.from(storeListeners)) {
     try {
       listener()
