@@ -125,7 +125,8 @@ async function openLinkFlow(): Promise<void> {
       placeholder: "https://... 或 BV1xx411c7mD",
       confirmLabel: "開啟",
     })
-    if (input === null) return
+    // 取消是 undefined，不是 null；空白也只算取消。
+    if (typeof input !== "string" || !input.trim()) return
     detected = await detectAnyInput(input)
   }
 
