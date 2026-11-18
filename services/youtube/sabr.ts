@@ -17,6 +17,7 @@ import {
   type InnertubeClientKey,
   type JsonObject,
 } from "./innertube"
+import { getYoutubeLocale } from "./locale"
 import {
   registerSabrSessionHandler,
   type SabrProxySessionHandler,
@@ -695,7 +696,7 @@ export class SabrSession {
     const client: JsonObject = asObject(profile.context["client"]) ?? {}
     // Field numbers follow googlevideo's StreamerContext.ClientInfo.
     const result: ProtoWriter = new ProtoWriter()
-    result.string(1, String(client["hl"] ?? "en"))
+    result.string(1, getYoutubeLocale().hl)
     if (client["deviceMake"]) result.string(12, String(client["deviceMake"]))
     if (client["deviceModel"]) result.string(13, String(client["deviceModel"]))
     result.uint32(16, profile.clientName)

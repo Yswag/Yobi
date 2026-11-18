@@ -1,5 +1,6 @@
 import { fetch } from "scripting"
 import type { Provider, ProviderAuthState } from "../types"
+import { setYoutubeLocale } from "./youtube/locale"
 
 const AUTH_KEY = "yobi.auth.v1"
 const BILI_REFERER = "https://www.bilibili.com/"
@@ -456,10 +457,13 @@ async function collectCookies(
 /** Logged-in requests must carry the account's visitor id, or YouTube treats them as a fresh visitor. */
 async function readYoutubeVisitorData(controller: WebViewController): Promise<string | undefined> {
   try {
-    const value: unknown = await controller.evaluateJavaScript(
-      `return (window.ytcfg && window.ytcfg.get) ? (ytcfg.get("VISITOR_DATA") || "") : ""`,
+    const raw: unknown = await controller.evaluateJavaScript(
+      `return (window.ytcfg && window.ytcfg.get) ? JSON.stringify({ visitor: ytcfg.get("VISITOR_DATA") || "", hl: ytcfg.get("HL") || "", gl: ytcfg.get("GL") || "" }) : ""`,
     )
-    return typeof value === "string" && value.length > 0 ? value : undefined
+    if (typeof raw !== "string" || raw.length === 0) return undefined
+    const parsed = JSON.parse(raw) as { visitor?: string; hl?: string; gl?: string }
+    setYoutubeLocale(parsed.hl, parsed.gl)
+    return parsed.visitor && parsed.visitor.length > 0 ? parsed.visitor : undefined
   } catch {
     return undefined
   }

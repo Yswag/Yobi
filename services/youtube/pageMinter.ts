@@ -1,4 +1,5 @@
 import { warmThrottlingDecoder } from "./nsig"
+import { setYoutubeLocale } from "./locale"
 import type { YoutubePoTokens, YoutubeWebConfig } from "./potoken"
 
 /**
@@ -107,10 +108,14 @@ async function readConfig(web: WebViewController): Promise<YoutubeWebConfig> {
       signatureTimestamp: Number(get("STS") || 0),
       clientVersion: get("INNERTUBE_CLIENT_VERSION") || "",
       jsUrl: get("PLAYER_JS_URL") || "",
+      hl: get("HL") || "",
+      gl: get("GL") || "",
     });
   `))
-  const config: YoutubeWebConfig = JSON.parse(raw)
+  const config: YoutubeWebConfig & { hl?: string; gl?: string } = JSON.parse(raw)
   if (!config.visitorData || !config.clientVersion || !config.jsUrl) throw new Error("YouTube 頁面缺少 ytcfg")
+  // The watch page is the cheapest place to learn the account's hl/gl.
+  setYoutubeLocale(config.hl, config.gl)
   return config
 }
 

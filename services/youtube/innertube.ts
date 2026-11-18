@@ -10,6 +10,7 @@
 
 import { fetch } from "scripting"
 import { getAuthState } from "../auth"
+import { getYoutubeLocale } from "./locale"
 
 export type InnertubeClientKey = "VISIONOS" | "WEB" | "WEB_SABR" | "MWEB" | "TVHTML5"
 
@@ -228,9 +229,16 @@ export async function innertubePost(
   if (options.visitorData) headers["X-Goog-Visitor-Id"] = options.visitorData
 
   const baseContext: JsonObject = payload["context"] ?? config.context
-  const context: JsonObject = visitorData
-    ? { ...baseContext, client: { ...(baseContext["client"] as JsonObject | undefined), visitorData } }
-    : baseContext
+  const locale = getYoutubeLocale()
+  const clientContext: JsonObject = {
+    ...(baseContext["client"] as JsonObject | undefined),
+    hl: locale.hl,
+    gl: locale.gl,
+  }
+  const context: JsonObject = {
+    ...baseContext,
+    client: visitorData ? { ...clientContext, visitorData } : clientContext,
+  }
   const body: JsonObject = { ...payload, context }
   if (visitorData) {
     body["visitorData"] = visitorData
