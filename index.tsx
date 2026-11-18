@@ -12,21 +12,19 @@ import { closePlayer, getPlayerStoreSnapshot, minimizeToMiniPlayer, usePlayerSto
 import { MINI_PLAYER_RESERVED_HEIGHT, PlayerHost } from "./components/PlayerHost"
 import { channelRoute, SETTINGS_ROUTE, TabStack } from "./components/TabStack"
 import type { OpenChannel } from "./components/TabStack"
-import { DownloadsView } from "./views/DownloadsView"
 import { HomeView } from "./views/HomeView"
 import { LibraryView } from "./views/LibraryView"
 import { SearchView } from "./views/SearchView"
 import { SubscriptionsView } from "./views/SubscriptionsView"
 import { palette } from "./ui/theme"
 
-const TAB = { home: 0, subscriptions: 1, library: 2, downloads: 3, search: 4 }
+const TAB = { home: 0, subscriptions: 1, library: 2, search: 3 }
 
 function YobiRootView(): VirtualNode {
   const dismiss = Navigation.useDismiss()
   const store = usePlayerStore()
   const selection = useObservable<number>(TAB.home)
   const paths: Observable<string[]>[] = [
-    useObservable<string[]>([]),
     useObservable<string[]>([]),
     useObservable<string[]>([]),
     useObservable<string[]>([]),
@@ -92,9 +90,6 @@ function YobiRootView(): VirtualNode {
         </Tab>
         <Tab title="媒體庫" systemImage="books.vertical.fill" value={TAB.library}>
           {stack(TAB.library, <LibraryView onOpenChannel={handleOpenChannel} onOpenSettings={openSettings} />)}
-        </Tab>
-        <Tab title="下載" systemImage="arrow.down.circle.fill" value={TAB.downloads}>
-          {stack(TAB.downloads, <DownloadsView onOpenSettings={openSettings} />)}
         </Tab>
         <Tab title="搜尋" systemImage="magnifyingglass" value={TAB.search} role="search">
           {stack(TAB.search, <SearchView onOpenChannel={handleOpenChannel} />)}

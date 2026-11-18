@@ -20,11 +20,8 @@ import { CommentsSheet } from "../components/CommentsSheet"
 import { LiveChat } from "../components/LiveChat"
 import { addToPlaylistFlow, VideoCard } from "../components/VideoCard"
 import {
-  downloadVideo,
-  findDownload,
   isInWatchLater,
   isSubscribed,
-  removeDownload,
   toggleSubscription,
   toggleWatchLater,
 } from "../services"
@@ -188,8 +185,6 @@ export function WatchView(props: WatchViewProps): VirtualNode {
   const [tab, setTab] = useState<number>(TAB_RELATED)
   const [watchLaterOn, setWatchLaterOn] = useState(false)
   const [subscribed, setSubscribed] = useState(false)
-  const [offlineSaved, setOfflineSaved] = useState(false)
-  const [offlineBusy, setOfflineBusy] = useState(false)
   const [toast, setToast] = useState<string | null>(null)
 
   const item: UnifiedVideoItem | null = store.currentItem
@@ -227,7 +222,6 @@ export function WatchView(props: WatchViewProps): VirtualNode {
     if (!item) return
     setWatchLaterOn(isInWatchLater(item.id))
     setSubscribed(readSubscribed())
-    setOfflineSaved(findDownload(item.id, store.activeCid) !== null)
     setShowDescription(false)
   }, [item?.id, store.activeCid])
 
@@ -288,42 +282,6 @@ export function WatchView(props: WatchViewProps): VirtualNode {
 
   const handleShare = (): void => {
     void Pasteboard.setString(getVideoShareUrl(item)).then(() => setToast("已複製連結"))
-  }
-
-  const handleDownload = (): void => {
-    if (offlineBusy) return
-    const existing = findDownload(item.id, store.activeCid)
-    if (existing) {
-      void Dialog.confirm({
-        title: "刪除離線檔案",
-        message: "已下載此影片，要改為刪除本機檔案嗎？",
-        confirmLabel: "刪除",
-      }).then((confirmed: boolean) => {
-        if (!confirmed) return
-        void removeDownload(existing.id).then(() => {
-          setOfflineSaved(false)
-          setToast("已刪除離線檔案")
-        })
-      })
-      return
-    }
-    setOfflineBusy(true)
-    setToast("開始下載")
-    void downloadVideo(item, {
-      cid: store.activeCid,
-      page: store.activePage,
-      preferredHeight: store.settings.preferredQualityHeight,
-    })
-      .then(() => {
-        setOfflineSaved(true)
-        setToast("下載完成，可離線播放")
-      })
-      .catch((error: unknown) => {
-        setToast(error instanceof Error ? error.message : "下載失敗")
-      })
-      .finally(() => {
-        setOfflineBusy(false)
-      })
   }
 
   const openChannel = (): void => {
@@ -462,14 +420,6 @@ export function WatchView(props: WatchViewProps): VirtualNode {
           onTap={handleWatchLater}
         />
         <ActionChip icon="text.badge.plus" label="加入清單" onTap={() => void addToPlaylistFlow(item)} />
-        {item.isLive ? null : (
-          <ActionChip
-            icon={offlineSaved ? "arrow.down.circle.fill" : "arrow.down.circle"}
-            label={offlineBusy ? "下載中" : offlineSaved ? "已下載" : "下載"}
-            active={offlineSaved}
-            onTap={handleDownload}
-          />
-        )}
         <ActionChip icon="slider.horizontal.3" label={store.selectedQualityLabel || "畫質"} onTap={props.onOpenQualitySheet} />
         {item.provider === "bili" ? (
           <ActionChip

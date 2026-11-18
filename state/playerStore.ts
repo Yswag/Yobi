@@ -4,7 +4,6 @@ import type {
   CommentItem,
   CommentPage,
   CommentSort,
-  OfflineDownload,
   PlayerSettings,
   SponsorSegment,
   StreamManifest,
@@ -19,7 +18,6 @@ import {
   fetchBiliDanmakuXml,
   fetchSponsorSegments,
   findActiveSponsorSegment,
-  findDownload,
   getCommentPage,
   getCommentReplies,
   getSavedPosition,
@@ -28,7 +26,6 @@ import {
   getYoutubeLiveViewers,
   recordWatchHistory,
   releaseAllPrefetchers,
-  resolveOfflineSource,
   resolveStream,
   setBiliLineSwitchListener,
   updateSettings,
@@ -789,54 +786,26 @@ export async function openVideo(item: UnifiedVideoItem, options: OpenVideoOption
   }
 
   try {
-    const offline: OfflineDownload | null = findDownload(item.id, initialCid)
-    let cachedSource: VideoPlaybackCachedSource | null = null
-    if (offline) {
-      try {
-        cachedSource = await resolveOfflineSource(offline)
-      } catch {
-        cachedSource = null
-      }
+    const manifest: StreamManifest = await resolveStream(item.provider, item.rawId, {
+      cid: initialCid,
+      mode: settings.youtubeStreamMode,
+      preferredHeight: settings.preferredQualityHeight,
+      isLive: item.isLive === true,
+    })
+    const picked = pickInitialQualityTrack(manifest, settings.preferredQualityHeight)
+    const activeCid: number | undefined = manifest.cid ?? initialCid ?? storeState.activeCid
+
+    storeState.manifest = manifest
+    storeState.selectedQualityId = picked.id
+    storeState.selectedQualityLabel = picked.label
+    storeState.activeCid = activeCid
+    if (manifest.duration > 0) {
+      progressState.duration = manifest.duration
+      emitProgress()
     }
+    emitStore()
 
-    let manifest: StreamManifest | null = null
-    let activeCid: number | undefined = initialCid ?? storeState.activeCid
-
-    if (cachedSource) {
-      activeCid = offline?.cid ?? activeCid
-      storeState.selectedQualityLabel = `${offline?.qualityLabel ?? "離線"} · 離線`
-      storeState.activeCid = activeCid
-      const offlineDuration: number = offline?.duration ?? item.duration
-      if (offlineDuration > 0) {
-        progressState.duration = offlineDuration
-        emitProgress()
-      }
-      emitStore()
-    } else {
-      manifest = await resolveStream(item.provider, item.rawId, {
-        cid: initialCid,
-        mode: settings.youtubeStreamMode,
-        preferredHeight: settings.preferredQualityHeight,
-        isLive: item.isLive === true,
-      })
-      const picked = pickInitialQualityTrack(manifest, settings.preferredQualityHeight)
-      activeCid = manifest.cid ?? initialCid ?? storeState.activeCid
-
-      storeState.manifest = manifest
-      storeState.selectedQualityId = picked.id
-      storeState.selectedQualityLabel = picked.label
-      storeState.activeCid = activeCid
-      if (manifest.duration > 0) {
-        progressState.duration = manifest.duration
-        emitProgress()
-      }
-      emitStore()
-    }
-
-    if (requestId !== openRequestSeq) {
-      if (cachedSource) await cachedSource.dispose()
-      return
-    }
+    if (requestId !== openRequestSeq) return
 
     // 續播點在開片前就知道，先把那裡的片段抓起來，跟 open() 同時進行。
     // 直播沒有時間軸：續播位置只會讓播放器對直播窗格 seek，然後報錯。
@@ -846,23 +815,17 @@ export async function openVideo(item: UnifiedVideoItem, options: OpenVideoOption
         resumeAt = options.startSeconds
       } else if (options.resumeFromHistory !== false) {
         const savedPos: number = getSavedPosition(item.id, activeCid)
-        const totalDur: number = manifest?.duration || offline?.duration || item.duration || 0
+        const totalDur: number = manifest.duration || item.duration || 0
         if (savedPos > 5 && (totalDur <= 0 || savedPos < totalDur - 8)) resumeAt = savedPos
       }
     }
 
-    if (cachedSource) {
-      await ctrl.open(cachedSource)
-      if (requestId !== openRequestSeq) return
-      await cachedSource.dispose()
-    } else if (manifest) {
-      const url: string = manifest.primaryUrl
-      const backend = manifest.backend
-      const headers = manifest.headers
-      if (resumeAt > 0) warmStreamStart(url, resumeAt)
-      await ctrl.open(url, { backend, headers })
-      if (requestId !== openRequestSeq) return
-    }
+    const url: string = manifest.primaryUrl
+    const backend = manifest.backend
+    const headers = manifest.headers
+    if (resumeAt > 0) warmStreamStart(url, resumeAt)
+    await ctrl.open(url, { backend, headers })
+    if (requestId !== openRequestSeq) return
     streamSwitchPending = false
     await restoreControllerSettings()
     if (requestId !== openRequestSeq) return
@@ -878,7 +841,7 @@ export async function openVideo(item: UnifiedVideoItem, options: OpenVideoOption
     await ctrl.play()
     if (requestId !== openRequestSeq) return
     // 字幕不擋第一幀，開播後才去拿，拿到再補進 manifest。
-    const pendingSubtitles = manifest?.resolveSubtitles
+    const pendingSubtitles = manifest.resolveSubtitles
     if (pendingSubtitles) {
       void pendingSubtitles()
         .then((tracks: SubtitleTrackInfo[]) => {

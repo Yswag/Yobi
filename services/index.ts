@@ -53,7 +53,6 @@ export * from "./localProxy"
 export { prefetchedAheadBytes, prefetchWindow, releaseAllPrefetchers } from "./prefetch"
 export { lastMediaFailure } from "./mediaServer"
 export { currentDownloadBps, lastDownloadHost } from "./netMeter"
-export * from "./downloads"
 
 export type FeedFilter = "all" | Provider
 

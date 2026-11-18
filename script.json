@@ -5,7 +5,7 @@
   "icon": "play.tv.fill",
   "color": "rgba(255, 55, 95, 1)",
   "runInApp": true,
-  "description": "YouTube 與 bilibili 雙來源原生串流播放器：支援 4K、彈幕、SponsorBlock、離線快取與子母畫面。",
+  "description": "YouTube 與 bilibili 雙來源原生串流播放器：支援 4K、彈幕、SponsorBlock 與子母畫面。",
   "author": {
     "name": "ykusu"
   },
@@ -14,7 +14,7 @@
     "en": "Yobi"
   },
   "localizedDescriptions": {
-    "zh": "YouTube 與 bilibili 雙來源原生串流播放器：支援 4K、彈幕、SponsorBlock、離線快取與子母畫面。",
-    "en": "Native dual-source streaming player for YouTube and bilibili with 4K, danmaku, SponsorBlock, offline caching, and PiP."
+    "zh": "YouTube 與 bilibili 雙來源原生串流播放器：支援 4K、彈幕、SponsorBlock 與子母畫面。",
+    "en": "Native dual-source streaming player for YouTube and bilibili with 4K, danmaku, SponsorBlock, and PiP."
   }
 }
