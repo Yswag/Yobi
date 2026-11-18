@@ -802,6 +802,12 @@ export class SabrSession {
     const visitorData: string | undefined = this.config.visitorData ?? auth.visitorData
     if (visitorData) headers["X-Goog-Visitor-Id"] = visitorData
     if (this.config.cookie ?? auth.cookie) headers["Cookie"] = String(this.config.cookie ?? auth.cookie)
+    // Age-restricted and members-only streams are only served to a hash-authenticated web session.
+    if (auth.authorization && (clientKey === "MWEB" || clientKey === "WEB_SABR")) {
+      headers["Authorization"] = auth.authorization
+      headers["X-Origin"] = "https://www.youtube.com"
+      headers["X-Goog-AuthUser"] = "0"
+    }
     return headers
   }
 

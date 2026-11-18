@@ -178,9 +178,11 @@ export async function getYoutubeSearchSuggestions(query: string): Promise<string
 
 /** 影片詳情（player + next）。 */
 export async function getYoutubeVideoDetail(videoId: string): Promise<VideoDetail> {
-  const player: JsonObject = await fetchPlayerResponse(videoId, "IOS")
-  const failure: string | null = playabilityFailure(player)
-  if (failure) throw new Error(`YouTube 無法播放：${failure}`)
+  const player: JsonObject = await fetchPlayerResponse(videoId, "WEB_SABR")
+  if (!asObject(player["videoDetails"])?.["title"]) {
+    const failure: string | null = playabilityFailure(player)
+    throw new Error(failure ? `YouTube 無法播放：${failure}` : "YouTube 沒有影片資訊")
+  }
 
   let next: JsonObject | null = null
   try {
@@ -545,21 +547,8 @@ export async function loadWebSabrPlayer(
   }
 }
 
-/** Direct URLs of the same files (itag and lastModified) from another client, keyed by itag. */
-function directUrlsMatching(formats: SabrFormat[], player: JsonObject | null): Record<number, string> {
-  const urls: Record<number, string> = {}
-  if (!player) return urls
-  const direct: SabrFormat[] = parseAdaptiveFormats(asArray(asObject(player["streamingData"])?.["adaptiveFormats"]))
-  for (const format of formats) {
-    const match: SabrFormat | undefined = direct.find(
-      (candidate: SabrFormat): boolean => candidate.itag === format.itag && candidate.lastModified === format.lastModified,
-    )
-    if (match?.url) urls[format.itag] = match.url
-  }
-  return urls
-}
-
-const SABR_CLIENT_ORDER: InnertubeClientKey[] = ["IOS", "ANDROID_VR", "WEB_SABR", "MWEB"]
+/** WEB_SABR first: it answers for guests and for signed-in restricted videos alike. */
+const SABR_CLIENT_ORDER: InnertubeClientKey[] = ["WEB_SABR", "MWEB"]
 
 async function loadSabrPlayer(videoId: string): Promise<SabrPlayerInfo | null> {
   for (const clientKey of SABR_CLIENT_ORDER) {
@@ -636,7 +625,6 @@ async function resolveHlsRoute(videoId: string): Promise<ResolvedRoute> {
  * direct URLs for the init and index ranges of the MWEB formats.
  */
 async function resolveSabrRoute(videoId: string): Promise<ResolvedRoute> {
-  const iosPlayer: Promise<JsonObject | null> = fetchPlayerResponse(videoId, "IOS").catch(() => null)
   const web: SabrPlayerInfo | null = await loadWebSabrPlayer(videoId, "MWEB").catch(() => null)
   const info: SabrPlayerInfo | null = web ?? (await loadSabrPlayer(videoId))
   if (!info) throw new Error("YouTube 沒有 SABR 串流")
@@ -653,7 +641,6 @@ async function resolveSabrRoute(videoId: string): Promise<ResolvedRoute> {
     visitorData: info.visitorData,
     userAgent: info.userAgent,
     cpn: info.cpn,
-    indexUrls: directUrlsMatching(info.formats, web ? await iosPlayer : info.player),
     refreshPoToken: web
       ? (staleToken: string): Promise<string> => refreshYoutubePageToken(videoId, staleToken)
       : undefined,

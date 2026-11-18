@@ -20,9 +20,12 @@ const YT_THUMB_SIZES: { name: string; width: number }[] = [
 function youtubeThumbnail(url: string, pixels: number): string {
   const match: RegExpMatchArray | null = url.match(/^(.*\/)(default|mqdefault|hqdefault|sddefault|maxresdefault)\.(jpg|webp|png)(\?.*)?$/)
   if (!match) return url
-  const best: { name: string; width: number } =
-    YT_THUMB_SIZES.find((size): boolean => size.width >= pixels) ?? YT_THUMB_SIZES[YT_THUMB_SIZES.length - 1]
-  return `${match[1]}${best.name}.${match[3]}`
+  const current: number = YT_THUMB_SIZES.findIndex((size): boolean => size.name === match[2])
+  const wanted: number = YT_THUMB_SIZES.findIndex((size): boolean => size.width >= pixels)
+  // `maxresdefault` only exists for uploads with a 1080p source, so never upscale — 404 comes back blank.
+  const index: number = Math.min(wanted < 0 ? YT_THUMB_SIZES.length - 1 : wanted, current)
+  if (index === current) return url
+  return `${match[1]}${YT_THUMB_SIZES[index].name}.${match[3]}`
 }
 
 /** yt3 的頻道頭像用 `=s176-c-k-...` 這種後綴控制大小。 */

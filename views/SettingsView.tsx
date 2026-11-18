@@ -35,6 +35,7 @@ import {
   getWatchHistory,
   getWatchLater,
   importAllData,
+  invalidateYoutubeAuthCache,
   loginWithWebView,
   setAuthCookies,
   subscribeStorageChanges,
@@ -250,10 +251,14 @@ export function SettingsView(props: SettingsViewProps): VirtualNode {
     try {
       const next: ProviderAuthState = await loginWithWebView(provider)
       setAuth(provider, next)
+      if (provider === "yt") invalidateYoutubeAuthCache()
+      const count: number = Object.keys(next.cookies).length
       showToast(
         next.loggedIn
-          ? `${providerFullName(provider)} 登入成功`
-          : `已更新 ${providerFullName(provider)} Cookie（${Object.keys(next.cookies).length} 項）`,
+          ? `${providerFullName(provider)} 登入成功${next.username ? `：${next.username}` : ""}`
+          : count > 0
+            ? `已更新 ${providerFullName(provider)} Cookie（${count} 項）`
+            : "登入未完成",
       )
     } catch (err: unknown) {
       showToast(err instanceof Error ? err.message : "網頁登入失敗")
@@ -293,6 +298,7 @@ export function SettingsView(props: SettingsViewProps): VirtualNode {
     })
     if (!confirmed) return
     clearAuth(provider)
+    if (provider === "yt") invalidateYoutubeAuthCache()
     setAuth(provider, getAuthState(provider))
     showToast(`已清除 ${providerFullName(provider)} 登入狀態`)
   }

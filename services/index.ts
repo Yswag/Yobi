@@ -40,6 +40,7 @@ import {
 } from "./bilibili/index"
 
 export { parseYoutubeInput } from "./youtube"
+export { invalidateYoutubeAuthCache } from "./youtube/innertube"
 export { disposeYoutubePageMinter, warmYoutubePageMinter } from "./youtube/pageMinter"
 export { parseBiliInput, fetchBiliDanmakuXml, resolveBiliShortUrl } from "./bilibili/index"
 export { warmBiliStart as warmStreamStart } from "./bilibili/dashMpd"

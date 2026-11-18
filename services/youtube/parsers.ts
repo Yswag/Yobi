@@ -192,6 +192,23 @@ function runNavigationBrowseId(node: unknown): string {
   return ""
 }
 
+function browseIdOf(command: unknown): string {
+  const browse: JsonObject | null = asObject(asObject(command)?.["browseEndpoint"])
+  return browse && typeof browse["browseId"] === "string" ? browse["browseId"] : ""
+}
+
+/** Channel id off a lockup metadata part, which hides its endpoint in `commandRuns`. */
+function commandRunBrowseId(node: unknown): string {
+  const object: JsonObject | null = asObject(node)
+  if (!object) return ""
+  for (const run of asArray(object["commandRuns"])) {
+    const command: JsonObject | null = asObject(asObject(asObject(run)?.["onTap"])?.["innertubeCommand"])
+    const browse: JsonObject | null = asObject(command?.["browseEndpoint"])
+    if (browse && typeof browse["browseId"] === "string") return browse["browseId"]
+  }
+  return runNavigationBrowseId(node)
+}
+
 function isLiveRenderer(renderer: JsonObject, lengthText: string): boolean {
   const badges: unknown[] = asArray(renderer["badges"])
   for (const badge of badges) {
@@ -296,12 +313,25 @@ function fromLockupViewModel(renderer: JsonObject): UnifiedVideoItem | null {
   const title: string = readText(metadata?.["title"])
   const rows: unknown[] = asArray(asObject(asObject(metadata?.["metadata"])?.["contentMetadataViewModel"])?.["metadataRows"])
 
+  // Home and next carry the owner avatar under `metadata.image`; channel pages leave it out.
+  const decorated: JsonObject | null = asObject(asObject(metadata?.["image"])?.["decoratedAvatarViewModel"])
+  const ownerAvatar: string =
+    readThumbnailUrl(asObject(asObject(decorated?.["avatar"])?.["avatarViewModel"])?.["image"]) ||
+    findThumbnailDeep(metadata?.["image"])
+  const ownerId: string = browseIdOf(
+    asObject(asObject(asObject(decorated?.["rendererContext"])?.["commandContext"])?.["onTap"])?.["innertubeCommand"],
+  )
+
   // Each row joins several facts ("8.5K views · 2 weeks ago"), so classify part by part.
   const parts: string[] = []
+  const partNodes: unknown[] = []
   for (const row of rows) {
     for (const part of asArray(asObject(row)?.["metadataParts"])) {
       const text: string = readText(asObject(part)?.["text"]).trim()
-      if (text) parts.push(text)
+      if (text) {
+        parts.push(text)
+        partNodes.push(asObject(part)?.["text"])
+      }
     }
   }
 
@@ -315,9 +345,11 @@ function fromLockupViewModel(renderer: JsonObject): UnifiedVideoItem | null {
   let viewCount: number | undefined
   let publishedText: string = ""
   let authorName: string = ""
+  let authorId: string = ownerId
   let watching: boolean = false
   const bareCount: RegExp = /^[\d.,]+\s*[KMB萬億亿]?$/i
-  for (const text of parts) {
+  for (let index = 0; index < parts.length; index++) {
+    const text: string = parts[index]
     if (/watching|正在觀看|正在观看|人觀看中/i.test(text)) {
       watching = true
       continue
@@ -332,7 +364,10 @@ function fromLockupViewModel(renderer: JsonObject): UnifiedVideoItem | null {
       if (viewCount === undefined) viewCount = parseViewCountText(text)
       continue
     }
-    if (!authorName && text !== title) authorName = text
+    if (!authorName && text !== title) {
+      authorName = text
+      if (!authorId) authorId = commandRunBrowseId(partNodes[index])
+    }
   }
 
   return baseItem(
@@ -342,9 +377,9 @@ function fromLockupViewModel(renderer: JsonObject): UnifiedVideoItem | null {
     findThumbnailDeep(renderer["contentImage"]),
     duration,
     viewCount,
-    "",
+    authorId,
     authorName,
-    "",
+    ownerAvatar,
     publishedText,
     liveBadge || watching,
   )

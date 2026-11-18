@@ -11,7 +11,7 @@
 import { fetch } from "scripting"
 import { getAuthState } from "../auth"
 
-export type InnertubeClientKey = "IOS" | "VISIONOS" | "WEB" | "WEB_SABR" | "MWEB" | "ANDROID_VR" | "TVHTML5"
+export type InnertubeClientKey = "VISIONOS" | "WEB" | "WEB_SABR" | "MWEB" | "TVHTML5"
 
 /** 鬆散 JSON 型別，對應 Innertube 的巢狀回應。 */
 export type JsonObject = Record<string, any>
@@ -30,35 +30,12 @@ export interface YoutubeAuthSnapshot {
   visitorData?: string
 }
 
-const IOS_UA: string = "com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_3_1 like Mac OS X;)"
 const WEB_UA: string =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36"
 const VISIONOS_UA: string =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15"
-const ANDROID_VR_UA: string =
-  "com.google.android.apps.youtube.vr.oculus/1.62.27 (Linux; U; Android 12; en_US; Quest 3 Build/SQ3A.220605.009.A1) gzip"
 
 export const INNERTUBE_CLIENTS: Record<InnertubeClientKey, InnertubeClientConfig> = {
-  IOS: {
-    clientName: 5,
-    clientVersion: "20.10.4",
-    userAgent: IOS_UA,
-    context: {
-      client: {
-        clientName: "IOS",
-        clientVersion: "20.10.4",
-        deviceMake: "Apple",
-        deviceModel: "iPhone16,2",
-        osName: "iPhone",
-        osVersion: "18.3.1.22D72",
-        hl: "en",
-        gl: "US",
-        utcOffsetMinutes: 0,
-      },
-      user: { lockedSafetyMode: false },
-      request: { useSsl: true, internalExperimentFlags: [] },
-    },
-  },
   WEB: {
     clientName: 1,
     clientVersion: "2.20250219.01.00",
@@ -86,27 +63,6 @@ export const INNERTUBE_CLIENTS: Record<InnertubeClientKey, InnertubeClientConfig
       "Mozilla/5.0 (iPhone; CPU iPhone OS 18_3_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3 Mobile/15E148 Safari/604.1",
     context: {
       client: { clientName: "MWEB", clientVersion: "2.20250219.01.00", hl: "en", gl: "US" },
-      user: { lockedSafetyMode: false },
-      request: { useSsl: true, internalExperimentFlags: [] },
-    },
-  },
-  ANDROID_VR: {
-    clientName: 28,
-    clientVersion: "1.62.27",
-    userAgent: ANDROID_VR_UA,
-    context: {
-      client: {
-        clientName: "ANDROID_VR",
-        clientVersion: "1.62.27",
-        deviceMake: "Oculus",
-        deviceModel: "Quest 3",
-        osName: "Android",
-        osVersion: "12",
-        androidSdkVersion: 32,
-        hl: "en",
-        gl: "US",
-        utcOffsetMinutes: 0,
-      },
       user: { lockedSafetyMode: false },
       request: { useSsl: true, internalExperimentFlags: [] },
     },
@@ -191,20 +147,9 @@ export function getYoutubeAuth(): YoutubeAuthSnapshot {
     const state = getAuthState("yt")
     cookie = state.cookieHeader || undefined
     sapisid = state.cookies["SAPISID"] || state.cookies["__Secure-3PAPISID"] || undefined
+    visitorData = state.visitorData
   } catch (_error) {
     cookie = undefined
-  }
-
-  try {
-    const stored: unknown = Storage.get<unknown>("yobi.auth.v1")
-    if (stored && typeof stored === "object") {
-      const yt: JsonObject | null = (stored as JsonObject)["yt"] ?? null
-      if (yt && typeof yt["visitorData"] === "string") {
-        visitorData = String(yt["visitorData"])
-      }
-    }
-  } catch (_error) {
-    visitorData = undefined
   }
 
   let authorization: string | undefined
@@ -227,6 +172,12 @@ export function invalidateYoutubeAuthCache(): void {
   cachedAuthAt = 0
 }
 
+/** Only the web clients accept `SAPISIDHASH`; the app clients rejected it with HTTP 400 when they were still around. */
+const HASH_AUTH_CLIENTS: InnertubeClientKey[] = ["WEB", "WEB_SABR", "MWEB"]
+
+/** Clients that need the account identity: the web family does personalisation and restricted videos alike. */
+const COOKIE_CLIENTS: InnertubeClientKey[] = ["WEB", "WEB_SABR", "MWEB"]
+
 function buildHeaders(clientKey: InnertubeClientKey, auth: YoutubeAuthSnapshot): Record<string, string> {
   const config: InnertubeClientConfig = INNERTUBE_CLIENTS[clientKey]
   const headers: Record<string, string> = {
@@ -240,14 +191,16 @@ function buildHeaders(clientKey: InnertubeClientKey, auth: YoutubeAuthSnapshot):
   if (auth.visitorData) {
     headers["X-Goog-Visitor-Id"] = auth.visitorData
   }
-  if (auth.cookie) {
+  if (auth.cookie && COOKIE_CLIENTS.includes(clientKey)) {
     headers["Cookie"] = auth.cookie
+    // Signed-in requests address the first account slot; without it YouTube keeps the guest session.
+    headers["X-Goog-AuthUser"] = "0"
   }
-  if (auth.authorization) {
+  if (auth.authorization && HASH_AUTH_CLIENTS.includes(clientKey)) {
     headers["Authorization"] = auth.authorization
     headers["X-Origin"] = "https://www.youtube.com"
   }
-  if (clientKey === "ANDROID_VR" || clientKey === "IOS") {
+  if (clientKey === "TVHTML5") {
     headers["X-Goog-Api-Format-Version"] = "2"
   }
   return headers
@@ -274,7 +227,10 @@ export async function innertubePost(
   const visitorData: string | undefined = options.visitorData ?? auth.visitorData
   if (options.visitorData) headers["X-Goog-Visitor-Id"] = options.visitorData
 
-  const context: JsonObject = payload["context"] ?? config.context
+  const baseContext: JsonObject = payload["context"] ?? config.context
+  const context: JsonObject = visitorData
+    ? { ...baseContext, client: { ...(baseContext["client"] as JsonObject | undefined), visitorData } }
+    : baseContext
   const body: JsonObject = { ...payload, context }
   if (visitorData) {
     body["visitorData"] = visitorData

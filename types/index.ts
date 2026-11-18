@@ -237,6 +237,8 @@ export interface ProviderAuthState {
   avatarUrl?: string
   cookieHeader: string
   cookies: Record<string, string>
+  /** YouTube：登入後的 ytcfg VISITOR_DATA。登入態請求要跟 cookie 一起送，否則會被當成新的訪客。 */
+  visitorData?: string
   updatedAt: number
 }
 
