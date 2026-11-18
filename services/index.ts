@@ -20,6 +20,7 @@ import {
   getYoutubeChannelVideos,
   getYoutubeCommentPage,
   getYoutubeCommentReplies,
+  getYoutubeLiveViewers,
   getYoutubeSearchSuggestions,
   getYoutubeTrending,
   getYoutubeVideoDetail,
@@ -40,6 +41,7 @@ import {
 } from "./bilibili/index"
 
 export { parseYoutubeInput } from "./youtube"
+export { getYoutubeLiveViewers } from "./youtube"
 export { invalidateYoutubeAuthCache } from "./youtube/innertube"
 export { disposeYoutubePageMinter, warmYoutubePageMinter } from "./youtube/pageMinter"
 export { parseBiliInput, fetchBiliDanmakuXml, resolveBiliShortUrl } from "./bilibili/index"
@@ -143,6 +145,8 @@ export interface ResolveStreamOptions {
   cid?: number
   mode?: YoutubeStreamPreference
   preferredHeight?: number
+  /** YouTube 直播走自己的取流路線。 */
+  isLive?: boolean
 }
 
 /** 解析可播放串流。 */
@@ -154,7 +158,7 @@ export async function resolveStream(
   if (provider === "bili") {
     return resolveBiliStream(rawId, options.cid, options.preferredHeight)
   }
-  return resolveYoutubeStream(rawId, options.mode ?? "auto", options.preferredHeight ?? 0)
+  return resolveYoutubeStream(rawId, options.mode ?? "auto", options.preferredHeight ?? 0, options.isLive === true)
 }
 
 /** 留言（只取第一頁）。 */

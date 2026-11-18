@@ -41,12 +41,14 @@ import {
   parseChannelDetail,
   parseChannelVideosPage,
   parseComments,
+  parseLiveViewerCount,
   parseRelatedVideos,
   parseSubtitleTracks,
   parseVideoDetail,
 } from "./parsers"
 import type { AboutChannelInfo } from "./parsers"
 import { resolveHlsManifest } from "./hls"
+import { resolveYoutubeLiveStream } from "./live"
 import {
   audioTrackOf,
   createSabrQualitySession,
@@ -192,6 +194,15 @@ export async function getYoutubeVideoDetail(videoId: string): Promise<VideoDetai
   }
 
   return parseVideoDetail(videoId, player, next)
+}
+
+/** 直播的即時觀看人數；直播結束就沒有這個值。 */
+export async function getYoutubeLiveViewers(videoId: string): Promise<number | undefined> {
+  try {
+    return parseLiveViewerCount(await fetchWatchNext(videoId))
+  } catch (_error) {
+    return undefined
+  }
 }
 
 const COMMENTS_PANEL_ID: string = "engagement-panel-comments-section"
@@ -660,12 +671,15 @@ async function resolveSabrRoute(videoId: string): Promise<ResolvedRoute> {
   return { delivery: "sabr", primaryUrl: qualities[0].url, qualities, audioTracks, player: info.player, prepareQuality }
 }
 
-/** 解析可播放串流：只跑選定的路線，失敗才換另一條。auto 與 hls 先走 HLS，sabr 先走 SABR。 */
+/** 解析可播放串流。直播走自己的取流路線，不碰 HLS／SABR 的挑選流程。 */
 export async function resolveYoutubeStream(
   videoId: string,
   mode: YoutubeStreamPreference = "auto",
   preferredHeight: number = 0,
+  isLive: boolean = false,
 ): Promise<StreamManifest> {
+  if (isLive) return resolveYoutubeLiveStream(videoId)
+
   const routes: Array<(id: string) => Promise<ResolvedRoute>> =
     mode === "sabr" ? [resolveSabrRoute, resolveHlsRoute] : [resolveHlsRoute, resolveSabrRoute]
   let route: ResolvedRoute | null = null
@@ -687,7 +701,12 @@ export async function resolveYoutubeStream(
     }
   }
   if (!route) {
-    throw firstError instanceof Error ? firstError : new Error("找不到可播放的 YouTube 串流")
+    // 呼叫端不知道這是直播（例如貼上連結、推薦卡片沒帶 isLive）時，用直播路線再試一次。
+    try {
+      return await resolveYoutubeLiveStream(videoId)
+    } catch {
+      throw firstError instanceof Error ? firstError : new Error("找不到可播放的 YouTube 串流")
+    }
   }
 
   const { primaryUrl, qualities, prepareQuality } = route

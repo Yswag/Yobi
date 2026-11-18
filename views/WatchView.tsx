@@ -44,6 +44,7 @@ import {
   setCommentsSort,
   setProgressUpdatesPaused,
   subscribePlayerProgress,
+  useLiveViewers,
   usePlayerStore,
 } from "../state/playerStore"
 import { Avatar, EmptyState, SectionHeader } from "../ui/primitives"
@@ -58,6 +59,20 @@ export interface WatchViewProps {
 
 const TAB_RELATED: number = 0
 const TAB_COMMENTS: number = 1
+
+/** 直播人數自己訂閱一組資料，人數變動只重畫這一行。 */
+function LiveViewerLabel(props: { videoId: string; publishedText?: string }): VirtualNode {
+  const viewers = useLiveViewers()
+  const count: number | null = viewers.videoId === props.videoId ? viewers.count : null
+  const parts: string[] = []
+  if (count !== null && count > 0) parts.push(`${formatCount(count)} 人正在觀看`)
+  if (props.publishedText) parts.push(props.publishedText)
+  return (
+    <Text font={type.meta + 1} foregroundStyle="secondaryLabel" lineLimit={1}>
+      {parts.join(" · ")}
+    </Text>
+  )
+}
 
 const SEGMENT_CARD_WIDTH: number = 156
 /** 卡片固定高度，一行與兩行標題的卡片才對齊（caption 約 13 + 間距 4 + 兩行標題 31 + 上下 20）。 */
@@ -223,7 +238,9 @@ export function WatchView(props: WatchViewProps): VirtualNode {
   const tags: string[] = detail?.tags ?? []
   const deliveryTag: string | null = store.manifest ? store.manifest.delivery.toUpperCase() : null
 
-  const headlineParts: string[] = [`${formatCount(item.viewCount)} 次觀看`]
+  const headlineParts: string[] = []
+  // 直播沒有累計觀看數，人數走 LiveViewerLabel。
+  if (!item.isLive) headlineParts.push(`${formatCount(item.viewCount)} 次觀看`)
   if (item.publishedText) headlineParts.push(item.publishedText)
   const statParts: string[] = []
   if (item.likeCount !== undefined) statParts.push(`${formatCount(item.likeCount)} 個讚`)
@@ -343,9 +360,13 @@ export function WatchView(props: WatchViewProps): VirtualNode {
               LIVE
             </Text>
           ) : null}
-          <Text font={type.meta + 1} foregroundStyle="secondaryLabel" lineLimit={1}>
-            {headlineParts.join(" · ")}
-          </Text>
+          {item.isLive ? (
+            <LiveViewerLabel videoId={item.id} publishedText={item.publishedText} />
+          ) : (
+            <Text font={type.meta + 1} foregroundStyle="secondaryLabel" lineLimit={1}>
+              {headlineParts.join(" · ")}
+            </Text>
+          )}
         </HStack>
       </VStack>
 
@@ -440,12 +461,14 @@ export function WatchView(props: WatchViewProps): VirtualNode {
           onTap={handleWatchLater}
         />
         <ActionChip icon="text.badge.plus" label="加入清單" onTap={() => void addToPlaylistFlow(item)} />
-        <ActionChip
-          icon={offlineSaved ? "arrow.down.circle.fill" : "arrow.down.circle"}
-          label={offlineBusy ? "下載中" : offlineSaved ? "已下載" : "下載"}
-          active={offlineSaved}
-          onTap={handleDownload}
-        />
+        {item.isLive ? null : (
+          <ActionChip
+            icon={offlineSaved ? "arrow.down.circle.fill" : "arrow.down.circle"}
+            label={offlineBusy ? "下載中" : offlineSaved ? "已下載" : "下載"}
+            active={offlineSaved}
+            onTap={handleDownload}
+          />
+        )}
         <ActionChip icon="slider.horizontal.3" label={store.selectedQualityLabel || "畫質"} onTap={props.onOpenQualitySheet} />
         {item.provider === "bili" ? (
           <ActionChip

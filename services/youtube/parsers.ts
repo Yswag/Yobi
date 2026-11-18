@@ -929,6 +929,42 @@ function parseVideoOwner(next: JsonObject): VideoOwnerInfo | null {
   return null
 }
 
+/**
+ * 直播的「正在觀看」人數。
+ *
+ * 直播的 `videoDetails.viewCount` 恆為 0，人數只在 `next` 的
+ * `videoPrimaryInfoRenderer.viewCount.videoViewCountRenderer`（`originalViewCount`）。
+ * 一般影片也有同一個 renderer，所以要看 `isLive` 或文字有沒有「觀看中」才算。
+ */
+export function parseLiveViewerCount(next: JsonObject | null): number | undefined {
+  if (!next) return undefined
+  let viewers: number | undefined
+
+  const visit = (node: unknown, depth: number): void => {
+    if (viewers !== undefined || !node || depth > 24) return
+    if (Array.isArray(node)) {
+      for (const entry of node) visit(entry, depth + 1)
+      return
+    }
+    const object: JsonObject | null = asObject(node)
+    if (!object) return
+    const renderer: JsonObject | null = asObject(object["videoViewCountRenderer"])
+    if (renderer) {
+      const text: string = readText(renderer["viewCount"])
+      const isLive: boolean = renderer["isLive"] === true || /watching|正在觀看|正在观看/i.test(text)
+      if (isLive) {
+        const original: number = Number(renderer["originalViewCount"])
+        viewers = Number.isFinite(original) && original > 0 ? original : parseViewCountText(text)
+      }
+      if (viewers !== undefined) return
+    }
+    for (const key of Object.keys(object)) visit(object[key], depth + 1)
+  }
+
+  visit(next, 0)
+  return viewers
+}
+
 /** 解析 player + next 成 VideoDetail。 */
 export function parseVideoDetail(videoId: string, player: JsonObject, next: JsonObject | null): VideoDetail {
   const details: JsonObject = asObject(player["videoDetails"]) ?? {}
@@ -936,7 +972,8 @@ export function parseVideoDetail(videoId: string, player: JsonObject, next: Json
     asObject(asObject(player["microformat"])?.["playerMicroformatRenderer"]) ?? {}
   const title: string = String(details["title"] ?? readText(microformat["title"]) ?? "")
   const duration: number = Number(details["lengthSeconds"] ?? 0)
-  const viewCount: number = Number(details["viewCount"] ?? 0)
+  const liveViewers: number | undefined = parseLiveViewerCount(next)
+  const viewCount: number = liveViewers ?? Number(details["viewCount"] ?? 0)
   const author: string = String(details["author"] ?? "")
   const channelId: string = String(details["channelId"] ?? "")
   const thumbnailUrl: string = readThumbnailUrl(asObject(details["thumbnail"]) ?? microformat["thumbnail"])
@@ -955,7 +992,7 @@ export function parseVideoDetail(videoId: string, player: JsonObject, next: Json
     publishedAt: publishedText ? Date.parse(publishedText) || undefined : undefined,
     authorId: channelId,
     authorName: author,
-    isLive: Boolean(details["isLive"]),
+    isLive: Boolean(details["isLive"]) || liveViewers !== undefined,
     description: String(details["shortDescription"] ?? microformat["description"] ?? ""),
     relatedVideos: next ? parseRelatedVideos(next) : [],
     tags: keywords.map((keyword: unknown): string => String(keyword)),

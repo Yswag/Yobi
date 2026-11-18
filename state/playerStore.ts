@@ -26,6 +26,7 @@ import {
   getSavedPosition,
   getSettings,
   getVideoDetail,
+  getYoutubeLiveViewers,
   recordWatchHistory,
   releaseAllPrefetchers,
   resolveOfflineSource,
@@ -108,6 +109,22 @@ let dismissedSegmentUuid: string = ""
 let toastTimer: number | null = null
 let savedRateBeforeBoost: number = 1
 let savedOrientations: typeof Device.supportedInterfaceOrientations | null = null
+/** 直播人數每分鐘重抓一次；換片、收掉播放器都要停。 */
+let liveViewerTimer: number | null = null
+const LIVE_VIEWER_TICK_MS: number = 60_000
+/**
+ * 直播即時人數。
+ *
+ * 不進 `storeState`：那裡一改就是全播放頁重畫，人數每分鐘變一次不值得。
+ * 自己一組訂閱，只有顯示人數的那個元件會收到通知。
+ */
+export interface LiveViewerSnapshot {
+  videoId: string
+  count: number | null
+}
+
+let liveViewerState: LiveViewerSnapshot = { videoId: "", count: null }
+const liveViewerListeners: Set<() => void> = new Set()
 
 const storeListeners: Set<() => void> = new Set()
 const progressListeners: Set<() => void> = new Set()
@@ -156,6 +173,36 @@ let progressState: PlayerProgressSnapshot = {
 /** 直播沒有可跳轉的時間軸：不續播、不存位置，seek 一律視為無效。 */
 export function isLivePlayback(): boolean {
   return storeState.currentItem?.isLive === true
+}
+
+function stopLiveViewerRefresh(): void {
+  if (liveViewerTimer !== null) {
+    clearInterval(liveViewerTimer)
+    liveViewerTimer = null
+  }
+}
+
+function publishLiveViewers(videoId: string, count: number | null): void {
+  if (liveViewerState.videoId === videoId && liveViewerState.count === count) return
+  liveViewerState = { videoId, count }
+  for (const listener of Array.from(liveViewerListeners)) {
+    try {
+      listener()
+    } catch {
+      // 單一訂閱者出錯不影響其他人
+    }
+  }
+}
+
+function startLiveViewerRefresh(item: UnifiedVideoItem): void {
+  stopLiveViewerRefresh()
+  publishLiveViewers(item.id, item.viewCount && item.viewCount > 0 ? item.viewCount : null)
+  liveViewerTimer = setInterval((): void => {
+    void getYoutubeLiveViewers(item.rawId).then((viewers: number | undefined): void => {
+      if (viewers === undefined || storeState.currentItem?.id !== item.id) return
+      publishLiveViewers(item.id, viewers)
+    })
+  }, LIVE_VIEWER_TICK_MS)
 }
 
 /** 上次送出的快照；用來在「什麼都沒變」時不要吵醒訂閱者。 */
@@ -501,6 +548,29 @@ export function usePlayerProgress(): PlayerProgressSnapshot {
   return snap
 }
 
+export function getLiveViewerSnapshot(): LiveViewerSnapshot {
+  return liveViewerState
+}
+
+export function subscribeLiveViewers(listener: () => void): () => void {
+  liveViewerListeners.add(listener)
+  return (): void => {
+    liveViewerListeners.delete(listener)
+  }
+}
+
+/** 只有顯示直播人數的元件要訂閱這個，不跟整個播放器快照绑在一起。 */
+export function useLiveViewers(): LiveViewerSnapshot {
+  const [snap, setSnap] = useState<LiveViewerSnapshot>(() => getLiveViewerSnapshot())
+  useEffect(() => {
+    setSnap(getLiveViewerSnapshot())
+    return subscribeLiveViewers(() => {
+      setSnap(getLiveViewerSnapshot())
+    })
+  }, [])
+  return snap
+}
+
 export interface OpenVideoOptions {
   cid?: number
   page?: number
@@ -621,6 +691,13 @@ export async function openVideo(item: UnifiedVideoItem, options: OpenVideoOption
   }
   emitStore()
 
+  if (item.provider === "yt" && item.isLive) {
+    startLiveViewerRefresh(item)
+  } else {
+    stopLiveViewerRefresh()
+    publishLiveViewers("", null)
+  }
+
   try {
     ctrl.clearSubtitles()
     ctrl.clearDanmaku()
@@ -637,6 +714,9 @@ export async function openVideo(item: UnifiedVideoItem, options: OpenVideoOption
       const resolvedCid: number | undefined =
         storeState.activeCid ?? detail.cid ?? detail.pages?.[0]?.cid
       storeState.detail = detail
+      if (detail.isLive && (detail.viewCount ?? 0) > 0) {
+        publishLiveViewers(detail.id, detail.viewCount ?? null)
+      }
       if (resolvedCid && !storeState.activeCid) {
         storeState.activeCid = resolvedCid
       }
@@ -701,6 +781,7 @@ export async function openVideo(item: UnifiedVideoItem, options: OpenVideoOption
         cid: initialCid,
         mode: settings.youtubeStreamMode,
         preferredHeight: settings.preferredQualityHeight,
+        isLive: item.isLive === true,
       })
       const picked = pickInitialQualityTrack(manifest, settings.preferredQualityHeight)
       activeCid = manifest.cid ?? initialCid ?? storeState.activeCid
@@ -926,6 +1007,7 @@ export async function selectYoutubeStreamMode(mode: YoutubeStreamPreference): Pr
     const manifest: StreamManifest = await resolveStream("yt", item.rawId, {
       mode,
       preferredHeight: nextSettings.preferredQualityHeight,
+      isLive: item.isLive === true,
     })
     const picked = pickInitialQualityTrack(manifest, nextSettings.preferredQualityHeight)
     storeState.manifest = manifest
@@ -1205,6 +1287,8 @@ export async function closePlayer(): Promise<void> {
   const ctrl: VideoPlaybackController = getPlayerController()
   // 讓還在跑的開片流程停在下一個檢查點。
   openRequestSeq++
+  stopLiveViewerRefresh()
+  publishLiveViewers("", null)
   // 先放掉預抓：播放器在等的代理請求會立刻失敗返回，stop 才有機會結束。
   releaseAllPrefetchers()
   try {

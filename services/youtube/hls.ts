@@ -145,7 +145,7 @@ export function parseHlsMasterText(text: string, masterUrl: string): ParsedHlsMa
   return { variants, audioGroups }
 }
 
-function qualityLabel(height: number, fps: number | undefined): string {
+export function qualityLabel(height: number, fps: number | undefined): string {
   const base: string =
     height >= 2160 ? "4K" : height >= 1440 ? "2K" : height > 0 ? `${height}p` : "Auto"
   const suffix: string = fps && fps >= 50 ? "60" : ""

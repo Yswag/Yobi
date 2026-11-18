@@ -5,14 +5,15 @@
  * - VISIONOS：免 PoToken 的 `hlsManifestUrl`（影音合併、可任意 seek，最高 4K），需要 visitorData。
  * - IOS：影片詳情，以及 SABR 備援的直連 adaptiveFormats。
  * - WEB：搜尋、browse、next、留言。
- * - WEB_SABR / MWEB / ANDROID_VR：取得 serverAbrStreamingUrl + ustreamerConfig。
+ * - WEB_SABR / MWEB：取得 serverAbrStreamingUrl + ustreamerConfig。
+ * - ANDROID / IOS / TVHTML5：直播的 `hlsManifestUrl`（直播只有 app client 會回清單）。
  */
 
 import { fetch } from "scripting"
 import { getAuthState } from "../auth"
 import { getYoutubeLocale } from "./locale"
 
-export type InnertubeClientKey = "VISIONOS" | "WEB" | "WEB_SABR" | "MWEB" | "TVHTML5"
+export type InnertubeClientKey = "VISIONOS" | "WEB" | "WEB_SABR" | "MWEB" | "TVHTML5" | "ANDROID" | "IOS"
 
 /** 鬆散 JSON 型別，對應 Innertube 的巢狀回應。 */
 export type JsonObject = Record<string, any>
@@ -83,6 +84,43 @@ export const INNERTUBE_CLIENTS: Record<InnertubeClientKey, InnertubeClientConfig
         deviceModel: "RealityDevice17,1",
         osName: "visionOS",
         osVersion: "26.5.23O471",
+      },
+      user: { lockedSafetyMode: false },
+      request: { useSsl: true, internalExperimentFlags: [] },
+    },
+  },
+  ANDROID: {
+    clientName: 3,
+    clientVersion: "21.26.364",
+    userAgent: "com.google.android.youtube/21.26.364 (Linux; U; Android 11) gzip",
+    context: {
+      client: {
+        clientName: "ANDROID",
+        clientVersion: "21.26.364",
+        androidSdkVersion: 30,
+        osName: "Android",
+        osVersion: "11",
+        hl: "en",
+        gl: "US",
+      },
+      user: { lockedSafetyMode: false },
+      request: { useSsl: true, internalExperimentFlags: [] },
+    },
+  },
+  IOS: {
+    clientName: 5,
+    clientVersion: "21.02.3",
+    userAgent: "com.google.ios.youtube/21.02.3 (iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X;)",
+    context: {
+      client: {
+        clientName: "IOS",
+        clientVersion: "21.02.3",
+        deviceMake: "Apple",
+        deviceModel: "iPhone16,2",
+        osName: "iPhone",
+        osVersion: "18.3.2.22D82",
+        hl: "en",
+        gl: "US",
       },
       user: { lockedSafetyMode: false },
       request: { useSsl: true, internalExperimentFlags: [] },
