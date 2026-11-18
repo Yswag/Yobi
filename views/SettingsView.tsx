@@ -20,7 +20,6 @@ import type {
   PlayerSettings,
   Provider,
   ProviderAuthState,
-  SponsorCategory,
   YoutubeStreamPreference,
 } from "../types/index"
 import {
@@ -41,11 +40,12 @@ import {
   subscribeStorageChanges,
   updateSettings,
 } from "../services/index"
-import { SPONSOR_CATEGORY_LABELS, providerBadgeLabel, providerFullName } from "../utils/format"
+import { providerBadgeLabel, providerFullName } from "../utils/format"
 import { palette, providerColor } from "../ui/theme"
 
 export interface SettingsViewProps {
   onExitApp?: () => void
+  onOpenSponsorBlock?: () => void
 }
 
 interface Option<T> {
@@ -93,16 +93,6 @@ const SPEED_OPTIONS: Option<number>[] = [
   { label: "標準", value: 1.0 },
   { label: "快", value: 1.25 },
   { label: "極快", value: 1.5 },
-]
-
-const ALL_SPONSOR_CATEGORIES: SponsorCategory[] = [
-  "sponsor",
-  "selfpromo",
-  "interaction",
-  "intro",
-  "outro",
-  "preview",
-  "music_offtopic",
 ]
 
 function parseCookieString(raw: string): Record<string, string> {
@@ -303,14 +293,6 @@ export function SettingsView(props: SettingsViewProps): VirtualNode {
     showToast(`已清除 ${providerFullName(provider)} 登入狀態`)
   }
 
-  const toggleSponsorCategory = (category: SponsorCategory, enabled: boolean): void => {
-    const current: SponsorCategory[] = settings.sponsorBlockCategories
-    const next: SponsorCategory[] = enabled
-      ? [...current.filter((item: SponsorCategory): boolean => item !== category), category]
-      : current.filter((item: SponsorCategory): boolean => item !== category)
-    patchSettings({ sponsorBlockCategories: next })
-  }
-
   const handleAddBlockedWord = async (): Promise<void> => {
     const word: string | null = await Dialog.prompt({
       title: "新增彈幕屏蔽詞",
@@ -461,36 +443,30 @@ export function SettingsView(props: SettingsViewProps): VirtualNode {
         />
       </Section>
 
-      <Section
-        header={<Text>SponsorBlock</Text>}
-        footer={<Text>只作用於 YouTube。關閉自動跳過時，片段開始會顯示跳過按鈕。</Text>}
-      >
-        <Toggle
-          title="啟用"
-          value={settings.sponsorBlockEnabled}
-          onChanged={(value: boolean) => patchSettings({ sponsorBlockEnabled: value })}
-        />
-        {settings.sponsorBlockEnabled ? (
-          <Toggle
-            title="自動跳過"
-            value={settings.sponsorBlockAutoSkip}
-            onChanged={(value: boolean) => patchSettings({ sponsorBlockAutoSkip: value })}
-          />
-        ) : null}
+      <Section header={<Text>跳過片段</Text>}>
+        <Button buttonStyle="plain" action={() => props.onOpenSponsorBlock?.()}>
+          <HStack spacing={12} frame={{ maxWidth: "infinity" }} contentShape="rect">
+            <VStack
+              frame={{ width: 32, height: 32 }}
+              background={{ style: "#2ECC71", shape: { type: "rect", cornerRadius: 8 } }}
+            >
+              <Image systemName="shield.lefthalf.filled" font={15} foregroundStyle="white" />
+            </VStack>
+            <VStack alignment="leading" spacing={2}>
+              <Text font={16} foregroundStyle="label">SponsorBlock / 空降助手</Text>
+              <Text font={12} foregroundStyle="secondaryLabel">
+                {settings.sponsorBlockEnabled
+                  ? settings.sponsorBlockAutoSkip
+                    ? `已啟用・自動跳過（${settings.sponsorBlockCategories.length} 個分類）`
+                    : `已啟用・手動跳過（${settings.sponsorBlockCategories.length} 個分類）`
+                  : "已停用"}
+              </Text>
+            </VStack>
+            <Spacer />
+            <Image systemName="chevron.right" font={13} fontWeight="semibold" foregroundStyle="tertiaryLabel" />
+          </HStack>
+        </Button>
       </Section>
-
-      {settings.sponsorBlockEnabled ? (
-        <Section title="要跳過的片段">
-          {ALL_SPONSOR_CATEGORIES.map((category: SponsorCategory) => (
-            <Toggle
-              key={`sb-${category}`}
-              title={SPONSOR_CATEGORY_LABELS[category]}
-              value={settings.sponsorBlockCategories.includes(category)}
-              onChanged={(value: boolean) => toggleSponsorCategory(category, value)}
-            />
-          ))}
-        </Section>
-      ) : null}
 
       <Section title="BiliBili 彈幕">
         <Toggle

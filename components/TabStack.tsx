@@ -3,6 +3,7 @@ import type { VirtualNode } from "scripting"
 import type { Provider } from "../types"
 import { ChannelView } from "../views/ChannelView"
 import { SettingsView } from "../views/SettingsView"
+import { SponsorBlockSettingsView } from "../views/SponsorBlockSettingsView"
 
 export type OpenChannel = (provider: Provider, authorId: string, authorName: string, avatarUrl?: string) => void
 
@@ -14,6 +15,7 @@ export interface ChannelTarget {
 }
 
 export const SETTINGS_ROUTE: string = "settings"
+export const SPONSORBLOCK_ROUTE: string = "settings/sponsorblock"
 const CHANNEL_ROUTE_PREFIX: string = "channel:"
 
 export function channelRoute(target: ChannelTarget): string {
@@ -47,7 +49,18 @@ export function TabStack(props: {
         />
       )
     }
-    return <SettingsView onExitApp={props.onExitApp} />
+    if (route === SPONSORBLOCK_ROUTE) {
+      return <SponsorBlockSettingsView />
+    }
+    return (
+      <SettingsView
+        onExitApp={props.onExitApp}
+        onOpenSponsorBlock={() => {
+          if (props.path.value[props.path.value.length - 1] === SPONSORBLOCK_ROUTE) return
+          props.path.setValue([...props.path.value, SPONSORBLOCK_ROUTE])
+        }}
+      />
+    )
   }
 
   const bottomPadding = { bottom: props.bottomInset ?? 0 }
