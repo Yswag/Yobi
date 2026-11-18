@@ -17,6 +17,7 @@ import {
 import type { GeometryProxy, ScrollGeometry, ScrollPhase, ScrollPhaseChangeContext, VirtualNode } from "scripting"
 import type { Provider, UnifiedVideoItem, VideoChapter, VideoCollaborator, VideoPagePart } from "../types"
 import { CommentsSheet } from "../components/CommentsSheet"
+import { LiveChat } from "../components/LiveChat"
 import { addToPlaylistFlow, VideoCard } from "../components/VideoCard"
 import {
   downloadVideo,
@@ -602,7 +603,7 @@ export function WatchView(props: WatchViewProps): VirtualNode {
           frame={{ maxWidth: "infinity", height: 32 }}
         >
           <Text tag={TAB_RELATED}>詳情</Text>
-          <Text tag={TAB_COMMENTS}>留言</Text>
+          <Text tag={TAB_COMMENTS}>{item.isLive ? "聊天室" : "留言"}</Text>
         </Picker>
       </VStack>
       {/* TabView 不會回報自己需要多少高，要自己量。
@@ -635,17 +636,23 @@ export function WatchView(props: WatchViewProps): VirtualNode {
                 </VStack>
               </VStack>
             </ScrollView>
-            <ScrollView
-              axes="vertical"
-              scrollIndicator="hidden"
-              tag={TAB_COMMENTS}
-              frame={{ maxWidth: "infinity", maxHeight: "infinity", alignment: "top" }}
-              onScrollPhaseChange={handleCommentsPhase}
-            >
-              <VStack spacing={0} frame={{ maxWidth: "infinity" }} padding={{ top: 10, bottom: 24 }}>
-                {commentsList}
+            {item.isLive ? (
+              <VStack tag={TAB_COMMENTS} frame={{ maxWidth: "infinity", maxHeight: "infinity", alignment: "top" }}>
+                <LiveChat videoId={item.rawId} />
               </VStack>
-            </ScrollView>
+            ) : (
+              <ScrollView
+                axes="vertical"
+                scrollIndicator="hidden"
+                tag={TAB_COMMENTS}
+                frame={{ maxWidth: "infinity", maxHeight: "infinity", alignment: "top" }}
+                onScrollPhaseChange={handleCommentsPhase}
+              >
+                <VStack spacing={0} frame={{ maxWidth: "infinity" }} padding={{ top: 10, bottom: 24 }}>
+                  {commentsList}
+                </VStack>
+              </ScrollView>
+            )}
           </TabView>
         )}
       </GeometryReader>

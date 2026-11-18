@@ -728,19 +728,24 @@ export async function openVideo(item: UnifiedVideoItem, options: OpenVideoOption
     })
     .catch(() => {})
 
-  void getCommentPage(item.provider, item.rawId, { sort: storeState.commentsSort })
-    .then((page: CommentPage) => {
-      if (requestId !== openRequestSeq) return
-      storeState.comments = page.comments
-      storeState.commentsCursor = page.cursor
-      storeState.commentsLoading = false
-      emitStore()
-    })
-    .catch(() => {
-      if (requestId !== openRequestSeq) return
-      storeState.commentsLoading = false
-      emitStore()
-    })
+  // 直播的分頁是聊天室，一般留言不拉。
+  if (!item.isLive) {
+    void getCommentPage(item.provider, item.rawId, { sort: storeState.commentsSort })
+      .then((page: CommentPage) => {
+        if (requestId !== openRequestSeq) return
+        storeState.comments = page.comments
+        storeState.commentsCursor = page.cursor
+        storeState.commentsLoading = false
+        emitStore()
+      })
+      .catch(() => {
+        if (requestId !== openRequestSeq) return
+        storeState.commentsLoading = false
+        emitStore()
+      })
+  } else {
+    storeState.commentsLoading = false
+  }
 
   if (settings.sponsorBlockEnabled) {
     void fetchSponsorSegments(item.provider, item.rawId, settings.sponsorBlockCategories)
