@@ -153,6 +153,11 @@ let progressState: PlayerProgressSnapshot = {
   activeChapter: null,
 }
 
+/** 直播沒有可跳轉的時間軸：不續播、不存位置，seek 一律視為無效。 */
+export function isLivePlayback(): boolean {
+  return storeState.currentItem?.isLive === true
+}
+
 /** 上次送出的快照；用來在「什麼都沒變」時不要吵醒訂閱者。 */
 let lastEmittedStore: PlayerStoreSnapshot | null = null
 /** 同上，給播放進度用。 */
@@ -382,7 +387,8 @@ export function getPlayerController(): VideoPlaybackController {
       lastHistorySaveAt = now
       recordWatchHistory({
         item: storeState.currentItem,
-        position: pos,
+        // 直播的位置沒有意義，存了下次進來就會拿去 seek。
+        position: storeState.currentItem.isLive ? 0 : pos,
         duration: dur,
         watchedAt: now,
         cid: storeState.activeCid,
@@ -393,7 +399,7 @@ export function getPlayerController(): VideoPlaybackController {
     if (storeState.settings.sponsorBlockEnabled && storeState.sponsorSegments.length > 0) {
       const seg: SponsorSegment | null = findActiveSponsorSegment(storeState.sponsorSegments, pos)
       if (seg) {
-        if (storeState.settings.sponsorBlockAutoSkip && seg.actionType === "skip") {
+        if (storeState.settings.sponsorBlockAutoSkip && seg.actionType === "skip" && !isLivePlayback()) {
           if (lastSkippedSegmentUuid !== seg.uuid && seg.endTime > pos + 0.5) {
             lastSkippedSegmentUuid = seg.uuid
             void ctrl.seek(seg.endTime).catch(() => {})
@@ -716,13 +722,16 @@ export async function openVideo(item: UnifiedVideoItem, options: OpenVideoOption
     }
 
     // 續播點在開片前就知道，先把那裡的片段抓起來，跟 open() 同時進行。
+    // 直播沒有時間軸：續播位置只會讓播放器對直播窗格 seek，然後報錯。
     let resumeAt: number = 0
-    if (options.startSeconds !== undefined && options.startSeconds > 0) {
-      resumeAt = options.startSeconds
-    } else if (options.resumeFromHistory !== false) {
-      const savedPos: number = getSavedPosition(item.id, activeCid)
-      const totalDur: number = manifest?.duration || offline?.duration || item.duration || 0
-      if (savedPos > 5 && (totalDur <= 0 || savedPos < totalDur - 8)) resumeAt = savedPos
+    if (!item.isLive) {
+      if (options.startSeconds !== undefined && options.startSeconds > 0) {
+        resumeAt = options.startSeconds
+      } else if (options.resumeFromHistory !== false) {
+        const savedPos: number = getSavedPosition(item.id, activeCid)
+        const totalDur: number = manifest?.duration || offline?.duration || item.duration || 0
+        if (savedPos > 5 && (totalDur <= 0 || savedPos < totalDur - 8)) resumeAt = savedPos
+      }
     }
 
     if (cachedSource) {
@@ -783,6 +792,10 @@ export async function togglePlayPause(): Promise<void> {
       return
     }
     if (storeState.status === "ended" || ctrl.state === "ended") {
+      if (isLivePlayback()) {
+        await ctrl.play()
+        return
+      }
       await ctrl.seek(0)
     }
     await ctrl.play()
@@ -793,6 +806,7 @@ export async function togglePlayPause(): Promise<void> {
 }
 
 export async function seekTo(seconds: number): Promise<void> {
+  if (isLivePlayback()) return
   const ctrl: VideoPlaybackController = getPlayerController()
   const target: number = Math.max(0, seconds)
   progressState.position = target
@@ -806,6 +820,7 @@ export async function seekTo(seconds: number): Promise<void> {
 }
 
 export async function seekBy(deltaSeconds: number): Promise<void> {
+  if (isLivePlayback()) return
   const dur: number = progressState.duration
   const raw: number = progressState.position + deltaSeconds
   const clamped: number = dur > 0 ? Math.min(dur, Math.max(0, raw)) : Math.max(0, raw)
@@ -867,9 +882,9 @@ export async function selectQuality(qualityId: string): Promise<void> {
     const url: string = resolved.url
     const backend = resolved.backend
     const headers = resolved.headers ?? manifest.headers
-    if (currentPos > 0.5) warmStreamStart(url, currentPos)
+    if (currentPos > 0.5 && !isLivePlayback()) warmStreamStart(url, currentPos)
     await ctrl.open(url, { backend, headers })
-    if (currentPos > 0.5) {
+    if (currentPos > 0.5 && !isLivePlayback()) {
       try {
         await ctrl.seek(currentPos)
       } catch {
@@ -922,7 +937,7 @@ export async function selectYoutubeStreamMode(mode: YoutubeStreamPreference): Pr
     const backend = manifest.backend
     const headers = manifest.headers
     await ctrl.open(url, { backend, headers })
-    if (currentPos > 0.5) {
+    if (currentPos > 0.5 && !isLivePlayback()) {
       try {
         await ctrl.seek(currentPos)
       } catch {
@@ -1235,7 +1250,7 @@ export async function playNext(): Promise<void> {
 }
 
 export async function playPrevious(): Promise<void> {
-  if (progressState.position > 5) {
+  if (!isLivePlayback() && progressState.position > 5) {
     await seekTo(0)
     return
   }

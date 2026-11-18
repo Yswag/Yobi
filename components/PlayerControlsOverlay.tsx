@@ -141,10 +141,13 @@ function ProgressBar(props: {
   fullscreen: boolean
   scrub: ScrubPreview | null
   onScrub: (preview: ScrubPreview | null) => void
+  onTapChrome: () => void
 }): VirtualNode {
   const store: PlayerStoreSnapshot = usePlayerStore()
   const progress: PlayerProgressSnapshot = usePlayerProgress()
   const duration: number = progress.duration || 0
+  // 直播沒有時間軸：不顯示時長、不能拖、也不靠進度條撐開版面。
+  const live: boolean = store.currentItem?.isLive === true
   const scrubWidthRef = useRef<number>(1)
   const scrubTargetRef = useRef<number | null>(null)
 
@@ -226,22 +229,42 @@ function ProgressBar(props: {
 
   return (
     <VStack spacing={2} padding={{ horizontal: props.edgeInset, bottom: props.bottomInset }} frame={{ width: props.trackWidth }}>
-      <HStack spacing={4} frame={{ width: props.trackWidth }}>
-        <Text font={type.caption} monospacedDigit foregroundStyle={palette.onMedia}>
-          {formatDuration(props.scrub ? props.scrub.seconds : progress.position)}
-        </Text>
-        <Text font={type.caption} monospacedDigit foregroundStyle={palette.onMediaDim}>
-          {`/ ${formatDuration(progress.duration)}`}
-        </Text>
-        {progress.activeChapter ? (
-          <Text font={type.caption} foregroundStyle={palette.onMediaDim} lineLimit={1}>
-            {`· ${progress.activeChapter.title}`}
-          </Text>
-        ) : null}
+      <HStack
+        spacing={4}
+        frame={{ width: props.trackWidth }}
+        contentShape="rect"
+        onTapGesture={props.onTapChrome}
+      >
+        {live ? (
+          <HStack spacing={5}>
+            <Rectangle
+              fill={palette.danger}
+              frame={{ width: 6, height: 6 }}
+              clipShape={{ type: "rect", cornerRadius: 3 }}
+            />
+            <Text font={type.caption} fontWeight="semibold" foregroundStyle={palette.onMedia}>
+              直播中
+            </Text>
+          </HStack>
+        ) : (
+          <HStack spacing={4}>
+            <Text font={type.caption} monospacedDigit foregroundStyle={palette.onMedia}>
+              {formatDuration(props.scrub ? props.scrub.seconds : progress.position)}
+            </Text>
+            <Text font={type.caption} monospacedDigit foregroundStyle={palette.onMediaDim}>
+              {`/ ${formatDuration(progress.duration)}`}
+            </Text>
+            {progress.activeChapter ? (
+              <Text font={type.caption} foregroundStyle={palette.onMediaDim} lineLimit={1}>
+                {`· ${progress.activeChapter.title}`}
+              </Text>
+            ) : null}
+          </HStack>
+        )}
         <Spacer />
       </HStack>
       <HStack spacing={4} frame={{ width: props.trackWidth }}>
-        {renderScrubber(props.barWidth)}
+        {live ? <Spacer /> : renderScrubber(props.barWidth)}
         <Button action={() => toggleFullscreen()} buttonStyle="plain">
           <VStack frame={{ width: MIN_HIT_SIZE, height: 30 }} contentShape="rect">
             <Image
@@ -335,10 +358,19 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
     clearAutoHide()
   }
 
+  // 秒數／章節標題那行是唯讀文字：點它只切換控制列，不參與雙擊跳轉，
+  // 也不會讓後續的點擊接成雙擊。
+  function handleChromeTap(): void {
+    lastTapAtRef.current = null
+    if (controlsVisible) hideControls()
+    else showControls()
+  }
+
   function handleTap(loc: Point): void {
     const now: number = Date.now()
     const lastTapAt: number | null = lastTapAtRef.current
-    if (lastTapAt !== null && now - lastTapAt < DOUBLE_TAP_MS) {
+    // 直播沒有可跳轉的位置，雙擊只當普通點擊切換控制列。
+    if (lastTapAt !== null && now - lastTapAt < DOUBLE_TAP_MS && !store.currentItem?.isLive) {
       lastTapAtRef.current = null
       if (loc.x < props.width * 0.42) {
         void seekBy(-10)
@@ -518,9 +550,11 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
 
           <Spacer />
 
-          {/* 播完只換中央圖示，三顆按鈕的位置不變。 */}
+          {/* 直播不能跳轉，中央只留播放／暫停。 */}
           <HStack spacing={store.isFullscreen ? 44 : 28}>
-            <GlassCircle icon="gobackward.10" size={44} iconSize={18} onTap={() => void seekBy(-10)} />
+            {store.currentItem?.isLive ? null : (
+              <GlassCircle icon="gobackward.10" size={44} iconSize={18} onTap={() => void seekBy(-10)} />
+            )}
             {loading ? (
               <ZStack frame={{ width: SPINNER_BOX, height: SPINNER_BOX }}>
                 <ProgressView tint="white" controlSize="large" />
@@ -534,7 +568,9 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
                 onTap={() => void togglePlayPause()}
               />
             )}
-            <GlassCircle icon="goforward.10" size={44} iconSize={18} onTap={() => void seekBy(10)} />
+            {store.currentItem?.isLive ? null : (
+              <GlassCircle icon="goforward.10" size={44} iconSize={18} onTap={() => void seekBy(10)} />
+            )}
           </HStack>
 
           <Spacer />
@@ -547,6 +583,7 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
             fullscreen={store.isFullscreen}
             scrub={scrub}
             onScrub={handleScrub}
+            onTapChrome={handleChromeTap}
           />
         </VStack>
       </ZStack>
