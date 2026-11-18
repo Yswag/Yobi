@@ -605,6 +605,28 @@ function pickInitialQualityTrack(
   return { id: best.id, label: best.label }
 }
 
+/** 貼連結或直播卡片開片時只有欄位不全的項目；詳情回來就把標題、頻道、觀看數補齊。 */
+function enrichItem(item: UnifiedVideoItem, detail: VideoDetail): UnifiedVideoItem {
+  const merged: UnifiedVideoItem = {
+    ...item,
+    title: detail.title || item.title,
+    thumbnailUrl: detail.thumbnailUrl || item.thumbnailUrl,
+    duration: detail.duration || item.duration,
+    authorId: detail.authorId || item.authorId,
+    authorName: detail.authorName || item.authorName,
+  }
+  if (detail.authorAvatar) merged.authorAvatar = detail.authorAvatar
+  if (detail.viewCount !== undefined) merged.viewCount = detail.viewCount
+  if (detail.likeCount !== undefined) merged.likeCount = detail.likeCount
+  if (detail.danmakuCount !== undefined) merged.danmakuCount = detail.danmakuCount
+  if (detail.publishedText) merged.publishedText = detail.publishedText
+  if (detail.publishedAt !== undefined) merged.publishedAt = detail.publishedAt
+  if (detail.isLive !== undefined) merged.isLive = detail.isLive
+  if (detail.cid !== undefined) merged.cid = detail.cid
+  if (detail.aid !== undefined) merged.aid = detail.aid
+  return merged
+}
+
 /** 彈幕 XML 換畫質後要重新載入；同一個 cid 不必重抓。 */
 const danmakuXmlCache: Map<number, string> = new Map()
 
@@ -713,6 +735,16 @@ export async function openVideo(item: UnifiedVideoItem, options: OpenVideoOption
       const resolvedCid: number | undefined =
         storeState.activeCid ?? detail.cid ?? detail.pages?.[0]?.cid
       storeState.detail = detail
+      if (storeState.currentItem) {
+        const enriched: UnifiedVideoItem = enrichItem(storeState.currentItem, detail)
+        storeState.currentItem = enriched
+        // 佇列里的同一個項目也要補，不然下一部會顯示 id。
+        if (storeState.queue[storeState.queueIndex]?.id === enriched.id) {
+          const queue: UnifiedVideoItem[] = storeState.queue.slice()
+          queue[storeState.queueIndex] = enriched
+          storeState.queue = queue
+        }
+      }
       if (detail.isLive && (detail.viewCount ?? 0) > 0) {
         publishLiveViewers(detail.id, detail.viewCount ?? null)
       }
