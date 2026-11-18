@@ -28,9 +28,9 @@ function youtubeThumbnail(url: string, pixels: number): string {
   return `${match[1]}${YT_THUMB_SIZES[index].name}.${match[3]}`
 }
 
-/** yt3 的頻道頭像用 `=s176-c-k-...` 這種後綴控制大小。 */
+/** yt3／yt4（聊天室）的頭像用 `=s176-c-k-...` 這種後綴控制大小。 */
 function youtubeAvatar(url: string, pixels: number): string {
-  if (!/^https?:\/\/yt3\./.test(url)) return url
+  if (!/^https?:\/\/yt[34]\./.test(url)) return url
   return url.replace(/=s\d+/, `=s${pixels}`)
 }
 

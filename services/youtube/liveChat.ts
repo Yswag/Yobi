@@ -23,16 +23,24 @@ const MAX_POLL_MS: number = 30_000
 
 export type LiveChatKind = "text" | "paid" | "membership" | "sticker"
 
+/** 訊息裡的一段：文字或自訂表情圖（表情在 YouTube 也是一張圖）。 */
+export interface LiveChatRun {
+  text?: string
+  imageUrl?: string
+}
+
 export interface LiveChatMessage {
   id: string
   authorId: string
   authorName: string
   avatarUrl?: string
+  /** 純文字版；表情用捷徑名或 emoji 字元。 */
   text: string
+  runs: LiveChatRun[]
   kind: LiveChatKind
-  /** 作者名稱顏色（#RRGGBB）；會員、斗內才有。 */
+  /** YouTube 給的作者名稱顏色（#RRGGBB）；會員、斗內、版主才有。 */
   color?: string
-  /** 收到訊息的時間（毫秒）。 */
+  /** 收到的時間（毫秒）。 */
   at: number
 }
 
@@ -115,6 +123,63 @@ function textOf(renderer: JsonObject): string {
   return ""
 }
 
+/** 自訂表情的 emojiId 是長 ID，一般 emoji 是字元本身；後者直接用字元。 */
+function emojiIsCharacter(emojiId: string): boolean {
+  return emojiId.length > 0 && emojiId.length <= 8 && /[^\x00-\x7f]/.test(emojiId)
+}
+
+/** 表情圖挑小張的那個（24/48），聊天室不需要大圖。 */
+function emojiImageUrl(emoji: JsonObject): string | undefined {
+  const thumbnails: unknown[] = asArray(asObject(emoji["image"])?.["thumbnails"])
+  let best: JsonObject | null = null
+  for (const entry of thumbnails) {
+    const thumb: JsonObject | null = asObject(entry)
+    if (!thumb || typeof thumb["url"] !== "string") continue
+    if (!best || Number(thumb["width"] ?? 0) > Number(best["width"] ?? 0)) best = thumb
+  }
+  return typeof best?.["url"] === "string" ? String(best["url"]) : undefined
+}
+
+function pushText(runs: LiveChatRun[], text: string): void {
+  if (!text) return
+  const last: LiveChatRun | undefined = runs[runs.length - 1]
+  if (last && last.imageUrl === undefined) {
+    last.text = `${last.text ?? ""}${text}`
+    return
+  }
+  runs.push({ text })
+}
+
+/** `message.runs` 轉成文字與表情圖交錯的片段。 */
+function runsOf(renderer: JsonObject): LiveChatRun[] {
+  const runs: LiveChatRun[] = []
+  for (const raw of asArray(asObject(renderer["message"])?.["runs"])) {
+    if (runs.length >= 60) break
+    const entry: JsonObject | null = asObject(raw)
+    if (!entry) continue
+    const text: unknown = entry["text"]
+    if (typeof text === "string") {
+      pushText(runs, text)
+      continue
+    }
+    const emoji: JsonObject | null = asObject(entry["emoji"])
+    if (!emoji) continue
+    const emojiId: string = String(emoji["emojiId"] ?? "")
+    if (emojiIsCharacter(emojiId)) {
+      pushText(runs, emojiId)
+      continue
+    }
+    const imageUrl: string | undefined = emojiImageUrl(emoji)
+    if (imageUrl) {
+      runs.push({ imageUrl })
+      continue
+    }
+    const shortcuts: unknown[] = asArray(emoji["shortcuts"])
+    if (typeof shortcuts[0] === "string") pushText(runs, shortcuts[0])
+  }
+  return runs
+}
+
 function cursorOf(liveChat: JsonObject): LiveChatCursor | null {
   const keys: string[] = ["invalidationContinuationData", "timedContinuationData", "reloadContinuationData"]
   for (const key of keys) {
@@ -148,8 +213,14 @@ function parseChatResponse(response: JsonObject): LiveChatBatch {
     if (!item) continue
     const entry: RendererEntry | null = rendererOf(item)
     if (!entry) continue
-    const text: string = textOf(entry.renderer)
-    if (!text) continue
+    const runs: LiveChatRun[] = runsOf(entry.renderer)
+    // 聊天室常在句尾帶空白，兩端清掉；中間的保留。
+    const head: LiveChatRun | undefined = runs[0]
+    if (head && head.text) head.text = head.text.replace(/^\s+/, "")
+    const tail: LiveChatRun | undefined = runs[runs.length - 1]
+    if (tail && tail.text) tail.text = tail.text.replace(/\s+$/, "")
+    const text: string = runs.length > 0 ? runs.map((run: LiveChatRun): string => run.text ?? "").join("") : textOf(entry.renderer)
+    if (!text && runs.every((run: LiveChatRun): boolean => !run.imageUrl)) continue
     const id: string =
       String(entry.renderer["id"] ?? "") ||
       `${String(entry.renderer["timestampUsec"] ?? "")}:${String(asObject(entry.renderer["authorName"])?.["simpleText"] ?? "")}:${text}`
@@ -158,6 +229,7 @@ function parseChatResponse(response: JsonObject): LiveChatBatch {
       authorId: String(entry.renderer["authorExternalChannelId"] ?? ""),
       authorName: readText(entry.renderer["authorName"]) || String(entry.renderer["authorExternalChannelId"] ?? ""),
       text,
+      runs: runs.length > 0 ? runs : [{ text }],
       kind: entry.kind,
       at: Number(String(entry.renderer["timestampUsec"] ?? "0")) / 1000 || Date.now(),
     }

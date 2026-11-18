@@ -1,50 +1,116 @@
-import { ScrollView, Text, VStack, useEffect, useRef, useState } from "scripting"
+import { HStack, Image, ScrollView, Text, VStack, useEffect, useRef, useState } from "scripting"
 import type { Color, VirtualNode } from "scripting"
 import {
   fetchLiveChatBatch,
   fetchLiveChatStart,
   type LiveChatCursor,
   type LiveChatMessage,
+  type LiveChatRun,
 } from "../services/youtube/liveChat"
-import { EmptyState } from "../ui/primitives"
+import { Avatar, EmptyState } from "../ui/primitives"
 import { palette, space, type } from "../ui/theme"
 
 /** 留下來的訊息上限；聊天室刷很快，全部留著會愈來愈慢。 */
 const MAX_MESSAGES: number = 300
 const RETRY_MS: number = 4000
 const MAX_RETRIES: number = 3
+/** 有訊息就馬上再要一輪；跟 yt-dlp 一樣不照 timeoutMs 慢慢等。 */
+const MIN_POLL_MS: number = 150
+const AFTER_MESSAGES_MS: number = 250
+const IDLE_POLL_MS: number = 300
+const LONG_POLL_MS: number = 1500
+const AVATAR_SIZE: number = 24
+const EMOJI_SIZE: number = 22
 
 type ChatStatus = "loading" | "ready" | "ended" | "unavailable" | "error"
 
-function ChatRow(props: { message: LiveChatMessage }): VirtualNode {
+/** YouTube 只給會員／斗內名稱顏色，其他人用固定色盤抽一個，同一個作者永遠同色。 */
+const NAME_COLORS: Color[] = [
+  "#ff6b6b",
+  "#ffa94d",
+  "#ffd43b",
+  "#69db7c",
+  "#38d9a9",
+  "#4dabf7",
+  "#9775fa",
+  "#da77f2",
+  "#f783ac",
+  "#c9a227",
+] as Color[]
+
+function colorFor(message: LiveChatMessage): Color {
+  if (message.color) return message.color as Color
+  const key: string = message.authorId || message.authorName
+  let hash: number = 0
+  for (let index = 0; index < key.length; index++) {
+    hash = (hash * 31 + key.charCodeAt(index)) % 100003
+  }
+  return NAME_COLORS[hash % NAME_COLORS.length]
+}
+
+function RunBody(props: { message: LiveChatMessage }): VirtualNode {
   const message: LiveChatMessage = props.message
-  const name: VirtualNode = message.color ? (
-    <Text font={type.meta} fontWeight="semibold" lineLimit={1} foregroundStyle={message.color as Color}>
-      {message.authorName}
-    </Text>
-  ) : (
-    <Text font={type.meta} fontWeight="semibold" lineLimit={1} foregroundStyle="secondaryLabel">
-      {message.authorName}
-    </Text>
-  )
-  return (
-    <VStack
-      alignment="leading"
-      spacing={1}
-      padding={{ horizontal: space.page, vertical: 3 }}
-      frame={{ maxWidth: "infinity", alignment: "leading" }}
-    >
-      {name}
+  const runs: LiveChatRun[] = message.runs
+  const hasImage: boolean = runs.some((run: LiveChatRun): boolean => Boolean(run.imageUrl))
+  const bodyColor: "label" | Color = message.kind === "text" ? "label" : palette.brand
+  if (!hasImage) {
+    return (
       <Text
-        font={type.meta + 1}
+        font={type.cardTitle}
         lineSpacing={2}
-        foregroundStyle={message.kind === "text" ? "label" : palette.brand}
+        foregroundStyle={bodyColor}
         multilineTextAlignment="leading"
         frame={{ maxWidth: "infinity", alignment: "leading" }}
       >
         {message.text}
       </Text>
-    </VStack>
+    )
+  }
+  return (
+    <HStack alignment="top" spacing={2} frame={{ maxWidth: "infinity", alignment: "leading" }}>
+      {runs.map((run: LiveChatRun, index: number): VirtualNode =>
+        run.imageUrl ? (
+          <Image
+            key={`run-${index}`}
+            imageUrl={run.imageUrl}
+            resizable
+            scaleToFit
+            frame={{ width: EMOJI_SIZE, height: EMOJI_SIZE }}
+            offset={{ x: 0, y: 2 }}
+          />
+        ) : (
+          <Text
+            key={`run-${index}`}
+            font={type.cardTitle}
+            foregroundStyle={bodyColor}
+            lineLimit={3}
+            frame={{ alignment: "leading" }}
+          >
+            {run.text ?? ""}
+          </Text>
+        ),
+      )}
+    </HStack>
+  )
+}
+
+function ChatRow(props: { message: LiveChatMessage }): VirtualNode {
+  const message: LiveChatMessage = props.message
+  return (
+    <HStack
+      alignment="top"
+      spacing={8}
+      padding={{ horizontal: space.page, vertical: 5 }}
+      frame={{ maxWidth: "infinity", alignment: "leading" }}
+    >
+      <Avatar url={message.avatarUrl} name={message.authorName} size={AVATAR_SIZE} />
+      <VStack alignment="leading" spacing={1} frame={{ maxWidth: "infinity", alignment: "leading" }}>
+        <Text font={type.meta + 1} fontWeight="semibold" lineLimit={1} foregroundStyle={colorFor(message)}>
+          {message.authorName}
+        </Text>
+        <RunBody message={message} />
+      </VStack>
+    </HStack>
   )
 }
 
@@ -104,7 +170,9 @@ export function LiveChat(props: LiveChatProps): VirtualNode {
           }
           cursorRef.current = start
         }
+        const startedAt: number = Date.now()
         const batch = await fetchLiveChatBatch(props.videoId, cursorRef.current)
+        const elapsed: number = Date.now() - startedAt
         if (disposedRef.current) return
         push(batch.messages)
         failures = 0
@@ -114,7 +182,11 @@ export function LiveChat(props: LiveChatProps): VirtualNode {
         }
         cursorRef.current = batch.cursor
         setStatus("ready")
-        schedule(batch.cursor.pollMs)
+        // 伺服器會自己 long-poll（有時休 10 幾秒），所以不照 timeoutMs 等：
+        // 有訊息就立刻接下一輪，沒訊息才短暫休息，不然聊天室會慢半拍。
+        const delay: number =
+          batch.messages.length > 0 ? AFTER_MESSAGES_MS : elapsed >= LONG_POLL_MS ? 0 : IDLE_POLL_MS
+        schedule(Math.max(MIN_POLL_MS, delay))
       } catch (_error) {
         if (disposedRef.current) return
         failures += 1
