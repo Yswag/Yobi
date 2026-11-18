@@ -60,6 +60,8 @@ const TAB_RELATED: number = 0
 const TAB_COMMENTS: number = 1
 
 const SEGMENT_CARD_WIDTH: number = 156
+/** 卡片固定高度，一行與兩行標題的卡片才對齊（caption 約 13 + 間距 4 + 兩行標題 31 + 上下 20）。 */
+const SEGMENT_CARD_HEIGHT: number = 70
 /** 留言捲到剩這麼多高度就自動抓下一頁。 */
 const COMMENTS_AUTO_LOAD_PX: number = 320
 
@@ -97,7 +99,7 @@ function SegmentCard(props: { caption: string; title: string; active: boolean; o
       alignment="leading"
       spacing={4}
       padding={{ horizontal: 12, vertical: 10 }}
-      frame={{ width: SEGMENT_CARD_WIDTH, alignment: "leading" }}
+      frame={{ width: SEGMENT_CARD_WIDTH, height: SEGMENT_CARD_HEIGHT, alignment: "topLeading" }}
       background={{
         style: props.active ? palette.brandSoft : "tertiarySystemFill",
         shape: { type: "rect", cornerRadius: radius.md, style: "continuous" },

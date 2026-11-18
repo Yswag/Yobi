@@ -513,7 +513,9 @@ function parseTimestamp(text: string): number {
 /** 章節：支援 macroMarkersListRenderer 與 playerBar chapters。 */
 export function parseChapters(next: JsonObject): VideoChapter[] {
   const found: VideoChapter[] = []
-  const seen: Set<string> = new Set()
+  // 兩個 renderer 帶的是同一份章節清單（各自還會出現兩遍），所以用「開始秒數」當唯一鍵；
+  // 原本拿 title + 毫秒去比，跟 macro 的秒數永遠對不上，整排就重複了。
+  const seen: Set<number> = new Set()
 
   const visit = (node: unknown, depth: number): void => {
     if (!node || depth > 22) return
@@ -528,8 +530,8 @@ export function parseChapters(next: JsonObject): VideoChapter[] {
     if (item) {
       const title: string = readText(item["title"])
       const start: number = parseTimestamp(readText(item["timeDescription"]))
-      if (title && !seen.has(`${title}:${start}`)) {
-        seen.add(`${title}:${start}`)
+      if (title && !seen.has(start)) {
+        seen.add(start)
         found.push({
           title,
           startTime: start,
@@ -542,13 +544,13 @@ export function parseChapters(next: JsonObject): VideoChapter[] {
     const chapter: JsonObject | null = asObject(object["chapterRenderer"])
     if (chapter) {
       const title: string = readText(chapter["title"])
-      const startMs: number = Number(chapter["timeRangeStartMillis"] ?? 0)
-      if (title && !seen.has(`${title}:${startMs}`)) {
-        seen.add(`${title}:${startMs}`)
+      const start: number = Math.round(Number(chapter["timeRangeStartMillis"] ?? 0) / 1000)
+      if (title && !seen.has(start)) {
+        seen.add(start)
         found.push({
           title,
-          startTime: Math.round(startMs / 1000),
-          endTime: Math.round(startMs / 1000),
+          startTime: start,
+          endTime: start,
           thumbnailUrl: readThumbnailUrl(chapter["thumbnail"]),
         })
       }
