@@ -269,6 +269,17 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
   const statusRef = useRef<string>(store.status)
   statusRef.current = store.status
 
+  // 播完不要把控制列收掉：收掉後只剩定格，看起來就像卡住。
+  // 重播之後才恢復自動隱藏。
+  useEffect(() => {
+    if (store.status === "ended") {
+      setControlsVisible(true)
+      clearAutoHide()
+      return
+    }
+    if (store.status === "playing" && controlsVisible) armAutoHide()
+  }, [store.status])
+
   useEffect(() => {
     return () => {
       if (hideTimerRef.current !== null) clearTimeout(hideTimerRef.current)
@@ -293,7 +304,7 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
     clearAutoHide()
     hideTimerRef.current = setTimeout(() => {
       hideTimerRef.current = null
-      if (statusRef.current === "paused") return
+      if (statusRef.current === "paused" || statusRef.current === "ended") return
       setControlsVisible(false)
     }, AUTO_HIDE_MS)
   }
@@ -397,6 +408,7 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
     const title: string = store.currentItem?.title ?? ""
     const provider = store.currentItem?.provider ?? "yt"
     const playing: boolean = store.status === "playing"
+    const ended: boolean = store.status === "ended"
     const loading: boolean = store.status === "loading" || store.status === "buffering"
     const hasSubtitles: boolean = (store.manifest?.subtitles.length ?? 0) > 0
 
@@ -506,6 +518,7 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
 
           <Spacer />
 
+          {/* 播完只換中央圖示，三顆按鈕的位置不變。 */}
           <HStack spacing={store.isFullscreen ? 44 : 28}>
             <GlassCircle icon="gobackward.10" size={44} iconSize={18} onTap={() => void seekBy(-10)} />
             {loading ? (
@@ -514,7 +527,12 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
                 <NetSpeedLabel offsetY={SPEED_OFFSET_Y} />
               </ZStack>
             ) : (
-              <GlassCircle icon={playing ? "pause.fill" : "play.fill"} size={60} iconSize={26} onTap={() => void togglePlayPause()} />
+              <GlassCircle
+                icon={ended ? "arrow.counterclockwise" : playing ? "pause.fill" : "play.fill"}
+                size={60}
+                iconSize={26}
+                onTap={() => void togglePlayPause()}
+              />
             )}
             <GlassCircle icon="goforward.10" size={44} iconSize={18} onTap={() => void seekBy(10)} />
           </HStack>

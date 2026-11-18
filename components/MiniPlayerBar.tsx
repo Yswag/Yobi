@@ -45,6 +45,8 @@ export function MiniPlayerBar(props: {
   const item: UnifiedVideoItem | null = props.item
   const isLoading: boolean = store.status === "loading" || store.status === "buffering"
   const isPlaying: boolean = store.status === "playing"
+  // 播完後這顆按鈕的行為是「重播」，圖示要跟着說。
+  const isEnded: boolean = store.status === "ended"
   const duration: number = progress.duration > 0 ? progress.duration : item?.duration ?? 0
   const ratio: number = duration > 0 ? progress.position / duration : 0
 
@@ -72,7 +74,7 @@ export function MiniPlayerBar(props: {
           <ProgressView controlSize="small" />
         ) : (
           <Image
-            systemName={isPlaying ? "pause.fill" : "play.fill"}
+            systemName={isEnded ? "arrow.counterclockwise" : isPlaying ? "pause.fill" : "play.fill"}
             font={18}
             foregroundStyle="label"
             contentTransition="symbolEffectReplace"

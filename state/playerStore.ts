@@ -98,6 +98,11 @@ let controllerInstance: VideoPlaybackController | null = null
 let audioSessionReady: boolean = false
 let openRequestSeq: number = 0
 let lastHistorySaveAt: number = 0
+/**
+ * 換片期間（上一支還在播 → 新串流 open() 完成）：controller 吐出的事件都是舊片的。
+ * 照收就會把舊片的位置寫成新片的觀看紀錄，下次進來就從那裡續播；狀態也會蓋掉 loading。
+ */
+let streamSwitchPending: boolean = false
 let lastSkippedSegmentUuid: string = ""
 let dismissedSegmentUuid: string = ""
 let toastTimer: number | null = null
@@ -333,6 +338,7 @@ export function getPlayerController(): VideoPlaybackController {
   })
 
   ctrl.on("state", (snap: VideoPlaybackSnapshot) => {
+    if (streamSwitchPending) return
     const mapped: PlaybackStatus = mapControllerState(snap.state)
     if (storeState.status !== mapped) {
       storeState.status = mapped
@@ -358,6 +364,7 @@ export function getPlayerController(): VideoPlaybackController {
   })
 
   ctrl.on("progress", (snap: VideoPlaybackSnapshot) => {
+    if (streamSwitchPending) return
     const pos: number = Number.isFinite(snap.position) ? snap.position : 0
     const dur: number =
       typeof snap.duration === "number" && snap.duration > 0
@@ -407,6 +414,14 @@ export function getPlayerController(): VideoPlaybackController {
   })
 
   ctrl.on("ended", () => {
+    // 舊片剛好播完不該把新片的 loading 蓋成 ended。
+    if (streamSwitchPending) return
+    // 最後一次 progress 可能差一點點，進度條停在滿格才像「播完了」。
+    if (progressState.duration > 0) {
+      progressState.position = progressState.duration
+      progressState.bufferedUntil = progressState.duration
+      emitProgress()
+    }
     storeState.status = "ended"
     emitStore()
   })
@@ -539,6 +554,14 @@ export async function openVideo(item: UnifiedVideoItem, options: OpenVideoOption
   const requestId: number = ++openRequestSeq
   const ctrl: VideoPlaybackController = getPlayerController()
   const settings: PlayerSettings = getSettings()
+  // 換流要解析、等代理，好幾秒；這段時間不能讓上一支繼續出聲。
+  // 先暫停（畫面留在最後一幀），順便擋掉它接下來的事件與 progress。
+  streamSwitchPending = true
+  try {
+    ctrl.pause()
+  } catch {
+    // 沒在播就沒事
+  }
   await ensureAudioSession()
 
   const nextQueue: UnifiedVideoItem[] = options.queue && options.queue.length > 0 ? options.queue : [item]
@@ -714,6 +737,7 @@ export async function openVideo(item: UnifiedVideoItem, options: OpenVideoOption
       await ctrl.open(url, { backend, headers })
       if (requestId !== openRequestSeq) return
     }
+    streamSwitchPending = false
     await restoreControllerSettings()
     if (requestId !== openRequestSeq) return
 
@@ -1020,6 +1044,13 @@ export async function selectPage(pagePart: VideoPagePart): Promise<void> {
   }
   emitProgress()
   emitStore()
+  // 同 openVideo：換分P之前先停掉舊串流，不然它的事件會蓋掉位置也寫錯紀錄。
+  streamSwitchPending = true
+  try {
+    ctrl.pause()
+  } catch {
+    // 沒在播就沒事
+  }
 
   try {
     ctrl.clearDanmaku()
@@ -1041,6 +1072,7 @@ export async function selectPage(pagePart: VideoPagePart): Promise<void> {
     const backend = manifest.backend
     const headers = manifest.headers
     await ctrl.open(url, { backend, headers })
+    streamSwitchPending = false
     await restoreControllerSettings()
     void loadBiliDanmakuForCid(pagePart.cid)
     await ctrl.play()
