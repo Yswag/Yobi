@@ -352,6 +352,8 @@ function fromLockupViewModel(renderer: JsonObject): UnifiedVideoItem | null {
     const text: string = parts[index]
     if (/watching|正在觀看|正在观看|人觀看中/i.test(text)) {
       watching = true
+      // 「3,922 人正在觀看」也要把數字留下來，別只當成直播標記。
+      if (viewCount === undefined) viewCount = parseViewCountText(text)
       continue
     }
     // 「1y ago」「3 週前」這類才是發佈時間，不要拿單個「前」去認。

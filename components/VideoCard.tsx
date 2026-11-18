@@ -106,12 +106,24 @@ function cardMenu(item: UnifiedVideoItem, actions?: CardAction[]): VirtualNode {
 }
 
 function metaText(item: UnifiedVideoItem): string {
-  const base: string = `${formatCount(item.viewCount)} 次觀看`
-  return item.publishedText ? `${base} · ${item.publishedText}` : base
+  const parts: string[] = []
+  // 直播沒有累計觀看數，只有當下線上人數；拿不到就不寫，別顯示 0。
+  if (item.isLive) {
+    if ((item.viewCount ?? 0) > 0) parts.push(`${formatCount(item.viewCount)} 人正在觀看`)
+  } else {
+    parts.push(`${formatCount(item.viewCount)} 次觀看`)
+  }
+  if (item.publishedText) parts.push(item.publishedText)
+  return parts.join(" · ")
 }
 
 function selectCard(props: VideoCardProps): void {
   props.onSelect(props.item)
+}
+
+/** 作者加說明；說明空的時候不要留一個光秃秃的分隔點。 */
+function joinCardMeta(author: string, meta: string): string {
+  return meta ? `${author} · ${meta}` : author
 }
 
 function RowCard(props: VideoCardProps): VirtualNode {
@@ -202,7 +214,7 @@ function GridCard(props: VideoCardProps): VirtualNode {
             {item.title}
           </Text>
           <Text font={type.meta + 1} foregroundStyle="secondaryLabel" lineLimit={1}>
-            {`${item.authorName} · ${props.meta ?? metaText(item)}`}
+            {joinCardMeta(item.authorName, props.meta ?? metaText(item))}
           </Text>
         </VStack>
         {cardMenu(item, props.actions)}
