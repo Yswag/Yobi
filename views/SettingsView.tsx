@@ -407,9 +407,12 @@ export function SettingsView(props: SettingsViewProps): VirtualNode {
         />
       </Section>
 
-      <Section title="播放">
+      <Section
+        header={<Text>YouTube 串流</Text>}
+        footer={<Text>播放卡頓或畫質選項太少時，可以換一種引擎；下次開啟影片時生效。</Text>}
+      >
         <Picker
-          title="YouTube 串流模式"
+          title="串流引擎"
           value={settings.youtubeStreamMode}
           onChanged={(value: string) => patchSettings({ youtubeStreamMode: value as YoutubeStreamPreference })}
           pickerStyle="menu"
@@ -418,6 +421,9 @@ export function SettingsView(props: SettingsViewProps): VirtualNode {
             <Text key={`stream-${option.value}`} tag={option.value}>{option.label}</Text>
           ))}
         </Picker>
+      </Section>
+
+      <Section title="播放">
         <NumberPicker
           title="偏好畫質"
           options={QUALITY_OPTIONS}

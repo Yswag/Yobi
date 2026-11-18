@@ -217,10 +217,15 @@ export async function resolveHlsManifest(masterUrl: string): Promise<ResolvedHls
     .sort((a: HlsVariant, b: HlsVariant): number => (b.height ?? 0) - (a.height ?? 0) || b.bandwidth - a.bandwidth)
 
   const qualities: VideoQualityTrack[] = []
-  const usedIds: Set<string> = new Set()
+  const seenLabels: Set<string> = new Set()
   const relayGroup: string = `yt${simpleHash(masterUrl)}`
 
   for (const variant of sorted) {
+    // 同一解析度在 master 裡可能有兩三份（不同編碼或碼率）；只留第一份，跟 bilibili 一樣。
+    const label: string = qualityLabel(variant.height ?? 0, variant.frameRate)
+    if (seenLabels.has(label)) continue
+    seenLabels.add(label)
+
     const audio: HlsAudioGroup | undefined = variant.audioGroup
       ? parsed.audioGroups.find((group: HlsAudioGroup): boolean => group.groupId === variant.audioGroup)
       : parsed.audioGroups.find((group: HlsAudioGroup): boolean => group.isDefault) ?? parsed.audioGroups[0]
@@ -237,13 +242,9 @@ export async function resolveHlsManifest(masterUrl: string): Promise<ResolvedHls
       "application/vnd.apple.mpegurl",
     )
 
-    let id: string = `hls-${variant.height ?? 0}p${variant.frameRate && variant.frameRate >= 50 ? "60" : ""}`
-    if (usedIds.has(id)) id = `${id}-${simpleHash(variant.uri)}`
-    usedIds.add(id)
-
     const quality: VideoQualityTrack = {
-      id,
-      label: qualityLabel(variant.height ?? 0, variant.frameRate),
+      id: `hls-${variant.height ?? 0}p${variant.frameRate && variant.frameRate >= 50 ? "60" : ""}`,
+      label,
       width: variant.width ?? 0,
       height: variant.height ?? 0,
       delivery: "hls",

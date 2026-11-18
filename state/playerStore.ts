@@ -14,7 +14,6 @@ import type {
   VideoDetail,
   VideoPagePart,
   VideoQualityTrack,
-  YoutubeStreamPreference,
 } from "../types"
 import {
   fetchBiliDanmakuXml,
@@ -991,51 +990,6 @@ export async function selectQuality(qualityId: string): Promise<void> {
     const message: string = err instanceof Error ? err.message : "切換畫質失敗"
     storeState.status = "error"
     storeState.errorText = message
-    emitStore()
-  }
-}
-
-export async function selectYoutubeStreamMode(mode: YoutubeStreamPreference): Promise<void> {
-  const nextSettings: PlayerSettings = updateSettings({ youtubeStreamMode: mode })
-  storeState.settings = nextSettings
-  emitStore()
-
-  const item: UnifiedVideoItem | null = storeState.currentItem
-  if (!item || item.provider !== "yt") return
-
-  const currentPos: number = progressState.position
-  const ctrl: VideoPlaybackController = getPlayerController()
-  storeState.status = "buffering"
-  emitStore()
-
-  try {
-    const manifest: StreamManifest = await resolveStream("yt", item.rawId, {
-      mode,
-      preferredHeight: nextSettings.preferredQualityHeight,
-      isLive: item.isLive === true,
-    })
-    const picked = pickInitialQualityTrack(manifest, nextSettings.preferredQualityHeight)
-    storeState.manifest = manifest
-    storeState.selectedQualityId = picked.id
-    storeState.selectedQualityLabel = picked.label
-    emitStore()
-
-    const url: string = manifest.primaryUrl
-    const backend = manifest.backend
-    const headers = manifest.headers
-    await ctrl.open(url, { backend, headers })
-    if (currentPos > 0.5 && !isLivePlayback()) {
-      try {
-        await ctrl.seek(currentPos)
-      } catch {
-        // Ignore
-      }
-    }
-    await restoreControllerSettings()
-    await ctrl.play()
-  } catch (err: unknown) {
-    storeState.status = "error"
-    storeState.errorText = err instanceof Error ? err.message : "切換串流引擎失敗"
     emitStore()
   }
 }

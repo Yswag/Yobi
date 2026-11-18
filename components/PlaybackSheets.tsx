@@ -13,22 +13,15 @@ import {
   VStack,
 } from "scripting"
 import type { VirtualNode } from "scripting"
-import type { VideoQualityTrack, YoutubeStreamPreference } from "../types"
+import type { VideoQualityTrack } from "../types"
 import {
   getPlayerController,
   selectQuality,
-  selectYoutubeStreamMode,
   setStatsVisible,
   updateDanmakuSettings,
   usePlayerStore,
 } from "../state/playerStore"
 import { palette, type } from "../ui/theme"
-
-const STREAM_MODES: { label: string; value: YoutubeStreamPreference }[] = [
-  { label: "自動", value: "auto" },
-  { label: "HLS", value: "hls" },
-  { label: "SABR", value: "sabr" },
-]
 
 const AREA_OPTIONS: { label: string; value: number }[] = [
   { label: "1/4", value: 0.25 },
@@ -85,28 +78,12 @@ function SheetShell(props: { title: string; onDone: () => void; children: (Virtu
 export function QualitySheet(props: { onDone: () => void }): VirtualNode {
   const store = usePlayerStore()
   const qualities: VideoQualityTrack[] = store.manifest?.qualities ?? []
-  const isYoutube: boolean = store.currentItem?.provider === "yt"
   const summary: string | null = decoderSummary(
     qualities.find((quality: VideoQualityTrack): boolean => quality.id === store.selectedQualityId),
   )
 
   return (
     <SheetShell title="畫質" onDone={props.onDone}>
-      {isYoutube ? (
-        <Section header={<Text>串流引擎</Text>} footer={<Text>播放卡頓或畫質選項太少時，可以換一種引擎試試。</Text>}>
-          <Picker
-            title="串流引擎"
-            value={store.settings.youtubeStreamMode}
-            onChanged={(value: string) => void selectYoutubeStreamMode(value as YoutubeStreamPreference)}
-            pickerStyle="segmented"
-          >
-            {STREAM_MODES.map(mode => (
-              <Text key={`mode-${mode.value}`} tag={mode.value}>{mode.label}</Text>
-            ))}
-          </Picker>
-        </Section>
-      ) : null}
-
       <Section header={<Text>畫質</Text>} footer={summary ? <Text>{summary}</Text> : undefined}>
         {qualities.length === 0 ? (
           <Text foregroundStyle="secondaryLabel">尚無可用畫質</Text>

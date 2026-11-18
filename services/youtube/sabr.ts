@@ -151,6 +151,17 @@ export function pickBestAudioFormat(formats: SabrFormat[]): SabrFormat | undefin
   return audios.sort((a: SabrFormat, b: SabrFormat): number => score(b) - score(a))[0]
 }
 
+/** 同一個解析度 SABR 會給好幾份編碼（avc1／av01），清單只留一份，跟 bilibili 一樣。 */
+function videoCodecScore(format: SabrFormat): number {
+  const codec: string = codecOf(format.mimeType).toLowerCase()
+  if ((format.height ?? 0) >= 2160) {
+    // 4K 的 AVC 要 13 Mbps 以上，native 解不動。
+    if (codec.startsWith("av01")) return 3
+    return codec.startsWith("hvc") || codec.startsWith("hev") ? 2 : 0
+  }
+  return codec.startsWith("av01") ? 1 : 3
+}
+
 /** 視訊軌（可切換畫質清單）。只取 MP4：時間軸靠 sidx，webm 的 Cues 不支援。 */
 export function pickVideoFormats(formats: SabrFormat[], includeAv1: boolean = true): SabrFormat[] {
   const videos: SabrFormat[] = formats.filter((format: SabrFormat): boolean => {
@@ -158,9 +169,19 @@ export function pickVideoFormats(formats: SabrFormat[], includeAv1: boolean = tr
     if (!includeAv1 && format.mimeType.includes("av01")) return false
     return true
   })
-  const byItag: Map<number, SabrFormat> = new Map()
-  for (const format of videos) byItag.set(format.itag, format)
-  return Array.from(byItag.values()).sort(
+  const byLabel: Map<string, SabrFormat> = new Map()
+  for (const format of videos) {
+    const label: string = qualityLabelOf(format)
+    const current: SabrFormat | undefined = byLabel.get(label)
+    if (
+      !current ||
+      videoCodecScore(format) > videoCodecScore(current) ||
+      (videoCodecScore(format) === videoCodecScore(current) && format.bitrate > current.bitrate)
+    ) {
+      byLabel.set(label, format)
+    }
+  }
+  return Array.from(byLabel.values()).sort(
     (a: SabrFormat, b: SabrFormat): number => (b.height ?? 0) - (a.height ?? 0) || (b.fps ?? 0) - (a.fps ?? 0),
   )
 }
