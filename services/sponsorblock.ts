@@ -65,12 +65,17 @@ function normalizeItems(raw: unknown, allowed: SponsorCategory[]): SponsorSegmen
     if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) continue
     if (!isCategory(category) || !isActionType(actionType)) continue
     if (allowed.length && !allowed.includes(category)) continue
+    const rawCid: unknown = candidate.cid ?? candidate.CID
+    const cid: number | undefined = typeof rawCid === "number" || typeof rawCid === "string"
+      ? Number(rawCid) || undefined
+      : undefined
     segments.push({
       uuid: String(candidate.UUID ?? candidate.uuid ?? candidate.id ?? `${category}-${start}-${end}`),
       category,
       actionType,
       startTime: start,
       endTime: end,
+      cid,
     })
   }
   segments.sort((a, b) => a.startTime - b.startTime)
@@ -89,7 +94,9 @@ export async function fetchSponsorSegments(
   const id = (rawId ?? "").trim()
   if (!id) return []
 
-  const allowed = categories.length ? categories : DEFAULT_CATEGORIES
+  // 全部分類都取消 = 不想跳任何東西，不是「用預設值」。
+  if (categories.length === 0) return []
+  const allowed = categories
   const key = cacheKey(provider, id, allowed)
   const cached = cache.get(key)
   if (cached && Date.now() - cached.at < CACHE_TTL) return cached.segments
@@ -113,6 +120,16 @@ export async function fetchSponsorSegments(
   } catch {
     return []
   }
+}
+
+/** 只取目前分P 的片段；沒有對應的 cid 就退回全部（cid 對不上時至少還有功能）。 */
+export function filterSegmentsForCid(
+  segments: readonly SponsorSegment[],
+  cid?: number,
+): SponsorSegment[] {
+  if (!segments.length || !cid) return segments.slice()
+  const matched: SponsorSegment[] = segments.filter((seg: SponsorSegment): boolean => seg.cid === cid)
+  return matched.length > 0 ? matched : segments.slice()
 }
 
 /** Returns the segment covering `currentTimeSec`, ignoring `poi` highlights. */

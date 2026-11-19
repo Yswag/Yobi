@@ -17,6 +17,7 @@ import type {
 import {
   fetchBiliDanmakuXml,
   fetchSponsorSegments,
+  filterSegmentsForCid,
   findActiveSponsorSegment,
   getCommentPage,
   getCommentReplies,
@@ -28,6 +29,7 @@ import {
   releaseAllPrefetchers,
   resolveStream,
   setBiliLineSwitchListener,
+  subscribeStorageChanges,
   updateSettings,
   warmStreamStart,
 } from "../services"
@@ -102,6 +104,8 @@ let lastHistorySaveAt: number = 0
 let streamSwitchPending: boolean = false
 let lastSkippedSegmentUuid: string = ""
 let dismissedSegmentUuid: string = ""
+/** 伺服器回的是整部影片（含所有分P）的片段，這裡留全量，切分P 時再收斂。 */
+let sponsorSegmentsAll: SponsorSegment[] = []
 let toastTimer: number | null = null
 let savedRateBeforeBoost: number = 1
 let savedOrientations: typeof Device.supportedInterfaceOrientations | null = null
@@ -449,7 +453,7 @@ export function getPlayerController(): VideoPlaybackController {
             const label: string = SPONSOR_CATEGORY_LABELS[seg.category] ?? "片段"
             showSkippedToast(`已自動跳過：${label}`)
           }
-        } else if (dismissedSegmentUuid !== seg.uuid) {
+        } else if (dismissedSegmentUuid !== seg.uuid && !isLivePlayback()) {
           if (storeState.activeSponsorPrompt?.uuid !== seg.uuid) {
             storeState.activeSponsorPrompt = seg
             emitStore()
@@ -644,6 +648,53 @@ async function loadBiliDanmakuForCid(cid: number): Promise<void> {
   }
 }
 
+/** 多 P 影片在 bsbsb.top 是全部 cid 混在一起回，只留目前這一 P 的。 */
+function applySponsorSegmentsForCid(): void {
+  storeState.sponsorSegments = filterSegmentsForCid(sponsorSegmentsAll, storeState.activeCid)
+}
+
+function sponsorConfigSignature(settings: PlayerSettings): string {
+  return `${settings.sponsorBlockEnabled}|${settings.sponsorBlockAutoSkip}|${[...settings.sponsorBlockCategories].sort().join(",")}`
+}
+
+let sponsorConfig: string = sponsorConfigSignature(storeState.settings)
+let sponsorReloadSeq: number = 0
+
+/** 設定頁改了空降選項要馬上生效，不用重開影片。 */
+subscribeStorageChanges(() => {
+  const next: PlayerSettings = getSettings()
+  const signature: string = sponsorConfigSignature(next)
+  if (signature === sponsorConfig) return
+  sponsorConfig = signature
+
+  storeState.settings = {
+    ...storeState.settings,
+    sponsorBlockEnabled: next.sponsorBlockEnabled,
+    sponsorBlockAutoSkip: next.sponsorBlockAutoSkip,
+    sponsorBlockCategories: next.sponsorBlockCategories,
+  }
+  storeState.activeSponsorPrompt = null
+
+  const item: UnifiedVideoItem | null = storeState.currentItem
+  const reload: number = ++sponsorReloadSeq
+  if (!next.sponsorBlockEnabled || !item) {
+    sponsorSegmentsAll = []
+    storeState.sponsorSegments = []
+    emitStore()
+    return
+  }
+
+  emitStore()
+  void fetchSponsorSegments(item.provider, item.rawId, next.sponsorBlockCategories)
+    .then((segments: SponsorSegment[]) => {
+      if (reload !== sponsorReloadSeq || storeState.currentItem?.id !== item.id) return
+      sponsorSegmentsAll = segments
+      applySponsorSegmentsForCid()
+      emitStore()
+    })
+    .catch(() => {})
+})
+
 export async function openVideo(item: UnifiedVideoItem, options: OpenVideoOptions = {}): Promise<void> {
   const requestId: number = ++openRequestSeq
   const ctrl: VideoPlaybackController = getPlayerController()
@@ -669,6 +720,7 @@ export async function openVideo(item: UnifiedVideoItem, options: OpenVideoOption
 
   lastSkippedSegmentUuid = ""
   dismissedSegmentUuid = ""
+  sponsorSegmentsAll = []
   progressState = {
     position: Math.max(0, options.startSeconds ?? 0),
     duration: item.duration || 0,
@@ -707,6 +759,7 @@ export async function openVideo(item: UnifiedVideoItem, options: OpenVideoOption
     queueIndex: idx,
     settings,
   }
+  sponsorConfig = sponsorConfigSignature(settings)
   emitStore()
 
   if (item.provider === "yt" && item.isLive) {
@@ -747,6 +800,7 @@ export async function openVideo(item: UnifiedVideoItem, options: OpenVideoOption
       }
       if (resolvedCid && !storeState.activeCid) {
         storeState.activeCid = resolvedCid
+        applySponsorSegmentsForCid()
       }
       if (detail.duration > 0 && progressState.duration <= 0) {
         progressState.duration = detail.duration
@@ -779,7 +833,8 @@ export async function openVideo(item: UnifiedVideoItem, options: OpenVideoOption
     void fetchSponsorSegments(item.provider, item.rawId, settings.sponsorBlockCategories)
       .then((segments: SponsorSegment[]) => {
         if (requestId !== openRequestSeq) return
-        storeState.sponsorSegments = segments
+        sponsorSegmentsAll = segments
+        applySponsorSegmentsForCid()
         emitStore()
       })
       .catch(() => {})
@@ -799,6 +854,7 @@ export async function openVideo(item: UnifiedVideoItem, options: OpenVideoOption
     storeState.selectedQualityId = picked.id
     storeState.selectedQualityLabel = picked.label
     storeState.activeCid = activeCid
+    applySponsorSegmentsForCid()
     if (manifest.duration > 0) {
       progressState.duration = manifest.duration
       emitProgress()
@@ -1085,6 +1141,10 @@ export async function selectPage(pagePart: VideoPagePart): Promise<void> {
   const settings: PlayerSettings = storeState.settings
   storeState.activeCid = pagePart.cid
   storeState.activePage = pagePart.page
+  // 新分P 的片段與跳過紀錄都不該沿用上一 P 的。
+  lastSkippedSegmentUuid = ""
+  storeState.activeSponsorPrompt = null
+  applySponsorSegmentsForCid()
   storeState.status = "loading"
   storeState.errorText = null
   progressState = {

@@ -186,6 +186,8 @@ export interface SponsorSegment {
   actionType: "skip" | "mute" | "full" | "poi"
   startTime: number // seconds
   endTime: number // seconds
+  /** bilibili 分P 的 cid；YouTube 沒有這個欄位。 */
+  cid?: number
 }
 
 export interface SubscriptionChannel {
