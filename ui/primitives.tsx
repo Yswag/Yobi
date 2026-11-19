@@ -289,25 +289,27 @@ export function Thumbnail(props: {
       aspectRatio={{ value: 16 / 9, contentMode: "fit" }}
       overlay={
         <ZStack frame={{ maxWidth: "infinity", maxHeight: "infinity" }}>
-          {image ? (
-            <Image
-              imageUrl={image}
-              resizable
-              scaleToFill
-              frame={{ maxWidth: "infinity", maxHeight: "infinity" }}
-            />
-          ) : (
-            <Image
-              systemName="play.rectangle.fill"
-              font={compact ? 22 : 34}
-              foregroundStyle="tertiaryLabel"
-            />
-          )}
+          {/* 圖片掛在標籤層的 background：不是 16:9 的縮圖（例如 4:3 的 hqdefault）填滿後會比卡片高，
+              跟標籤層當兄弟會把它撐高，上緣的來源標籤與下緣的進度條就被裁掉。 */}
           <VStack
             spacing={0}
             frame={{ maxWidth: "infinity", maxHeight: "infinity" }}
             padding={inset}
             allowsHitTesting={false}
+            background={image ? (
+              <Image
+                imageUrl={image}
+                resizable
+                scaleToFill
+                frame={{ maxWidth: "infinity", maxHeight: "infinity" }}
+              />
+            ) : (
+              <Image
+                systemName="play.rectangle.fill"
+                font={compact ? 22 : 34}
+                foregroundStyle="tertiaryLabel"
+              />
+            )}
           >
             <HStack spacing={4} frame={{ maxWidth: "infinity" }}>
               {props.provider ? <ProviderTag provider={props.provider} /> : null}

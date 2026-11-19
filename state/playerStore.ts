@@ -611,7 +611,8 @@ function enrichItem(item: UnifiedVideoItem, detail: VideoDetail): UnifiedVideoIt
   const merged: UnifiedVideoItem = {
     ...item,
     title: detail.title || item.title,
-    thumbnailUrl: detail.thumbnailUrl || item.thumbnailUrl,
+    // 列表帶來的縮圖是 16:9；YouTube 詳情的是帶黑邊的 4:3，只在本來沒有時補。
+    thumbnailUrl: item.thumbnailUrl || detail.thumbnailUrl,
     duration: detail.duration || item.duration,
     authorId: detail.authorId || item.authorId,
     authorName: detail.authorName || item.authorName,
