@@ -1096,6 +1096,36 @@ export interface SabrManifestBuilderInput {
   audio: SabrFormat
 }
 
+/**
+ * 拿掉 init 裡的 sidx。播放器的 ffmpeg 5.0.1 讀到太大的 sidx 會解析錯位，
+ * 直接以 AVERROR_PATCHWELCOME 拒開；HLS 的分段時間軸本來就看本地清單，不需要它。
+ */
+function stripSidxBoxes(bytes: Uint8Array | null): Uint8Array | null {
+  if (!bytes) return bytes
+  const readSize = (offset: number): number =>
+    ((bytes[offset] << 24) | (bytes[offset + 1] << 16) | (bytes[offset + 2] << 8) | bytes[offset + 3]) >>> 0
+  const parts: Uint8Array[] = []
+  let offset: number = 0
+  let stripped: boolean = false
+  while (offset + 8 <= bytes.length) {
+    let size: number = readSize(offset)
+    const type: string = String.fromCharCode(bytes[offset + 4], bytes[offset + 5], bytes[offset + 6], bytes[offset + 7])
+    if (size === 1) size = readSize(offset + 8)
+    if (size < 8) break
+    if (type === "sidx") stripped = true
+    else parts.push(bytes.subarray(offset, offset + size))
+    offset += size
+  }
+  if (!stripped) return bytes
+  const out: Uint8Array = new Uint8Array(parts.reduce((sum: number, part: Uint8Array): number => sum + part.length, 0))
+  let cursor: number = 0
+  for (const part of parts) {
+    out.set(part, cursor)
+    cursor += part.length
+  }
+  return out
+}
+
 export function buildHlsMasterPlaylist(input: SabrManifestBuilderInput): string {
   const { sessionId, video, audio } = input
   const bandwidth: number = Math.max(1, video.bitrate + audio.bitrate)
@@ -1276,7 +1306,8 @@ export function createSabrQualitySession(
       await Promise.all([session.prepareTimeline(video.itag), session.prepareTimeline(audio.itag)])
       return buildDashManifest(input)
     },
-    initializationSegment: (itag: number): Promise<Uint8Array | null> => session.fetchInitialization(itag),
+    initializationSegment: async (itag: number): Promise<Uint8Array | null> =>
+      stripSidxBoxes(await session.fetchInitialization(itag)),
     mediaSegment: (itag: number, sequence: number): Promise<Uint8Array | null> => prefetcherFor(itag).get(sequence),
     contentType: (itag: number): string => {
       const format: SabrFormat | undefined = session.formatByItag(itag)
