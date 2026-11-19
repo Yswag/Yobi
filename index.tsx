@@ -99,8 +99,12 @@ function YobiRootView(): VirtualNode {
   )
 }
 
+// 冷啟動就把 WKWebView 拉起來會把主執行緒吃滿，首頁那幾秒連點擊都送不進來；
+// 等第一幀站穩再預熱，PO token 只有播放時才要用。
+const WARM_DELAY_MS: number = 2000
+
 async function run(): Promise<void> {
-  warmYoutubePageMinter()
+  const warmTimer: number = setTimeout(warmYoutubePageMinter, WARM_DELAY_MS)
   try {
     await Navigation.present({
       element: <YobiRootView />,
@@ -108,6 +112,7 @@ async function run(): Promise<void> {
       swipeBackBehavior: "disabled",
     })
   } finally {
+    clearTimeout(warmTimer)
     await closePlayer()
     stopLocalProxy()
     disposeYoutubePageMinter()
