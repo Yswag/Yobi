@@ -41,8 +41,7 @@ const MORPH_SECONDS: number = 0.38
 // Layers that belong to only one end of the morph leave right away and arrive in its last stretch,
 // so nothing is half-visible while the card is still changing shape.
 const FADE_OUT_SECONDS: number = 0.12
-// smooth 曲線在 0.26 秒時卡片約走完 95%，這之後才淡入，看起來就不會跟著卡片滑。
-const FADE_IN_SECONDS: number = 0.12
+const FADE_IN_SECONDS: number = 0.2
 // 手勢掛在會移動的卡片上，位移一定要對一個「靜止」的座標空間量，不然誤差會隨卡片下移累積。
 const PLAYER_DRAG_SPACE: string = "playerRoot"
 // 卡片上緣跟著手指 1:1 走，所以「拖到迷你播放器位置」剛好就是收完；放開時走過這個比例才收。
@@ -223,7 +222,7 @@ export function PlayerHost(props: {
   const watchOpacity: number = isExpanded ? clamp01(1 - morph / 0.3) : 0
   const controlsOpacity: number = 1 - clamp01(morph / 0.3)
   const surfaceOpacity: number = 1 - clamp01((morph - 0.35) / 0.65)
-  const miniBarOpacity: number = clamp01((morph - 0.7) / 0.3)
+  const miniBarOpacity: number = clamp01((morph - 0.5) / 0.5)
   // 跟手拖曳時這個元件每幀重繪；播放頁自己接 store，不必跟著重建。
   const watchNode: VirtualNode = useMemo(
     () => (
@@ -293,12 +292,16 @@ export function PlayerHost(props: {
             glassEffect={{ glass: UIGlass.regular(), shape: { type: "rect", cornerRadius: geometry.radius } }}
             opacity={morph}
           />
-          <Rectangle
-            fill={surfaceColor}
-            frame={{ width: geometry.width, height: geometry.height }}
-            opacity={surfaceOpacity}
-            animation={{ animation: isMini ? fadeInLate : fadeOut, value: isMini }}
-          />
+          {/* 帶自己 animation 的層會把裡面的幾何變化也換成那個動畫（含延遲），所以淡入淡出層只放固定尺寸的內容，
+              會變的 frame 留在外層跟著卡片走。底色在卡片移動時都要在：展開馬上出現、收合快到位才退。 */}
+          <ZStack alignment="topLeading" frame={{ width: geometry.width, height: geometry.height, alignment: "topLeading" }}>
+            <Rectangle
+              fill={surfaceColor}
+              frame={{ width: expanded.width, height: expanded.height }}
+              opacity={surfaceOpacity}
+              animation={{ animation: isMini ? fadeInLate : fadeOut, value: isMini }}
+            />
+          </ZStack>
           <VStack spacing={0} alignment="leading" frame={{ width: geometry.width, height: geometry.height, alignment: "top" }}>
             <Rectangle fill="black" frame={{ width: geometry.width, height: geometry.topInset }} />
             <HStack
@@ -353,33 +356,42 @@ export function PlayerHost(props: {
                 )}
               </ZStack>
               <ZStack
-                alignment="leading"
-                frame={{ width: Math.max(0, geometry.width - geometry.videoWidth - geometry.videoInset), height: geometry.rowHeight, alignment: "leading" }}
-                opacity={miniBarOpacity}
-                animation={{ animation: isMini ? fadeInLate : fadeOut, value: isMini }}
+                alignment="topLeading"
+                frame={{ width: Math.max(0, geometry.width - geometry.videoWidth - geometry.videoInset), height: geometry.rowHeight, alignment: "topLeading" }}
                 allowsHitTesting={isMini}
                 clipped
+                // SwiftUI 把位置變化推到最底下會畫東西的層才套動畫，內層就會吃到自己的延遲淡入、晚一步滑進來；
+                // geometryGroup 讓位置在這層用卡片的動畫解完，內層只剩固定座標。
+                geometryGroup
               >
-                {/* 展開時不掛：迷你列會跟著 progress 重畫，沒顯示就別讓它存在。 */}
-                {morph > 0 ? (
-                  <ZStack frame={{ width: miniBarWidth, height: MINI_HEIGHT }}>
+                <ZStack
+                  frame={{ width: miniBarWidth, height: MINI_HEIGHT }}
+                  opacity={miniBarOpacity}
+                  animation={{ animation: isMini ? fadeInLate : fadeOut, value: isMini }}
+                >
+                  {/* 展開時不掛：迷你列會跟著 progress 重畫，沒顯示就別讓它存在。 */}
+                  {morph > 0 ? (
                     <MiniPlayerBar
                       item={item}
                       height={MINI_HEIGHT}
                       trailingInset={MINI_RADIUS - MINI_BUTTON_SIZE / 2}
                     />
-                  </ZStack>
-                ) : null}
+                  ) : null}
+                </ZStack>
               </ZStack>
             </HStack>
             {fullscreen ? null : (
               <ZStack
+                alignment="topLeading"
                 frame={{ width: geometry.width, maxHeight: "infinity", alignment: "topLeading" }}
-                opacity={watchOpacity}
-                animation={{ animation: isExpanded ? fadeInLate : fadeOut, value: isExpanded }}
                 allowsHitTesting={isExpanded}
+                geometryGroup
               >
-                <ZStack frame={{ width: expanded.width, height: watchHeight, alignment: "top" }}>
+                <ZStack
+                  frame={{ width: expanded.width, height: watchHeight, alignment: "top" }}
+                  opacity={watchOpacity}
+                  animation={{ animation: isExpanded ? fadeInLate : fadeOut, value: isExpanded }}
+                >
                   {watchNode}
                 </ZStack>
               </ZStack>
