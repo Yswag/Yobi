@@ -265,6 +265,7 @@ export function Thumbnail(props: {
   duration?: number
   durationText?: string
   isLive?: boolean
+  membersOnly?: boolean
   progress?: number
   onTap?: () => void
 }): VirtualNode {
@@ -308,8 +309,18 @@ export function Thumbnail(props: {
             padding={inset}
             allowsHitTesting={false}
           >
-            <HStack spacing={0} frame={{ maxWidth: "infinity" }}>
+            <HStack spacing={4} frame={{ maxWidth: "infinity" }}>
               {props.provider ? <ProviderTag provider={props.provider} /> : null}
+              {props.membersOnly ? (
+                <HStack
+                  spacing={3}
+                  padding={{ horizontal: 6, vertical: 3 }}
+                  background={{ style: palette.scrim, shape: "capsule" }}
+                >
+                  <Image systemName="star.fill" font={8} foregroundStyle={palette.member} />
+                  <Text font={9} fontWeight="heavy" foregroundStyle={palette.onMedia}>會員</Text>
+                </HStack>
+              ) : null}
               <Spacer />
             </HStack>
             <Spacer />

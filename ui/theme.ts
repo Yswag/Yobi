@@ -8,6 +8,7 @@ export const palette = {
   bili: "rgba(251,114,153,1)" as Color,
   success: "rgba(48,209,88,1)" as Color,
   danger: "rgba(255,59,48,1)" as Color,
+  member: "rgba(255,196,0,1)" as Color,
   dangerSoft: "rgba(255,59,48,0.14)" as Color,
   scrim: "rgba(0,0,0,0.62)" as Color,
   onMedia: "rgba(255,255,255,1)" as Color,

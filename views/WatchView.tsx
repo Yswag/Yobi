@@ -234,12 +234,13 @@ export function WatchView(props: WatchViewProps): VirtualNode {
   const deliveryTag: string | null = store.manifest ? store.manifest.delivery.toUpperCase() : null
 
   const headlineParts: string[] = []
-  // 直播沒有累計觀看數，人數走 LiveViewerLabel。
-  if (!item.isLive) headlineParts.push(`${formatCount(item.viewCount)} 次觀看`)
+  // 直播沒有累計觀看數，人數走 LiveViewerLabel；會員專屬影片也不給觀看數。
+  if (!item.isLive && item.viewCount !== undefined) headlineParts.push(`${formatCount(item.viewCount)} 次觀看`)
   if (item.publishedText) headlineParts.push(item.publishedText)
   const statParts: string[] = []
   if (item.likeCount !== undefined) statParts.push(`${formatCount(item.likeCount)} 個讚`)
   if (item.provider === "bili" && item.danmakuCount !== undefined) statParts.push(`${formatCount(item.danmakuCount)} 則彈幕`)
+  if (item.membersOnly) statParts.push("會員專屬")
   if (deliveryTag) statParts.push(deliveryTag)
 
   const handleWatchLater = (): void => {

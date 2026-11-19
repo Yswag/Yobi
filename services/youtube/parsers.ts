@@ -209,6 +209,12 @@ function commandRunBrowseId(node: unknown): string {
   return runNavigationBrowseId(node)
 }
 
+/** 「頻道會員專屬」：lockup 用 `badgeViewModel`，`videoRenderer` 用 `metadataBadgeRenderer`。 */
+function isMembersBadge(style: string, label: string): boolean {
+  if (style.toUpperCase().includes("MEMBERS")) return true
+  return /members only|會員|会员/i.test(label)
+}
+
 function isLiveRenderer(renderer: JsonObject, lengthText: string): boolean {
   const badges: unknown[] = asArray(renderer["badges"])
   for (const badge of badges) {
@@ -271,7 +277,11 @@ function fromVideoRenderer(renderer: JsonObject): UnifiedVideoItem | null {
     readThumbnailUrl(asObject(asObject(renderer["channelThumbnailSupportedRenderers"])?.["channelThumbnailWithLinkRenderer"])?.["thumbnail"]) ||
     readThumbnailUrl(asObject(renderer["channelThumbnail"])?.["thumbnails"] ? renderer["channelThumbnail"] : null)
   const isLive: boolean = isLiveRenderer(renderer, lengthText) || viewText.toLowerCase().includes("watching")
-  return baseItem(
+  const membersOnly: boolean = asArray(renderer["badges"]).some((badge: unknown): boolean => {
+    const meta: JsonObject | null = asObject(asObject(badge)?.["metadataBadgeRenderer"])
+    return meta !== null && isMembersBadge(String(meta["style"] ?? ""), readText(meta["label"]))
+  })
+  const item: UnifiedVideoItem = baseItem(
     "yt",
     rawId,
     title,
@@ -284,6 +294,8 @@ function fromVideoRenderer(renderer: JsonObject): UnifiedVideoItem | null {
     publishedText,
     isLive,
   )
+  if (membersOnly) item.membersOnly = true
+  return item
 }
 
 function collectStrings(node: unknown, out: string[], depth: number = 0, maxDepth: number = 6): void {
@@ -325,7 +337,14 @@ function fromLockupViewModel(renderer: JsonObject): UnifiedVideoItem | null {
   // Each row joins several facts ("8.5K views · 2 weeks ago"), so classify part by part.
   const parts: string[] = []
   const partNodes: unknown[] = []
+  let membersOnly: boolean = false
   for (const row of rows) {
+    for (const badge of asArray(asObject(row)?.["badges"])) {
+      const model: JsonObject | null = asObject(asObject(badge)?.["badgeViewModel"])
+      if (model && isMembersBadge(String(model["badgeStyle"] ?? ""), readText(model["badgeText"]))) {
+        membersOnly = true
+      }
+    }
     for (const part of asArray(asObject(row)?.["metadataParts"])) {
       const text: string = readText(asObject(part)?.["text"]).trim()
       if (text) {
@@ -372,7 +391,7 @@ function fromLockupViewModel(renderer: JsonObject): UnifiedVideoItem | null {
     }
   }
 
-  return baseItem(
+  const item: UnifiedVideoItem = baseItem(
     "yt",
     rawId,
     title,
@@ -385,6 +404,8 @@ function fromLockupViewModel(renderer: JsonObject): UnifiedVideoItem | null {
     publishedText,
     liveBadge || watching,
   )
+  if (membersOnly) item.membersOnly = true
+  return item
 }
 
 function fromRenderer(renderer: JsonObject): UnifiedVideoItem | null {
@@ -967,6 +988,32 @@ export function parseLiveViewerCount(next: JsonObject | null): number | undefine
   return viewers
 }
 
+/** 觀看頁的發佈時間：優先用相對時間（`15 小時前`），沒有才退回 `dateText`。 */
+function parsePrimaryDateText(next: JsonObject): string {
+  const results: JsonObject | null = asObject(
+    asObject(asObject(asObject(next["contents"])?.["twoColumnWatchNextResults"])?.["results"])?.["results"],
+  )
+  for (const entry of asArray(results?.["contents"])) {
+    const primary: JsonObject | null = asObject(asObject(entry)?.["videoPrimaryInfoRenderer"])
+    if (!primary) continue
+    return readText(primary["relativeDateText"]) || readText(primary["dateText"])
+  }
+  return ""
+}
+
+/** `2026-11-18T21:09:49-08:00` 這種原字串不能直接上畫面。 */
+function formatPublishDate(iso: string): string {
+  if (!iso) return ""
+  const at: number = Date.parse(iso)
+  if (!Number.isFinite(at)) return iso
+  const diff: number = Math.floor((Date.now() - at) / 1000)
+  if (diff < 60) return "剛剛"
+  if (diff < 3600) return `${Math.floor(diff / 60)} 分鐘前`
+  if (diff < 86400) return `${Math.floor(diff / 3600)} 小時前`
+  if (diff < 86400 * 30) return `${Math.floor(diff / 86400)} 天前`
+  return iso.slice(0, 10)
+}
+
 /** 解析 player + next 成 VideoDetail。 */
 export function parseVideoDetail(videoId: string, player: JsonObject, next: JsonObject | null): VideoDetail {
   const details: JsonObject = asObject(player["videoDetails"]) ?? {}
@@ -980,7 +1027,8 @@ export function parseVideoDetail(videoId: string, player: JsonObject, next: Json
   const channelId: string = String(details["channelId"] ?? "")
   const thumbnailUrl: string = readThumbnailUrl(asObject(details["thumbnail"]) ?? microformat["thumbnail"])
   const keywords: unknown[] = asArray(details["keywords"])
-  const publishedText: string = String(microformat["publishDate"] ?? "")
+  const publishDate: string = String(microformat["publishDate"] ?? "")
+  const publishedText: string = (next ? parsePrimaryDateText(next) : "") || formatPublishDate(publishDate)
 
   const item: VideoDetail = {
     id: `yt:${videoId}`,
@@ -991,7 +1039,7 @@ export function parseVideoDetail(videoId: string, player: JsonObject, next: Json
     duration,
     viewCount,
     publishedText,
-    publishedAt: publishedText ? Date.parse(publishedText) || undefined : undefined,
+    publishedAt: publishDate ? Date.parse(publishDate) || undefined : undefined,
     authorId: channelId,
     authorName: author,
     isLive: Boolean(details["isLive"]) || liveViewers !== undefined,

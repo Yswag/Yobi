@@ -18,6 +18,8 @@ export interface UnifiedVideoItem {
   authorName: string
   authorAvatar?: string
   isLive?: boolean
+  /** YouTube 的頻道會員專屬影片：不提供觀看數，卡片要另外標示。 */
+  membersOnly?: boolean
   cid?: number // BiliBili active cid
   aid?: number // BiliBili aid
 }

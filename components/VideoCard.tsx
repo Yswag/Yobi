@@ -110,7 +110,8 @@ function metaText(item: UnifiedVideoItem): string {
   // 直播沒有累計觀看數，只有當下線上人數；拿不到就不寫，別顯示 0。
   if (item.isLive) {
     if ((item.viewCount ?? 0) > 0) parts.push(`${formatCount(item.viewCount)} 人正在觀看`)
-  } else {
+  } else if (item.viewCount !== undefined) {
+    // 頻道會員專屬的影片 YouTube 不提供觀看數，拿不到就不要寫成 0。
     parts.push(`${formatCount(item.viewCount)} 次觀看`)
   }
   if (item.publishedText) parts.push(item.publishedText)
@@ -145,6 +146,7 @@ function RowCard(props: VideoCardProps): VirtualNode {
         provider={item.provider}
         duration={item.duration}
         isLive={item.isLive}
+        membersOnly={item.membersOnly}
         progress={watchedRatio(item, props.progressSeconds)}
       />
 
@@ -185,6 +187,7 @@ function GridCard(props: VideoCardProps): VirtualNode {
         provider={item.provider}
         duration={item.duration}
         isLive={item.isLive}
+        membersOnly={item.membersOnly}
         progress={watchedRatio(item, props.progressSeconds)}
         onTap={select}
       />
