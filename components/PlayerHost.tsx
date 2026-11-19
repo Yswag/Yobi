@@ -1,6 +1,7 @@
 import {
   HStack,
   Rectangle,
+  RoundedRectangle,
   VideoPlaybackView,
   VStack,
   ZStack,
@@ -40,7 +41,8 @@ const MORPH_SECONDS: number = 0.38
 // Layers that belong to only one end of the morph leave right away and arrive in its last stretch,
 // so nothing is half-visible while the card is still changing shape.
 const FADE_OUT_SECONDS: number = 0.12
-const FADE_IN_SECONDS: number = 0.2
+// smooth 曲線在 0.26 秒時卡片約走完 95%，這之後才淡入，看起來就不會跟著卡片滑。
+const FADE_IN_SECONDS: number = 0.12
 // 手勢掛在會移動的卡片上，位移一定要對一個「靜止」的座標空間量，不然誤差會隨卡片下移累積。
 const PLAYER_DRAG_SPACE: string = "playerRoot"
 // 卡片上緣跟著手指 1:1 走，所以「拖到迷你播放器位置」剛好就是收完；放開時走過這個比例才收。
@@ -204,6 +206,10 @@ export function PlayerHost(props: {
 
   const isExpanded: boolean = mode === "expanded"
   const isMini: boolean = mode === "mini"
+  // 播放頁永遠照展開時的尺寸排版，收合只靠卡片裁切；尺寸一變，裡面的 GeometryReader 與分頁 TabView 會逐幀重排。
+  const watchHeight: number = Math.max(0, expanded.height - expanded.topInset - expanded.rowHeight)
+  // 迷你列同理：照收好時的寬度排版，外框從 0 長開時內容才不會被拉開、滑進來。
+  const miniBarWidth: number = mini.width - mini.videoWidth - mini.videoInset
   // 插值用的路程：卡片從展開位置走到迷你播放器要走多遠。
   const dragTravel: number = Math.max(1, mini.y - expanded.y)
   dragTravelRef.current = dragTravel
@@ -217,7 +223,7 @@ export function PlayerHost(props: {
   const watchOpacity: number = isExpanded ? clamp01(1 - morph / 0.3) : 0
   const controlsOpacity: number = 1 - clamp01(morph / 0.3)
   const surfaceOpacity: number = 1 - clamp01((morph - 0.35) / 0.65)
-  const miniBarOpacity: number = clamp01((morph - 0.5) / 0.5)
+  const miniBarOpacity: number = clamp01((morph - 0.7) / 0.3)
   // 跟手拖曳時這個元件每幀重繪；播放頁自己接 store，不必跟著重建。
   const watchNode: VirtualNode = useMemo(
     () => (
@@ -250,11 +256,6 @@ export function PlayerHost(props: {
         offset={{ x: geometry.x, y: geometry.y }}
         opacity={mode === "hidden" && restsMini ? 0 : 1}
         allowsHitTesting={mode !== "hidden"}
-        shadow={{
-          color: morph > 0 ? "rgba(0,0,0,0.25)" : "rgba(0,0,0,0)",
-          radius: 16 * morph,
-          y: 6 * morph,
-        }}
         // 拖曳途中值不變，所以幾何直接貼著手指；放開後才用動畫收尾。
         animation={{
           animation: Animation.smooth({ duration: MORPH_SECONDS }),
@@ -266,6 +267,21 @@ export function PlayerHost(props: {
           content: <QualitySheet onDone={() => setShowQualitySheet(false)} />,
         }}
       >
+        {/* 陰影只由這個形狀投出、內部挖空：掛在整張卡片上會連影片與播放頁一起離屏重畫，實心底則會被玻璃取樣。 */}
+        <ZStack
+          frame={{ width: geometry.width, height: geometry.height }}
+          opacity={morph}
+          compositingGroup
+          allowsHitTesting={false}
+        >
+          <RoundedRectangle
+            cornerRadius={geometry.radius}
+            style="continuous"
+            fill="black"
+            shadow={{ color: "rgba(0,0,0,0.25)", radius: 16, y: 6 }}
+          />
+          <RoundedRectangle cornerRadius={geometry.radius} style="continuous" fill="black" blendMode="destinationOut" />
+        </ZStack>
         <ZStack
           alignment="top"
           frame={{ width: geometry.width, height: geometry.height, alignment: "top" }}
@@ -337,7 +353,8 @@ export function PlayerHost(props: {
                 )}
               </ZStack>
               <ZStack
-                frame={{ width: Math.max(0, geometry.width - geometry.videoWidth - geometry.videoInset), height: geometry.rowHeight }}
+                alignment="leading"
+                frame={{ width: Math.max(0, geometry.width - geometry.videoWidth - geometry.videoInset), height: geometry.rowHeight, alignment: "leading" }}
                 opacity={miniBarOpacity}
                 animation={{ animation: isMini ? fadeInLate : fadeOut, value: isMini }}
                 allowsHitTesting={isMini}
@@ -345,22 +362,26 @@ export function PlayerHost(props: {
               >
                 {/* 展開時不掛：迷你列會跟著 progress 重畫，沒顯示就別讓它存在。 */}
                 {morph > 0 ? (
-                  <MiniPlayerBar
-                    item={item}
-                    height={MINI_HEIGHT}
-                    trailingInset={MINI_RADIUS - MINI_BUTTON_SIZE / 2}
-                  />
+                  <ZStack frame={{ width: miniBarWidth, height: MINI_HEIGHT }}>
+                    <MiniPlayerBar
+                      item={item}
+                      height={MINI_HEIGHT}
+                      trailingInset={MINI_RADIUS - MINI_BUTTON_SIZE / 2}
+                    />
+                  </ZStack>
                 ) : null}
               </ZStack>
             </HStack>
             {fullscreen ? null : (
               <ZStack
-                frame={{ width: geometry.width, maxHeight: "infinity", alignment: "top" }}
+                frame={{ width: geometry.width, maxHeight: "infinity", alignment: "topLeading" }}
                 opacity={watchOpacity}
                 animation={{ animation: isExpanded ? fadeInLate : fadeOut, value: isExpanded }}
                 allowsHitTesting={isExpanded}
               >
-                {watchNode}
+                <ZStack frame={{ width: expanded.width, height: watchHeight, alignment: "top" }}>
+                  {watchNode}
+                </ZStack>
               </ZStack>
             )}
           </VStack>
