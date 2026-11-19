@@ -1183,6 +1183,7 @@ async function fetchChannelVideos(
   mid: string,
   page: number,
   order: string,
+  keyword: string = "",
 ): Promise<{ videos: UnifiedVideoItem[]; total: number }> {
   const attempts: Array<() => Promise<any>> = [
     () =>
@@ -1193,6 +1194,7 @@ async function fetchChannelVideos(
           ps: 30,
           pn: page,
           order,
+          ...(keyword ? { keyword } : {}),
           platform: "web",
           web_location: 1550101,
         },
@@ -1204,6 +1206,7 @@ async function fetchChannelVideos(
         ps: 30,
         pn: page,
         order,
+        ...(keyword ? { keyword } : {}),
       }),
   ]
 
@@ -1221,6 +1224,17 @@ async function fetchChannelVideos(
     }
   }
   return { videos: [], total: 0 }
+}
+
+/** UP 主投稿裡搜關鍵字；cursor 是頁碼。 */
+export async function searchBiliChannelVideos(
+  mid: string,
+  keyword: string,
+  cursor: string | undefined,
+): Promise<{ videos: UnifiedVideoItem[]; nextPageToken?: string }> {
+  const page: number = Number.parseInt(cursor ?? "1", 10) || 1
+  const result = await fetchChannelVideos(String(mid).trim(), page, "pubdate", keyword)
+  return result.videos.length >= 30 ? { videos: result.videos, nextPageToken: String(page + 1) } : { videos: result.videos }
 }
 
 export async function getBiliChannel(

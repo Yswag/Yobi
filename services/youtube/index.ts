@@ -475,6 +475,21 @@ export async function getYoutubeChannelVideos(
   return page.next ? { videos: page.videos, nextPageToken: page.next } : { videos: page.videos }
 }
 
+// 頻道的「搜尋」分頁；關鍵字放在 browse 的 query。
+const CHANNEL_SEARCH_PARAMS: string = "EgZzZWFyY2jyBgQKAloA"
+
+/** 頻道內搜尋；續頁跟頻道影片一樣走 browse continuation。 */
+export async function searchYoutubeChannelVideos(
+  channelId: string,
+  query: string,
+  cursor: string | undefined,
+): Promise<{ videos: UnifiedVideoItem[]; nextPageToken?: string }> {
+  if (cursor) return getYoutubeChannelPage(cursor)
+  const response: JsonObject = await fetchBrowseResponse(channelId, CHANNEL_SEARCH_PARAMS, query)
+  const page = parseChannelVideosPage(response)
+  return page.next ? { videos: page.videos, nextPageToken: page.next } : { videos: page.videos }
+}
+
 interface SabrPlayerInfo {
   clientKey: InnertubeClientKey
   serverAbrStreamingUrl: string

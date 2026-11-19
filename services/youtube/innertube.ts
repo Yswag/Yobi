@@ -349,10 +349,11 @@ export async function fetchSearchResponse(query: string, params?: string): Promi
   return innertubePost("search", payload, { client: "WEB" })
 }
 
-/** browse（首頁、頻道）。 */
-export async function fetchBrowseResponse(browseId: string, params?: string): Promise<JsonObject> {
+/** browse（首頁、頻道）；`query` 只給頻道內搜尋用。 */
+export async function fetchBrowseResponse(browseId: string, params?: string, query?: string): Promise<JsonObject> {
   const payload: JsonObject = { browseId }
   if (params) payload["params"] = params
+  if (query) payload["query"] = query
   return innertubePost("browse", payload, { client: "WEB" })
 }
 

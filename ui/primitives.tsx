@@ -142,7 +142,14 @@ export function PillButton(props: {
   )
 }
 
-export function SearchField(props: { value: string; prompt: string; onChange: (value: string) => void }): VirtualNode {
+export function SearchField(props: {
+  value: string
+  prompt: string
+  onChange: (value: string) => void
+  /** 按鍵盤的「搜尋」。不給就是邊打邊篩。 */
+  onCommit?: () => void
+}): VirtualNode {
+  const onCommit: (() => void) | undefined = props.onCommit
   return (
     <HStack
       spacing={8}
@@ -158,6 +165,8 @@ export function SearchField(props: { value: string; prompt: string; onChange: (v
         prompt={props.prompt}
         font={15}
         frame={{ maxWidth: "infinity" }}
+        submitLabel={onCommit ? "search" : undefined}
+        onSubmit={onCommit}
       />
       {props.value.length > 0 ? (
         <HStack spacing={0} contentShape="rect" onTapGesture={() => props.onChange("")}>

@@ -25,6 +25,8 @@ const VIDEO_RENDERER_KEYS: string[] = [
   "lockupViewModel",
   "playlistVideoRenderer",
   "videoWithContextRenderer",
+  // 登入後的頻道內搜尋：沒有縮圖與時長。
+  "channelVideoPlayerRenderer",
 ]
 
 function asObject(value: unknown): JsonObject | null {
@@ -285,7 +287,8 @@ function fromVideoRenderer(renderer: JsonObject): UnifiedVideoItem | null {
     "yt",
     rawId,
     title,
-    readThumbnailUrl(renderer["thumbnail"]),
+    // mqdefault 是 16:9 且每部影片都有，hqdefault 是帶黑邊的 4:3。
+    readThumbnailUrl(renderer["thumbnail"]) || `https://i.ytimg.com/vi/${rawId}/mqdefault.jpg`,
     parseDurationText(lengthText),
     parseViewCountText(viewText),
     authorId,

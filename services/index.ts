@@ -26,8 +26,9 @@ import {
   getYoutubeVideoDetail,
   parseYoutubeInput,
   resolveYoutubeStream,
+  searchYoutubeChannelVideos,
   searchYoutubeVideos,
-} from "./youtube"
+} from "./youtube/index"
 import {
   getBiliChannel,
   getBiliCommentPage,
@@ -37,6 +38,7 @@ import {
   getBiliVideoDetail,
   parseBiliInput,
   resolveBiliStream,
+  searchBiliChannelVideos,
   searchBiliVideos,
 } from "./bilibili/index"
 
@@ -222,4 +224,15 @@ export async function getChannelVideos(
       : { videos: detail.videos }
   }
   return getYoutubeChannelVideos(rawId, cursor, sort)
+}
+
+/** 頻道內搜尋；cursor 沒有就是第一頁。 */
+export async function searchChannelVideos(
+  provider: Provider,
+  rawId: string,
+  query: string,
+  cursor: string | undefined,
+): Promise<ChannelVideoPage> {
+  if (provider === "bili") return searchBiliChannelVideos(rawId, query, cursor)
+  return searchYoutubeChannelVideos(rawId, query, cursor)
 }

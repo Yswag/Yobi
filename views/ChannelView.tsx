@@ -21,9 +21,10 @@ import {
   getChannelVideos,
   getSavedPosition,
   isSubscribed,
+  searchChannelVideos,
   subscribeStorageChanges,
   toggleSubscription,
-} from "../services"
+} from "../services/index"
 import { providerFullName } from "../utils/format"
 import { openVideo } from "../state/playerStore"
 import type { ChipOption } from "../ui/primitives"
@@ -89,6 +90,13 @@ export function ChannelView(props: ChannelViewProps): VirtualNode {
   const [loadingMore, setLoadingMore] = useState<boolean>(false)
   const loadingMoreRef = useRef<boolean>(false)
   const requestSeq = useRef<number>(0)
+  // 頻道內搜尋：送出後才打 API，結果另存，清掉關鍵字就回到原本的影片清單、不必重抓。
+  const [searchedQuery, setSearchedQuery] = useState<string>("")
+  const [results, setResults] = useState<UnifiedVideoItem[]>([])
+  const [resultsToken, setResultsToken] = useState<string | undefined>(undefined)
+  const [resultsLoading, setResultsLoading] = useState<boolean>(false)
+  const [searchError, setSearchError] = useState<string | null>(null)
+  const searchSeq = useRef<number>(0)
 
   const subscriptionId: string = `${props.provider}:${props.channelId}`
 
@@ -123,13 +131,9 @@ export function ChannelView(props: ChannelViewProps): VirtualNode {
 
   const currentName: string = detail?.name || props.initialName || props.channelId
   const currentAvatar: string = detail?.avatarUrl || props.initialAvatar || ""
-  const keyword: string = query.trim().toLowerCase()
-  const filteredVideos: UnifiedVideoItem[] = keyword.length === 0
-    ? videos
-    : videos.filter((video: UnifiedVideoItem): boolean => {
-      const haystack: string = `${video.title} ${video.authorName}`.toLowerCase()
-      return haystack.includes(keyword)
-    })
+  const searching: boolean = searchedQuery.length > 0
+  const shownVideos: UnifiedVideoItem[] = searching ? results : videos
+  const shownToken: string | undefined = searching ? resultsToken : nextToken
 
   // 頻道影片清單本來就不帶作者，用目前頻道的資料補上。
   const patchVideos = (incoming: UnifiedVideoItem[]): UnifiedVideoItem[] =>
@@ -144,11 +148,19 @@ export function ChannelView(props: ChannelViewProps): VirtualNode {
     })
 
   const loadMore = async (): Promise<void> => {
-    if (loadingMoreRef.current || !nextToken) return
+    if (loadingMoreRef.current || !shownToken) return
     loadingMoreRef.current = true
     setLoadingMore(true)
     try {
-      const page = await getChannelVideos(props.provider, props.channelId, nextToken, sortMode)
+      if (searching) {
+        const seq: number = searchSeq.current
+        const page = await searchChannelVideos(props.provider, props.channelId, searchedQuery, shownToken)
+        if (seq !== searchSeq.current) return
+        setResults((previous: UnifiedVideoItem[]): UnifiedVideoItem[] => [...previous, ...patchVideos(page.videos)])
+        setResultsToken(page.nextPageToken)
+        return
+      }
+      const page = await getChannelVideos(props.provider, props.channelId, shownToken, sortMode)
       setVideos((previous: UnifiedVideoItem[]): UnifiedVideoItem[] => [
         ...previous,
         ...patchVideos(page.videos),
@@ -182,6 +194,46 @@ export function ChannelView(props: ChannelViewProps): VirtualNode {
     }
   }
 
+  const clearSearch = (): void => {
+    searchSeq.current++
+    setSearchedQuery("")
+    setResults([])
+    setResultsToken(undefined)
+    setResultsLoading(false)
+    setSearchError(null)
+  }
+
+  const submitSearch = async (): Promise<void> => {
+    const text: string = query.trim()
+    if (!text) {
+      clearSearch()
+      return
+    }
+    if (text === searchedQuery && !resultsLoading && !searchError) return
+    const seq: number = ++searchSeq.current
+    setSearchedQuery(text)
+    setResults([])
+    setResultsToken(undefined)
+    setSearchError(null)
+    setResultsLoading(true)
+    try {
+      const page = await searchChannelVideos(props.provider, props.channelId, text, undefined)
+      if (seq !== searchSeq.current) return
+      setResults(patchVideos(page.videos))
+      setResultsToken(page.nextPageToken)
+    } catch (error: unknown) {
+      if (seq !== searchSeq.current) return
+      setSearchError(error instanceof Error ? error.message : String(error))
+    } finally {
+      if (seq === searchSeq.current) setResultsLoading(false)
+    }
+  }
+
+  const handleQueryChange = (value: string): void => {
+    setQuery(value)
+    if (!value.trim()) clearSearch()
+  }
+
   const handleToggleSubscription = (): void => {
     const next: boolean = toggleSubscription({
       id: subscriptionId,
@@ -195,12 +247,12 @@ export function ChannelView(props: ChannelViewProps): VirtualNode {
   }
 
   const handleSelect = (video: UnifiedVideoItem): void => {
-    void openVideo(video, { queue: filteredVideos })
+    void openVideo(video, { queue: shownVideos })
   }
 
   const handlePlayAll = (): void => {
-    if (filteredVideos.length === 0) return
-    void openVideo(filteredVideos[0], { queue: filteredVideos })
+    if (shownVideos.length === 0) return
+    void openVideo(shownVideos[0], { queue: shownVideos })
   }
 
   const metaParts: string[] = [providerFullName(props.provider)]
@@ -272,7 +324,7 @@ export function ChannelView(props: ChannelViewProps): VirtualNode {
           prominent={!subscribed}
           onTap={handleToggleSubscription}
         />
-        {filteredVideos.length > 0 ? (
+        {shownVideos.length > 0 ? (
           <PillButton label="全部播放" icon="play.fill" prominent={false} onTap={handlePlayAll} />
         ) : null}
       </HStack>
@@ -280,10 +332,16 @@ export function ChannelView(props: ChannelViewProps): VirtualNode {
   )
 
   const filterField: VirtualNode = (
-    <SearchField value={query} prompt="在頻道中搜尋" onChange={setQuery} />
+    <SearchField
+      value={query}
+      prompt="在頻道中搜尋"
+      onChange={handleQueryChange}
+      onCommit={() => void submitSearch()}
+    />
   )
 
-  const footer: VirtualNode | null = nextToken ? (
+  // 清單是空的就不給「載入更多」：上面已經是空狀態，再接一顆按鈕很怪。
+  const footer: VirtualNode | null = shownToken && shownVideos.length > 0 ? (
     <VStack padding={{ vertical: 18 }} frame={{ maxWidth: "infinity" }}>
       {loadingMore ? (
         <ProgressView />
@@ -294,9 +352,19 @@ export function ChannelView(props: ChannelViewProps): VirtualNode {
   ) : null
 
   let listContent: VirtualNode
-  if ((loading && videos.length === 0) || (listLoading && videos.length === 0)) {
+  if (searching ? resultsLoading : (loading || listLoading) && videos.length === 0) {
     listContent = <VideoCardSkeleton layout={layoutMode} />
-  } else if (errorText) {
+  } else if (searching && searchError) {
+    listContent = (
+      <EmptyState
+        icon="exclamationmark.magnifyingglass"
+        title="搜尋失敗"
+        message={searchError}
+        actionLabel="重試"
+        onAction={() => void submitSearch()}
+      />
+    )
+  } else if (errorText && !searching) {
     listContent = (
       <EmptyState
         icon="wifi.exclamationmark"
@@ -306,17 +374,17 @@ export function ChannelView(props: ChannelViewProps): VirtualNode {
         onAction={() => void load()}
       />
     )
-  } else if (filteredVideos.length === 0) {
+  } else if (shownVideos.length === 0) {
     listContent = (
       <EmptyState
-        icon={keyword.length > 0 ? "magnifyingglass" : "tray"}
-        title={keyword.length > 0 ? "沒有符合的影片" : "這個頻道還沒有影片"}
+        icon={searching ? "magnifyingglass" : "tray"}
+        title={searching ? "沒有符合的影片" : "這個頻道還沒有影片"}
       />
     )
   } else {
     listContent = (
       <LazyVStack spacing={layoutMode === "grid" ? space.cardGap : 4} frame={{ maxWidth: "infinity" }}>
-        {filteredVideos.map((video: UnifiedVideoItem) => (
+        {shownVideos.map((video: UnifiedVideoItem) => (
           <VideoCard
             key={video.id}
             item={video}
@@ -355,7 +423,7 @@ export function ChannelView(props: ChannelViewProps): VirtualNode {
         context: ScrollPhaseChangeContext,
       ): void => {
         if (String(next) !== "idle") return
-        if (!nextToken || loadingMoreRef.current) return
+        if (!shownToken || loadingMoreRef.current) return
         const geometry: ScrollGeometry = context.geometry
         const remaining: number =
           geometry.contentSize.height - geometry.contentOffset.y - geometry.containerSize.height
@@ -384,12 +452,20 @@ export function ChannelView(props: ChannelViewProps): VirtualNode {
           <VStack padding={{ horizontal: space.page }} frame={{ maxWidth: "infinity" }}>
             {filterField}
           </VStack>
-          <ChipBar
-            options={props.provider === "yt" ? SORT_OPTIONS_YT : SORT_OPTIONS_BILI}
-            value={sortMode}
-            onChange={(mode: SortMode) => void changeSort(mode)}
-            trailing={<LayoutToggle layout={layoutMode} onChange={setLayoutMode} />}
-          />
+          {/* 搜尋結果由平台排序，排序 chip 對它無效，只留版面切換。 */}
+          {searching ? (
+            <HStack padding={{ horizontal: space.page }} frame={{ maxWidth: "infinity" }}>
+              <Spacer />
+              <LayoutToggle layout={layoutMode} onChange={setLayoutMode} />
+            </HStack>
+          ) : (
+            <ChipBar
+              options={props.provider === "yt" ? SORT_OPTIONS_YT : SORT_OPTIONS_BILI}
+              value={sortMode}
+              onChange={(mode: SortMode) => void changeSort(mode)}
+              trailing={<LayoutToggle layout={layoutMode} onChange={setLayoutMode} />}
+            />
+          )}
         </VStack>
         {listContent}
         {footer}
