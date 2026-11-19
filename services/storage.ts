@@ -43,6 +43,13 @@ export const DEFAULT_SETTINGS: PlayerSettings = {
 const listeners = new Set<() => void>()
 let settingsCache: PlayerSettings | null = null
 
+// 這幾把 key 只有本檔在寫，所以讀過就留在模組裡：Storage.get 是原生呼叫，每次都要反序列化，
+// 首頁每張卡片都會問一次播放位置。寫入一律走下面的 save*，快取同步換掉，不會讀到舊值。
+let subscriptionsCache: SubscriptionChannel[] | null = null
+let historyCache: WatchHistoryEntry[] | null = null
+let positionById: Map<string, number> = new Map()
+let positionByIdCid: Map<string, number> = new Map()
+
 function notify(): void {
   for (const listener of Array.from(listeners)) {
     try {
@@ -113,41 +120,84 @@ export function updateSettings(patch: Partial<PlayerSettings>): PlayerSettings {
 
 // ─── Subscriptions ──────────────────────────────────────────────────────────
 
+/** 唯讀；要改請先複製。 */
+function loadSubscriptions(): SubscriptionChannel[] {
+  if (subscriptionsCache === null) subscriptionsCache = readArray<SubscriptionChannel>(KEYS.subscriptions)
+  return subscriptionsCache
+}
+
+function saveSubscriptions(list: SubscriptionChannel[]): void {
+  writeArray(KEYS.subscriptions, list)
+  subscriptionsCache = list
+}
+
+/** 唯讀；要改請先複製。 */
 export function getSubscriptions(): SubscriptionChannel[] {
-  return readArray<SubscriptionChannel>(KEYS.subscriptions)
+  return loadSubscriptions()
 }
 
 export function isSubscribed(id: string): boolean {
-  return getSubscriptions().some(channel => channel.id === id)
+  return loadSubscriptions().some(channel => channel.id === id)
 }
 
 /** Returns true when the channel is now subscribed. */
 export function toggleSubscription(channel: SubscriptionChannel): boolean {
-  const list = getSubscriptions()
+  const list = loadSubscriptions().slice()
   const index = list.findIndex(entry => entry.id === channel.id)
   if (index >= 0) {
     list.splice(index, 1)
-    writeArray(KEYS.subscriptions, list)
+    saveSubscriptions(list)
     notify()
     return false
   }
   list.unshift({ ...channel, subscribedAt: Date.now() })
-  writeArray(KEYS.subscriptions, list)
+  saveSubscriptions(list)
   notify()
   return true
 }
 
 // ─── Watch history ──────────────────────────────────────────────────────────
 
+// 索引跟快取一起重算：紀錄最多 300 筆，寫入遠比讀取少（讀取是每張卡片每次重繪）。
+function rebuildHistoryCache(entries: WatchHistoryEntry[]): void {
+  const sorted = entries.slice().sort((a, b) => b.watchedAt - a.watchedAt)
+  const byId = new Map<string, number>()
+  const byIdCid = new Map<string, number>()
+  for (const entry of sorted) {
+    // 同 id 只留最新一筆（清單已照時間排好），對齊原本 find 第一個命中的行為。
+    if (!byId.has(entry.item.id)) byId.set(entry.item.id, entry.position)
+    const cid = entry.cid ?? entry.item.cid
+    if (cid !== undefined) {
+      const key = `${entry.item.id}|${cid}`
+      if (!byIdCid.has(key)) byIdCid.set(key, entry.position)
+    }
+  }
+  historyCache = sorted
+  positionById = byId
+  positionByIdCid = byIdCid
+}
+
+/** 唯讀；要改請先複製。 */
+function loadHistory(): WatchHistoryEntry[] {
+  if (historyCache === null) rebuildHistoryCache(readArray<WatchHistoryEntry>(KEYS.history))
+  return historyCache ?? []
+}
+
+function saveHistory(entries: WatchHistoryEntry[]): void {
+  const limited = entries.slice(0, HISTORY_LIMIT)
+  writeArray(KEYS.history, limited)
+  rebuildHistoryCache(limited)
+}
+
+/** 唯讀；要改請先複製。 */
 export function getWatchHistory(): WatchHistoryEntry[] {
-  const list = readArray<WatchHistoryEntry>(KEYS.history)
-  return list.slice().sort((a, b) => b.watchedAt - a.watchedAt)
+  return loadHistory()
 }
 
 export function recordWatchHistory(entry: WatchHistoryEntry): void {
   if (!entry || !entry.item) return
   const cid = entry.cid ?? entry.item.cid
-  const next = getWatchHistory().filter(existing => {
+  const next = loadHistory().filter(existing => {
     const existingCid = existing.cid ?? existing.item.cid
     return !(existing.item.id === entry.item.id && existingCid === cid)
   })
@@ -158,21 +208,18 @@ export function recordWatchHistory(entry: WatchHistoryEntry): void {
     duration: entry.duration || entry.item.duration,
     watchedAt: entry.watchedAt || Date.now(),
   })
-  writeArray(KEYS.history, next.slice(0, HISTORY_LIMIT))
+  saveHistory(next)
   notify()
 }
 
 export function getSavedPosition(id: string, cid?: number): number {
-  const entry = getWatchHistory().find(item => {
-    if (item.item.id !== id) return false
-    if (cid === undefined) return true
-    return (item.cid ?? item.item.cid) === cid
-  })
-  return entry?.position ?? 0
+  loadHistory()
+  if (cid === undefined) return positionById.get(id) ?? 0
+  return positionByIdCid.get(`${id}|${cid}`) ?? 0
 }
 
 export function clearWatchHistory(): void {
-  writeArray(KEYS.history, [])
+  saveHistory([])
   notify()
 }
 
@@ -318,10 +365,10 @@ export function importAllData(jsonText: string): boolean {
       Storage.set(KEYS.settings, next)
     }
     if (Array.isArray(parsed.subscriptions)) {
-      writeArray(KEYS.subscriptions, parsed.subscriptions)
+      saveSubscriptions(parsed.subscriptions)
     }
     if (Array.isArray(parsed.watchHistory)) {
-      writeArray(KEYS.history, parsed.watchHistory.slice(0, HISTORY_LIMIT))
+      saveHistory(parsed.watchHistory)
     }
     if (Array.isArray(parsed.watchLater)) {
       writeArray(KEYS.watchLater, parsed.watchLater)
