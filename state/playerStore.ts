@@ -4,6 +4,7 @@ import type {
   CommentItem,
   CommentPage,
   CommentSort,
+  PlaybackBackend,
   PlayerSettings,
   SponsorSegment,
   StreamManifest,
@@ -168,6 +169,12 @@ let progressState: PlayerProgressSnapshot = {
   duration: 0,
   bufferedUntil: 0,
   activeChapter: null,
+}
+
+/** 一般影片照設定的後端開；直播的串流只有 system 開得起來，維持來源指定的。 */
+function pickBackend(sourceBackend: PlaybackBackend): PlaybackBackend {
+  if (isLivePlayback() || sourceBackend === "system") return sourceBackend
+  return storeState.settings.videoBackend
 }
 
 /** 直播沒有可跳轉的時間軸：不續播、不存位置，seek 一律視為無效。 */
@@ -878,7 +885,7 @@ export async function openVideo(item: UnifiedVideoItem, options: OpenVideoOption
     }
 
     const url: string = manifest.primaryUrl
-    const backend = manifest.backend
+    const backend: PlaybackBackend = pickBackend(manifest.backend)
     const headers = manifest.headers
     if (resumeAt > 0) warmStreamStart(url, resumeAt)
     await ctrl.open(url, { backend, headers })
@@ -1017,7 +1024,7 @@ export async function selectQuality(qualityId: string): Promise<void> {
         }
 
     const url: string = resolved.url
-    const backend = resolved.backend
+    const backend: PlaybackBackend = pickBackend(resolved.backend)
     const headers = resolved.headers ?? manifest.headers
     if (currentPos > 0.5 && !isLivePlayback()) warmStreamStart(url, currentPos)
     await ctrl.open(url, { backend, headers })
@@ -1181,7 +1188,7 @@ export async function selectPage(pagePart: VideoPagePart): Promise<void> {
     emitStore()
 
     const url: string = manifest.primaryUrl
-    const backend = manifest.backend
+    const backend: PlaybackBackend = pickBackend(manifest.backend)
     const headers = manifest.headers
     await ctrl.open(url, { backend, headers })
     streamSwitchPending = false

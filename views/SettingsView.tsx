@@ -15,12 +15,11 @@ import {
   useEffect,
   useState,
 } from "scripting"
-import type { VirtualNode } from "scripting"
+import type { Color, VirtualNode } from "scripting"
 import type {
   PlayerSettings,
   Provider,
   ProviderAuthState,
-  YoutubeStreamPreference,
 } from "../types/index"
 import {
   clearAuth,
@@ -42,9 +41,11 @@ import {
 } from "../services/index"
 import { providerBadgeLabel, providerFullName } from "../utils/format"
 import { palette, providerColor } from "../ui/theme"
+import { BACKEND_OPTIONS, QUALITY_OPTIONS, RATE_OPTIONS, labelOf, nearest } from "./PlaybackSettingsView"
 
 export interface SettingsViewProps {
   onExitApp?: () => void
+  onOpenPlayback?: () => void
   onOpenSponsorBlock?: () => void
 }
 
@@ -52,27 +53,6 @@ interface Option<T> {
   label: string
   value: T
 }
-
-const STREAM_MODE_OPTIONS: Option<YoutubeStreamPreference>[] = [
-  { label: "自動", value: "auto" },
-  { label: "HLS 優先", value: "hls" },
-  { label: "SABR 優先", value: "sabr" },
-]
-
-const QUALITY_OPTIONS: Option<number>[] = [
-  { label: "4K", value: 2160 },
-  { label: "1080p", value: 1080 },
-  { label: "720p", value: 720 },
-  { label: "480p", value: 480 },
-]
-
-const RATE_OPTIONS: Option<number>[] = [
-  { label: "0.75×", value: 0.75 },
-  { label: "1×", value: 1.0 },
-  { label: "1.25×", value: 1.25 },
-  { label: "1.5×", value: 1.5 },
-  { label: "2×", value: 2.0 },
-]
 
 const AREA_OPTIONS: Option<number>[] = [
   { label: "1/4 螢幕", value: 0.25 },
@@ -112,13 +92,32 @@ function parseCookieString(raw: string): Record<string, string> {
   return result
 }
 
-// Stored values may predate the option list; snap to the closest so the picker always shows a selection.
-function nearest(options: Option<number>[], value: number): number {
-  let best: number = options[0].value
-  for (const option of options) {
-    if (Math.abs(option.value - value) < Math.abs(best - value)) best = option.value
-  }
-  return best
+/** 推入子頁的一列：圖示、標題、目前設定的摘要。 */
+function LinkRow(props: {
+  icon: string
+  color: Color
+  title: string
+  summary: string
+  onTap?: () => void
+}): VirtualNode {
+  return (
+    <Button buttonStyle="plain" action={() => props.onTap?.()}>
+      <HStack spacing={12} frame={{ maxWidth: "infinity" }} contentShape="rect">
+        <VStack
+          frame={{ width: 32, height: 32 }}
+          background={{ style: props.color, shape: { type: "rect", cornerRadius: 8 } }}
+        >
+          <Image systemName={props.icon} font={15} foregroundStyle="white" />
+        </VStack>
+        <VStack alignment="leading" spacing={2}>
+          <Text font={16} foregroundStyle="label">{props.title}</Text>
+          <Text font={12} foregroundStyle="secondaryLabel">{props.summary}</Text>
+        </VStack>
+        <Spacer />
+        <Image systemName="chevron.right" font={13} fontWeight="semibold" foregroundStyle="tertiaryLabel" />
+      </HStack>
+    </Button>
+  )
 }
 
 function NumberPicker(props: {
@@ -407,71 +406,27 @@ export function SettingsView(props: SettingsViewProps): VirtualNode {
         />
       </Section>
 
-      <Section
-        header={<Text>YouTube 串流</Text>}
-        footer={<Text>播放卡頓或畫質選項太少時，可以換一種引擎；下次開啟影片時生效。</Text>}
-      >
-        <Picker
-          title="串流引擎"
-          value={settings.youtubeStreamMode}
-          onChanged={(value: string) => patchSettings({ youtubeStreamMode: value as YoutubeStreamPreference })}
-          pickerStyle="menu"
-        >
-          {STREAM_MODE_OPTIONS.map((option: Option<YoutubeStreamPreference>) => (
-            <Text key={`stream-${option.value}`} tag={option.value}>{option.label}</Text>
-          ))}
-        </Picker>
-      </Section>
-
-      <Section title="播放">
-        <NumberPicker
-          title="偏好畫質"
-          options={QUALITY_OPTIONS}
-          value={settings.preferredQualityHeight}
-          onChange={(value: number) => patchSettings({ preferredQualityHeight: value })}
+      <Section>
+        <LinkRow
+          icon="play.rectangle.fill"
+          color="#FF9500"
+          title="播放"
+          summary={[
+            labelOf(BACKEND_OPTIONS, settings.videoBackend),
+            labelOf(QUALITY_OPTIONS, nearest(QUALITY_OPTIONS, settings.preferredQualityHeight)),
+            labelOf(RATE_OPTIONS, nearest(RATE_OPTIONS, settings.defaultPlaybackRate)),
+          ].join("・")}
+          onTap={props.onOpenPlayback}
         />
-        <NumberPicker
-          title="播放速度"
-          options={RATE_OPTIONS}
-          value={settings.defaultPlaybackRate}
-          onChange={(value: number) => patchSettings({ defaultPlaybackRate: value })}
+        <LinkRow
+          icon="shield.lefthalf.filled"
+          color="#2ECC71"
+          title="SponsorBlock / 空降助手"
+          summary={settings.sponsorBlockEnabled
+            ? `已啟用・${settings.sponsorBlockAutoSkip ? "自動" : "手動"}跳過（${settings.sponsorBlockCategories.length} 個分類）`
+            : "已停用"}
+          onTap={props.onOpenSponsorBlock}
         />
-      </Section>
-
-      <Section
-        header={<Text>BiliBili 線路</Text>}
-        footer={<Text>依實際下載速度挑最快的伺服器，失敗或卡住時立刻換一條。</Text>}
-      >
-        <Toggle
-          title="自動切換線路"
-          value={settings.biliLineSwitch}
-          onChanged={(value: boolean) => patchSettings({ biliLineSwitch: value })}
-        />
-      </Section>
-
-      <Section header={<Text>跳過片段</Text>}>
-        <Button buttonStyle="plain" action={() => props.onOpenSponsorBlock?.()}>
-          <HStack spacing={12} frame={{ maxWidth: "infinity" }} contentShape="rect">
-            <VStack
-              frame={{ width: 32, height: 32 }}
-              background={{ style: "#2ECC71", shape: { type: "rect", cornerRadius: 8 } }}
-            >
-              <Image systemName="shield.lefthalf.filled" font={15} foregroundStyle="white" />
-            </VStack>
-            <VStack alignment="leading" spacing={2}>
-              <Text font={16} foregroundStyle="label">SponsorBlock / 空降助手</Text>
-              <Text font={12} foregroundStyle="secondaryLabel">
-                {settings.sponsorBlockEnabled
-                  ? settings.sponsorBlockAutoSkip
-                    ? `已啟用・自動跳過（${settings.sponsorBlockCategories.length} 個分類）`
-                    : `已啟用・手動跳過（${settings.sponsorBlockCategories.length} 個分類）`
-                  : "已停用"}
-              </Text>
-            </VStack>
-            <Spacer />
-            <Image systemName="chevron.right" font={13} fontWeight="semibold" foregroundStyle="tertiaryLabel" />
-          </HStack>
-        </Button>
       </Section>
 
       <Section title="BiliBili 彈幕">

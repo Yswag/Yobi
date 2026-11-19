@@ -20,6 +20,7 @@ const SEARCH_HISTORY_LIMIT = 20
 
 export const DEFAULT_SETTINGS: PlayerSettings = {
   youtubeStreamMode: "auto",
+  videoBackend: "native",
   preferredQualityHeight: 1080,
   defaultPlaybackRate: 1,
   sponsorBlockEnabled: true,
@@ -84,6 +85,11 @@ function normalizeSettings(patch: Partial<PlayerSettings>): PlayerSettings {
     merged.preferredQualityHeight = DEFAULT_SETTINGS.preferredQualityHeight
   }
   if (typeof merged.biliLineSwitch !== "boolean") merged.biliLineSwitch = DEFAULT_SETTINGS.biliLineSwitch
+  // 舊版留下的同類欄位，值是 auto，不能拿來當現在的設定。
+  delete (merged as Partial<PlayerSettings> & { playbackBackend?: unknown }).playbackBackend
+  if (!["auto", "native", "system", "remux"].includes(merged.videoBackend)) {
+    merged.videoBackend = DEFAULT_SETTINGS.videoBackend
+  }
   return merged
 }
 

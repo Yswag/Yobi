@@ -2,6 +2,7 @@ import { Group, NavigationDestination, NavigationStack } from "scripting"
 import type { VirtualNode } from "scripting"
 import type { Provider } from "../types"
 import { ChannelView } from "../views/ChannelView"
+import { PlaybackSettingsView } from "../views/PlaybackSettingsView"
 import { SettingsView } from "../views/SettingsView"
 import { SponsorBlockSettingsView } from "../views/SponsorBlockSettingsView"
 
@@ -16,6 +17,7 @@ export interface ChannelTarget {
 
 export const SETTINGS_ROUTE: string = "settings"
 export const SPONSORBLOCK_ROUTE: string = "settings/sponsorblock"
+export const PLAYBACK_ROUTE: string = "settings/playback"
 const CHANNEL_ROUTE_PREFIX: string = "channel:"
 
 export function channelRoute(target: ChannelTarget): string {
@@ -35,6 +37,11 @@ export function TabStack(props: {
     props.path.setValue(props.path.value.slice(0, -1))
   }
 
+  const push = (route: string): void => {
+    if (props.path.value[props.path.value.length - 1] === route) return
+    props.path.setValue([...props.path.value, route])
+  }
+
   const renderRoute = (route: string): VirtualNode => {
     if (route.startsWith(CHANNEL_ROUTE_PREFIX)) {
       const target: ChannelTarget = JSON.parse(route.slice(CHANNEL_ROUTE_PREFIX.length))
@@ -52,13 +59,14 @@ export function TabStack(props: {
     if (route === SPONSORBLOCK_ROUTE) {
       return <SponsorBlockSettingsView />
     }
+    if (route === PLAYBACK_ROUTE) {
+      return <PlaybackSettingsView />
+    }
     return (
       <SettingsView
         onExitApp={props.onExitApp}
-        onOpenSponsorBlock={() => {
-          if (props.path.value[props.path.value.length - 1] === SPONSORBLOCK_ROUTE) return
-          props.path.setValue([...props.path.value, SPONSORBLOCK_ROUTE])
-        }}
+        onOpenPlayback={() => push(PLAYBACK_ROUTE)}
+        onOpenSponsorBlock={() => push(SPONSORBLOCK_ROUTE)}
       />
     )
   }

@@ -217,8 +217,13 @@ export interface CustomPlaylist {
   items: UnifiedVideoItem[]
 }
 
+/** VideoPlaybackController.open() 的後端。 */
+export type PlaybackBackend = "auto" | "native" | "system" | "remux"
+
 export interface PlayerSettings {
   youtubeStreamMode: YoutubeStreamPreference
+  /** 一般影片用的後端；直播不吃這個。 */
+  videoBackend: PlaybackBackend
   preferredQualityHeight: number // e.g. 1080, 720, 2160
   defaultPlaybackRate: number
   sponsorBlockEnabled: boolean
