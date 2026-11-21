@@ -274,6 +274,46 @@ function buildQuery(params: Record<string, string | number>): string {
     .join("&")
 }
 
+export type BiliFailureKind = "banned" | "retryable" | "deprecated" | "unknown"
+
+export class BiliApiError extends Error {
+  readonly kind: BiliFailureKind
+  readonly code: number | null
+  readonly status: number | null
+
+  constructor(message: string, kind: BiliFailureKind, code: number | null, status: number | null) {
+    super(message)
+    this.name = "BiliApiError"
+    this.kind = kind
+    this.code = code
+    this.status = status
+  }
+}
+
+export function classifyBiliCode(code: number | null | undefined): BiliFailureKind {
+  if (typeof code !== "number") return "unknown"
+  if (code === 0) return "unknown"
+  if (code === -412 || code === -352 || code === -509 || code === -799) return "banned"
+  if (code === -404 || code === -400 || code === 62002 || code === 62004) return "deprecated"
+  if (code <= -500 && code >= -504) return "retryable"
+  return "unknown"
+}
+
+function classifyStatus(status: number): BiliFailureKind {
+  if (status === 412 || status === 403) return "banned"
+  if (status === 429 || status >= 500) return "retryable"
+  if (status === 404) return "deprecated"
+  return "unknown"
+}
+
+export function biliErrorKind(error: unknown): BiliFailureKind {
+  return error instanceof BiliApiError ? error.kind : "unknown"
+}
+
+export function biliCodeError(code: number, message: string): BiliApiError {
+  return new BiliApiError(message || `BiliBili 回應 ${code}`, classifyBiliCode(code), code, null)
+}
+
 export async function biliFetchJson<T>(
   url: string,
   params?: Record<string, string | number>,
@@ -288,7 +328,7 @@ export async function biliFetchJson<T>(
 
   const res = await fetch(fullUrl, { headers: await getBiliRequestHeaders() })
   if (!res.ok) {
-    throw new Error(`BiliBili 請求失敗 (${res.status})`)
+    throw new BiliApiError(`BiliBili 請求失敗 (${res.status})`, classifyStatus(res.status), null, res.status)
   }
   return (await res.json()) as T
 }

@@ -16,6 +16,8 @@ import type {
 import {
   BILI_REFERER,
   BILI_USER_AGENT,
+  biliCodeError,
+  biliErrorKind,
   biliFetchJson,
   getBiliRequestHeaders,
 } from "./wbi"
@@ -26,6 +28,7 @@ import {
 } from "./dashMpd"
 import { writeBiliHlsManifest } from "./hls"
 import { fetchBiliSubtitleTracks } from "./subtitles"
+import { reportError } from "../errors"
 
 const API = "https://api.bilibili.com"
 const VIEW_URL = `${API}/x/web-interface/view`
@@ -34,6 +37,19 @@ const RELATED_URL = `${API}/x/web-interface/archive/related`
 
 const VIEW_CACHE_MS: number = 20_000
 const viewCache: Map<string, { at: number; promise: Promise<any> }> = new Map()
+
+function mayTryNextEndpoint(context: string, error: unknown): boolean {
+  reportError("bili", context, error)
+  return biliErrorKind(error) !== "banned"
+}
+
+function raiseIfBanned(payload: any, context: string): void {
+  const code: number = Number(payload?.code)
+  if (!Number.isFinite(code) || code === 0) return
+  const error = biliCodeError(code, typeof payload?.message === "string" ? payload.message : "")
+  if (error.kind === "banned") throw error
+  reportError("bili", context, error)
+}
 
 function fetchView(bvid: string, params?: Record<string, string | number>): Promise<any> {
   const now: number = Date.now()
@@ -226,7 +242,8 @@ export async function resolveBiliShortUrl(
     })
     const parsed = parseBiliInput(res.url || "")
     if (parsed) return parsed
-  } catch {
+  } catch (error) {
+    reportError("bili", "shortUrl.resolve", error)
   }
   return null
 }
@@ -315,7 +332,9 @@ export async function getBiliTrending(page = 1): Promise<UnifiedVideoItem[]> {
       const items = mapItems(result.data?.item)
       if (items.length) return items
     }
-  } catch {
+    raiseIfBanned(result, "trending.rcmd")
+  } catch (error) {
+    if (!mayTryNextEndpoint("trending.rcmd", error)) throw error
   }
 
   const popular: any = await biliFetchJson<any>(`${API}/x/web-interface/popular`, {
@@ -345,7 +364,10 @@ export async function searchBiliVideos(
     },
     true,
   )
-  if (result?.code !== 0) return []
+  if (result?.code !== 0) {
+    raiseIfBanned(result, "search.type")
+    return []
+  }
   return mapItems(result.data?.result)
 }
 
@@ -397,7 +419,8 @@ export async function getBiliVideoDetail(bvidOrAid: string): Promise<VideoDetail
       tags = Array.isArray(detail.data.Tags) ? detail.data.Tags : []
       related = Array.isArray(detail.data.Related) ? detail.data.Related : []
     }
-  } catch {
+  } catch (error) {
+    if (!mayTryNextEndpoint("view.detail", error)) throw error
   }
 
   if (!view) {
@@ -405,6 +428,7 @@ export async function getBiliVideoDetail(bvidOrAid: string): Promise<VideoDetail
       ? await fetchView(ids.bvid, params)
       : await biliFetchJson<any>(VIEW_URL, params)
     if (result?.code !== 0 || !result.data) {
+      raiseIfBanned(result, "view")
       throw new Error(result?.message || "無法取得影片資訊")
     }
     view = result.data
@@ -417,7 +441,9 @@ export async function getBiliVideoDetail(bvidOrAid: string): Promise<VideoDetail
     try {
       const result: any = await biliFetchJson<any>(RELATED_URL, { bvid })
       if (result?.code === 0 && Array.isArray(result.data)) related = result.data
-    } catch {
+      else raiseIfBanned(result, "related")
+    } catch (error) {
+      reportError("bili", "related", error)
     }
   }
 
@@ -1000,7 +1026,8 @@ export async function fetchBiliDanmakuXml(cid: number): Promise<string> {
       if (!res.ok) continue
       const bytes = await res.bytes()
       return decodeDanmakuBytes(bytes)
-    } catch {
+    } catch (error) {
+      reportError("bili", "danmaku.endpoint", error)
     }
   }
   throw new Error("無法取得彈幕資料")
@@ -1047,6 +1074,7 @@ export async function getBiliCommentPage(
       ps: 20,
       pagination_str: JSON.stringify({ offset }),
     })
+    raiseIfBanned(main, "comments.main")
     const replies = main?.data?.replies
     if (Array.isArray(replies)) {
       const ended: boolean = main?.data?.cursor?.is_end === true || replies.length < 20
@@ -1056,7 +1084,8 @@ export async function getBiliCommentPage(
         cursor: ended ? null : nextOffset ? `o${nextOffset}` : `p${page + 1}`,
       }
     }
-  } catch {
+  } catch (error) {
+    if (!mayTryNextEndpoint("comments.main", error)) throw error
   }
 
   const legacy: any = await biliFetchJson<any>(`${API}/x/v2/reply`, {
@@ -1121,7 +1150,9 @@ async function fetchChannelProfile(mid: string): Promise<ChannelProfile | null> 
         fans: numberOrUndefined(result.data.fans),
       }
     }
-  } catch {
+    raiseIfBanned(result, "channel.accInfo")
+  } catch (error) {
+    if (!mayTryNextEndpoint("channel.accInfo", error)) throw error
   }
 
   try {
@@ -1135,7 +1166,9 @@ async function fetchChannelProfile(mid: string): Promise<ChannelProfile | null> 
         fans: numberOrUndefined(info.fans),
       }
     }
-  } catch {
+    raiseIfBanned(card, "channel.card")
+  } catch (error) {
+    if (!mayTryNextEndpoint("channel.card", error)) throw error
   }
   return null
 }
@@ -1180,7 +1213,9 @@ async function fetchChannelVideos(
         const total: number = Number(result.data?.page?.count) || 0
         if (items.length) return { videos: items, total }
       }
-    } catch {
+      raiseIfBanned(result, "channel.videos")
+    } catch (error) {
+      reportError("bili", "channel.videos", error)
     }
   }
   return { videos: [], total: 0 }

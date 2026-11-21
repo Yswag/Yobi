@@ -1,4 +1,4 @@
-export type ErrorScope = "player" | "storage" | "proxy" | "auth" | "stream"
+export type ErrorScope = "player" | "storage" | "proxy" | "auth" | "stream" | "bili"
 
 export type ErrorReporter = (scope: ErrorScope, context: string, error: unknown) => void
 
