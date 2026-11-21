@@ -12,7 +12,7 @@
 
 1. 產品程式碼不寫註解。`index.tsx`、`components/`、`services/`、`state/`、`types/`、`ui/`、`utils/`、`views/` 一律禁止行註解與區塊註解。
 2. 決策寫進 `docs/adr/`。一個決定一份 ADR，內容是「選了什麼、為什麼、代價」，不寫開發歷史。
-3. 偷懶實作不寫註解開脫，開 issue。issue 放在 `docs/issues/`，描述要修的行為，不是描述現況。
+3. 偷懶實作不寫註解開脫，開 issue。issue 放在 `docs/issues/`，描述要修的行為，不是描述現況；修完就刪掉該檔，不留歷史。
 4. 例外只有三種：產生檔的授權標頭（`services/youtube/vendor/`）、工具指令（例如 `// @ts-expect-error`）、與 lint 自身的 baseline 檔。
 5. 用 lint 守門，採 ratchet：`tools/lint-comments.mjs` 會列出所有違規；`tools/comment-baseline.json` 記下目前允許的上限。只能往下調，不能往上加。
 
