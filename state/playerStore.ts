@@ -76,6 +76,7 @@ export interface PlayerStoreSnapshot {
   isFullscreen: boolean
   isPiPActive: boolean
   pipAvailable: boolean
+  audioUnavailable: boolean
   danmakuEnabled: boolean
   danmakuCount: number
   statsVisible: boolean
@@ -141,6 +142,7 @@ let storeState: PlayerStoreSnapshot = {
   isFullscreen: false,
   isPiPActive: false,
   pipAvailable: false,
+  audioUnavailable: false,
   danmakuEnabled: true,
   danmakuCount: 0,
   statsVisible: false,
@@ -314,8 +316,28 @@ async function ensureAudioSession(): Promise<void> {
     await SharedAudioSession.setCategory("playback", ["mixWithOthers"])
     await SharedAudioSession.setActive(true)
     audioSessionReady = true
-  } catch {
+    setAudioUnavailable(false)
+  } catch (error) {
+    reportError("player", "audioSession.configure", error)
+    setAudioUnavailable(true)
+    if (await playbackCategorySupported()) showSkippedToast("音訊初始化失敗，可能沒有聲音")
   }
+}
+
+async function playbackCategorySupported(): Promise<boolean | null> {
+  try {
+    const categories = await SharedAudioSession.availableCategories
+    return categories.includes("playback")
+  } catch (error) {
+    reportError("player", "audioSession.capabilities", error)
+    return null
+  }
+}
+
+function setAudioUnavailable(unavailable: boolean): void {
+  if (storeState.audioUnavailable === unavailable) return
+  storeState.audioUnavailable = unavailable
+  emitStore()
 }
 
 function mapControllerState(rawState: VideoPlaybackState): PlaybackStatus {
