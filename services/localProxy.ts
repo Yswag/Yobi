@@ -558,7 +558,8 @@ async function fetchBiliAttempt(
     disarmTimeout(timer)
     try {
       signal.removeEventListener("abort", relayAbort)
-    } catch {
+    } catch (error) {
+      reportError("proxy", "abort.detach", error)
     }
   }
 }
@@ -694,7 +695,8 @@ async function fetchBiliHedged(
     disarmTimeout(timer)
     try {
       signal.removeEventListener("abort", relayAbort)
-    } catch {
+    } catch (error) {
+      reportError("proxy", "abort.detach", error)
     }
   }
 }
@@ -722,7 +724,8 @@ async function fetchBiliChunk(source: BiliFileSource, index: number, signal: Abo
         source.exploring.delete(index)
         try {
           signal.removeEventListener("abort", relayAbort)
-        } catch {
+        } catch (error) {
+          reportError("proxy", "abort.detach", error)
         }
       }
       if (outcome.result.ok) {

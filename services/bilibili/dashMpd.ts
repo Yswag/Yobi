@@ -1,6 +1,7 @@
 import { Path, fetch } from "scripting"
 import { registerBiliFileSource, registerVirtualManifest, seedBiliHead, warmBiliRange } from "../localProxy"
 import { parseSidx, type SidxIndex } from "../sidx"
+import { reportError } from "../errors"
 import { BILI_REFERER, BILI_USER_AGENT } from "./wbi"
 
 export interface BiliDashSegmentBase {
@@ -313,19 +314,45 @@ export function buildBiliDashMpdXml(
   return lines.join("\n")
 }
 
+const DASH_TEMP_PREFIX = "yobi_bili_"
+const DASH_TEMP_MAX_FILES = 8
+
+export interface DashPrunePlan {
+  removable: string[]
+  overflow: boolean
+}
+
+export function planDashPrune(
+  entries: string[],
+  keepPath: string,
+  directory: string,
+  maxFiles: number = DASH_TEMP_MAX_FILES,
+): DashPrunePlan {
+  const stale: string[] = entries.filter(
+    (name: string): boolean => name.startsWith(DASH_TEMP_PREFIX) && name.endsWith(".mpd"),
+  )
+  const removable: string[] = stale.filter((name: string): boolean => Path.join(directory, name) !== keepPath)
+  return { removable, overflow: removable.length > maxFiles }
+}
+
 function pruneDashFiles(keep: string): void {
+  let entries: string[]
   try {
-    const entries: string[] = FileManager.readDirectorySync(FileManager.temporaryDirectory)
-    for (const name of entries) {
-      if (!name.startsWith("yobi_bili_") || !name.endsWith(".mpd")) continue
-      const path: string = Path.join(FileManager.temporaryDirectory, name)
-      if (path === keep) continue
-      try {
-        FileManager.removeSync(path)
-      } catch {
-      }
+    entries = FileManager.readDirectorySync(FileManager.temporaryDirectory)
+  } catch (error) {
+    reportError("stream", "dash.prune.list", error)
+    return
+  }
+  const plan: DashPrunePlan = planDashPrune(entries, keep, FileManager.temporaryDirectory)
+  if (plan.overflow) {
+    reportError("stream", "dash.prune.budget", new Error(`暫存 MPD 累積 ${plan.removable.length} 份`))
+  }
+  for (const name of plan.removable) {
+    try {
+      FileManager.removeSync(Path.join(FileManager.temporaryDirectory, name))
+    } catch (error) {
+      reportError("stream", "dash.prune.remove", error)
     }
-  } catch {
   }
 }
 
