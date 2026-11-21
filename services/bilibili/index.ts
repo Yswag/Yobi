@@ -5,6 +5,7 @@ import type {
   CommentItem,
   CommentPage,
   CommentQuery,
+  CommentRun,
   Provider,
   StreamManifest,
   SubtitleTrackInfo,
@@ -1033,23 +1034,48 @@ export async function fetchBiliDanmakuXml(cid: number): Promise<string> {
   throw new Error("無法取得彈幕資料")
 }
 
+function emoteRuns(message: string, emotes: unknown): CommentRun[] | undefined {
+  if (!message || !emotes || typeof emotes !== "object") return undefined
+  const table: Record<string, any> = emotes as Record<string, any>
+  const runs: CommentRun[] = []
+  let last: number = 0
+  let matched: boolean = false
+  const pattern: RegExp = /\[[^\[\]\n]{1,16}\]/g
+  let match: RegExpExecArray | null
+  while ((match = pattern.exec(message)) !== null) {
+    const emote: any = table[match[0]]
+    const url: string = typeof emote?.url === "string" ? emote.url : ""
+    if (!url) continue
+    matched = true
+    if (match.index > last) runs.push({ text: message.slice(last, match.index) })
+    runs.push({ imageUrl: url, alt: match[0] })
+    last = match.index + match[0].length
+  }
+  if (!matched) return undefined
+  if (last < message.length) runs.push({ text: message.slice(last) })
+  return runs
+}
+
 function mapReply(raw: any): CommentItem {
   const member = raw?.member ?? {}
   const replies = Array.isArray(raw?.replies) ? raw.replies.slice(0, 3) : []
   const inline: CommentItem[] | undefined = replies.length ? replies.map(mapReply) : undefined
   const replyCount: number = Number(raw?.rcount) || 0
+  const content: string = typeof raw?.content?.message === "string" ? raw.content.message : ""
   const item: CommentItem = {
     id: String(raw?.rpid_str ?? raw?.rpid ?? ""),
     authorId: String(member.mid ?? ""),
     authorName: cleanText(member.uname),
     authorAvatar: imageUrl(member.avatar ?? member.avatar_url),
-    content: typeof raw?.content?.message === "string" ? raw.content.message : "",
+    content,
     likeCount: Number(raw?.like) || 0,
     publishedText: publishedTextFromEpoch(numberOrUndefined(raw?.ctime)) ?? "",
     replyCount,
     replies: inline,
   }
   if (replyCount > 0) item.replyCursor = "1"
+  const runs: CommentRun[] | undefined = emoteRuns(content, raw?.content?.emote)
+  if (runs) item.runs = runs
   return item
 }
 

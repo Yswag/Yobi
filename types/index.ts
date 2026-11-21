@@ -115,12 +115,19 @@ export interface VideoDetail extends UnifiedVideoItem {
   tags?: string[]
 }
 
+export interface CommentRun {
+  text?: string
+  imageUrl?: string
+  alt?: string
+}
+
 export interface CommentItem {
   id: string
   authorId: string
   authorName: string
   authorAvatar: string
   content: string
+  runs?: CommentRun[]
   likeCount: number
   publishedText: string
   replyCount?: number

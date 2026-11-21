@@ -2,6 +2,7 @@
 import type {
   ChannelDetail,
   CommentItem,
+  CommentRun,
   SubtitleTrackInfo,
   UnifiedVideoItem,
   VideoChapter,
@@ -566,6 +567,48 @@ export function parseChapters(next: JsonObject): VideoChapter[] {
   return found
 }
 
+const commentEmojiUrls: Map<string, string> = new Map()
+
+function rememberCommentEmojis(node: unknown, depth: number = 0): void {
+  if (!node || typeof node !== "object" || depth > 30) return
+  if (Array.isArray(node)) {
+    for (const entry of node) rememberCommentEmojis(entry, depth + 1)
+    return
+  }
+  const object = node as JsonObject
+  const shortcuts: unknown[] = asArray(object["shortcuts"])
+  if (shortcuts.length > 0) {
+    const image: JsonObject | null = asObject(object["image"])
+    const url: string = image ? readThumbnailUrl(image) : ""
+    if (url) {
+      for (const shortcut of shortcuts) {
+        if (typeof shortcut === "string" && shortcut) commentEmojiUrls.set(shortcut, url)
+      }
+    }
+  }
+  for (const key of Object.keys(object)) rememberCommentEmojis(object[key], depth + 1)
+}
+
+function commentRuns(text: string): CommentRun[] | undefined {
+  if (!text || commentEmojiUrls.size === 0) return undefined
+  const runs: CommentRun[] = []
+  const pattern: RegExp = /:[a-zA-Z0-9][a-zA-Z0-9_-]{0,40}:/g
+  let last: number = 0
+  let matched: boolean = false
+  let match: RegExpExecArray | null
+  while ((match = pattern.exec(text)) !== null) {
+    const url: string | undefined = commentEmojiUrls.get(match[0])
+    if (!url) continue
+    matched = true
+    if (match.index > last) runs.push({ text: text.slice(last, match.index) })
+    runs.push({ imageUrl: url, alt: match[0] })
+    last = match.index + match[0].length
+  }
+  if (!matched) return undefined
+  if (last < text.length) runs.push({ text: text.slice(last) })
+  return runs
+}
+
 function parseCommentRenderer(renderer: JsonObject): CommentItem | null {
   const commentId: string = String(renderer["commentId"] ?? "")
   if (!commentId) return null
@@ -585,6 +628,8 @@ function parseCommentRenderer(renderer: JsonObject): CommentItem | null {
   }
   const replyCount: number = Number((replyText.match(/\d+/) ?? ["0"])[0])
   if (replyCount > 0) item.replyCount = replyCount
+  const runs: CommentRun[] | undefined = commentRuns(content)
+  if (runs) item.runs = runs
   return item
 }
 
@@ -612,6 +657,8 @@ function parseCommentEntity(entity: JsonObject): CommentItem | null {
   }
   const replyCount: number = Number((replyText.match(/\d+/) ?? ["0"])[0])
   if (replyCount > 0) item.replyCount = replyCount
+  const runs: CommentRun[] | undefined = commentRuns(content)
+  if (runs) item.runs = runs
   return item
 }
 
@@ -783,6 +830,7 @@ export function findPageCursor(response: JsonObject): string | null {
 }
 
 export function parseComments(next: JsonObject): CommentItem[] {
+  rememberCommentEmojis(next)
   const comments: CommentItem[] = []
   const seen: Set<string> = new Set()
   const replyTokens: Map<string, string> = new Map()

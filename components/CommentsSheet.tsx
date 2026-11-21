@@ -1,6 +1,6 @@
-import { HStack, Image, ProgressView, Text, VStack, useState } from "scripting"
+import { FlowLayout, HStack, Image, ProgressView, Text, VStack, useState } from "scripting"
 import type { VirtualNode } from "scripting"
-import type { CommentItem, CommentSort } from "../types"
+import type { CommentItem, CommentRun, CommentSort } from "../types"
 import { formatCount } from "../utils/format"
 import { Avatar, ChipBar, EmptyState, PillButton, Skeleton } from "../ui/primitives"
 import { palette, space, type } from "../ui/theme"
@@ -9,6 +9,129 @@ const SORT_OPTIONS: { key: CommentSort; label: string }[] = [
   { key: "top", label: "最熱" },
   { key: "newest", label: "最新" },
 ]
+
+const EMOJI_SIZE: number = 18
+const EMOJI_GAP: number = 3
+const WIDE_CHAR: RegExp = /[\u1100-\u11ff\u2e80-\u303f\u3040-\u9fff\uac00-\ud7af\uf900-\ufaff\ufe30-\ufe4f\uff00-\uff60\uffe0-\uffe6]/
+
+function textChunks(text: string): string[] {
+  const chunks: string[] = []
+  let buffer: string = ""
+  const flush = (): void => {
+    if (!buffer) return
+    chunks.push(buffer)
+    buffer = ""
+  }
+  for (const char of text) {
+    if (WIDE_CHAR.test(char)) {
+      flush()
+      chunks.push(char)
+      continue
+    }
+    buffer += char
+    if (char === " ") flush()
+  }
+  flush()
+  return chunks
+}
+
+function splitLines(runs: CommentRun[]): CommentRun[][] {
+  const lines: CommentRun[][] = [[]]
+  for (const run of runs) {
+    if (run.imageUrl) {
+      lines[lines.length - 1].push(run)
+      continue
+    }
+    const parts: string[] = (run.text ?? "").split("\n")
+    for (let index = 0; index < parts.length; index++) {
+      if (index > 0) lines.push([])
+      if (parts[index]) lines[lines.length - 1].push({ text: parts[index] })
+    }
+  }
+  return lines.filter((line: CommentRun[]): boolean => line.length > 0)
+}
+
+function gapNode(key: string): VirtualNode {
+  return <HStack key={key} frame={{ width: EMOJI_GAP, height: 1 }} />
+}
+
+interface LineItem {
+  key: string
+  imageUrl?: string
+  text?: string
+}
+
+function lineNodes(line: CommentRun[]): VirtualNode[] {
+  const items: LineItem[] = []
+  line.forEach((run: CommentRun, runIndex: number): void => {
+    if (run.imageUrl) {
+      items.push({ key: `img-${runIndex}`, imageUrl: run.imageUrl })
+      return
+    }
+    textChunks(run.text ?? "").forEach((chunk: string, chunkIndex: number): void => {
+      items.push({ key: `txt-${runIndex}-${chunkIndex}`, text: chunk })
+    })
+  })
+
+  const nodes: VirtualNode[] = []
+  items.forEach((item: LineItem, index: number): void => {
+    const previous: LineItem | undefined = items[index - 1]
+    if (previous && (previous.imageUrl || item.imageUrl)) nodes.push(gapNode(`gap-${index}`))
+    if (item.imageUrl) {
+      nodes.push(
+        <Image
+          key={item.key}
+          imageUrl={item.imageUrl}
+          resizable
+          scaleToFit
+          frame={{ width: EMOJI_SIZE, height: EMOJI_SIZE }}
+        />,
+      )
+      return
+    }
+    nodes.push(
+      <Text key={item.key} font={type.cardTitle} foregroundStyle="label">
+        {item.text ?? ""}
+      </Text>,
+    )
+  })
+  return nodes
+}
+
+function CommentText(props: { comment: CommentItem }): VirtualNode {
+  const runs: CommentRun[] | undefined = props.comment.runs
+  const hasImage: boolean = runs?.some((run: CommentRun): boolean => Boolean(run.imageUrl)) === true
+  if (!runs || !hasImage) {
+    return (
+      <Text
+        font={type.cardTitle}
+        foregroundStyle="label"
+        lineSpacing={3}
+        multilineTextAlignment="leading"
+        frame={{ maxWidth: "infinity", alignment: "leading" }}
+      >
+        {props.comment.content}
+      </Text>
+    )
+  }
+
+  const lines: CommentRun[][] = splitLines(runs)
+  return (
+    <VStack alignment="leading" spacing={3} frame={{ maxWidth: "infinity", alignment: "leading" }}>
+      {lines.map((line: CommentRun[], lineIndex: number) => (
+        <FlowLayout
+          key={`line-${lineIndex}`}
+          spacing={0}
+          horizontalSpacing={0}
+          verticalSpacing={3}
+          frame={{ maxWidth: "infinity", alignment: "leading" }}
+        >
+          {lineNodes(line)}
+        </FlowLayout>
+      ))}
+    </VStack>
+  )
+}
 
 export interface CommentsSheetProps {
   comments: CommentItem[]
@@ -37,15 +160,7 @@ function CommentBody(props: { comment: CommentItem; avatarSize: number; footer?:
             <Text font={type.meta} foregroundStyle="tertiaryLabel" lineLimit={1}>{comment.publishedText}</Text>
           ) : null}
         </HStack>
-        <Text
-          font={type.cardTitle}
-          foregroundStyle="label"
-          lineSpacing={3}
-          multilineTextAlignment="leading"
-          frame={{ maxWidth: "infinity", alignment: "leading" }}
-        >
-          {comment.content}
-        </Text>
+        <CommentText comment={comment} />
         <HStack spacing={18}>
           <HStack spacing={5}>
             <Image systemName="hand.thumbsup" font={13} foregroundStyle="secondaryLabel" />
