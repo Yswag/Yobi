@@ -34,6 +34,7 @@ import {
   getWatchLater,
   importAllData,
   invalidateYoutubeAuthCache,
+  isAuthPersistenceAvailable,
   loginWithWebView,
   setAuthCookies,
   subscribeStorageChanges,
@@ -241,6 +242,10 @@ export function SettingsView(props: SettingsViewProps): VirtualNode {
       setAuth(provider, next)
       if (provider === "yt") invalidateYoutubeAuthCache()
       const count: number = Object.keys(next.cookies).length
+      if (!isAuthPersistenceAvailable()) {
+        showToast("登入只在本次有效：無法寫入 Keychain")
+        return
+      }
       showToast(
         next.loggedIn
           ? `${providerFullName(provider)} 登入成功${next.username ? `：${next.username}` : ""}`
@@ -274,7 +279,12 @@ export function SettingsView(props: SettingsViewProps): VirtualNode {
       })
       return
     }
-    setAuth(provider, setAuthCookies(provider, parsed))
+    const state = setAuthCookies(provider, parsed)
+    setAuth(provider, state)
+    if (!isAuthPersistenceAvailable()) {
+      showToast("Cookie 只在本次有效：無法寫入 Keychain")
+      return
+    }
     showToast(`已儲存 ${Object.keys(parsed).length} 個 ${providerFullName(provider)} Cookie`)
   }
 

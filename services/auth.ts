@@ -143,28 +143,56 @@ function parseStore(raw: unknown): AuthStore {
   return raw && typeof raw === "object" ? (raw as AuthStore) : {}
 }
 
+let sessionStore: AuthStore | null = null
+let persistFailed: boolean = false
+
+export function isAuthPersistenceAvailable(): boolean {
+  return !persistFailed
+}
+
 function readStore(): AuthStore {
   let stored: string | null = null
   try {
     stored = Keychain.get(AUTH_KEY)
-  } catch {
+  } catch (error) {
+    reportError("auth", "keychain.read", error)
     stored = null
   }
   if (stored) return parseStore(stored)
+  if (sessionStore) return sessionStore
 
   const legacy: unknown = Storage.get<unknown>(AUTH_KEY)
   if (!legacy) return {}
   const migrated: AuthStore = parseStore(legacy)
-  if (Object.keys(migrated).length > 0) writeStore(migrated)
+  if (Object.keys(migrated).length === 0) {
+    Storage.remove(AUTH_KEY)
+    return {}
+  }
+  if (!writeStore(migrated)) Storage.remove(AUTH_KEY)
   return migrated
 }
 
-function writeStore(store: AuthStore): void {
-  if (Keychain.set(AUTH_KEY, JSON.stringify(store))) {
-    Storage.remove(AUTH_KEY)
-    return
+function writeStore(store: AuthStore): boolean {
+  sessionStore = store
+  try {
+    if (Keychain.set(AUTH_KEY, JSON.stringify(store))) {
+      Storage.remove(AUTH_KEY)
+      persistFailed = false
+      return true
+    }
+  } catch (error) {
+    reportError("auth", "keychain.write", error)
   }
-  Storage.set(AUTH_KEY, store)
+  if (!persistFailed) {
+    reportError(
+      "auth",
+      "store.persist",
+      new Error("Keychain 寫入失敗，登入狀態只保留到本次執行結束"),
+    )
+  }
+  persistFailed = true
+  Storage.remove(AUTH_KEY)
+  return false
 }
 
 function emptyState(provider: Provider): ProviderAuthState {
