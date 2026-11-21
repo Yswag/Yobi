@@ -5,6 +5,7 @@ import type {
   UnifiedVideoItem,
   WatchHistoryEntry,
 } from "../types"
+import { reportError } from "./errors"
 
 const KEYS = {
   settings: "yobi.settings.v1",
@@ -52,7 +53,8 @@ function notify(): void {
   for (const listener of Array.from(listeners)) {
     try {
       listener()
-    } catch {
+    } catch (error) {
+      reportError("storage", "settings.listener", error)
     }
   }
 }
@@ -327,7 +329,8 @@ export function importAllData(jsonText: string): boolean {
   let parsed: any = null
   try {
     parsed = JSON.parse(jsonText)
-  } catch {
+  } catch (error) {
+    reportError("storage", "import.parse", error)
     return false
   }
   if (!parsed || typeof parsed !== "object") return false
@@ -360,7 +363,8 @@ export function importAllData(jsonText: string): boolean {
     }
     notify()
     return true
-  } catch {
+  } catch (error) {
+    reportError("storage", "import.apply", error)
     return false
   }
 }

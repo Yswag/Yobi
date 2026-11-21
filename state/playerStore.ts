@@ -36,6 +36,7 @@ import {
 } from "../services"
 import { SPONSOR_CATEGORY_LABELS } from "../utils/format"
 import { biliSubtitleToVtt, toCleanVtt } from "../utils/subtitles"
+import { reportError } from "../services/errors"
 
 export type PlayerPresentationMode = "hidden" | "expanded" | "mini"
 
@@ -177,7 +178,8 @@ function publishLiveViewers(videoId: string, count: number | null): void {
   for (const listener of Array.from(liveViewerListeners)) {
     try {
       listener()
-    } catch {
+    } catch (error) {
+      reportError("player", "liveViewers.listener", error)
     }
   }
 }
@@ -225,7 +227,8 @@ function emitStore(): void {
   for (const listener of Array.from(storeListeners)) {
     try {
       listener()
-    } catch {
+    } catch (error) {
+      reportError("player", "store.listener", error)
     }
   }
 }
@@ -239,7 +242,8 @@ function emitProgress(): void {
   for (const listener of Array.from(progressListeners)) {
     try {
       listener()
-    } catch {
+    } catch (error) {
+      reportError("player", "progress.listener", error)
     }
   }
 }
@@ -601,7 +605,8 @@ async function loadBiliDanmakuForCid(cid: number): Promise<void> {
     const report = await ctrl.loadDanmakuText(xml, "xml")
     storeState.danmakuCount = report.loaded
     emitStore()
-  } catch {
+  } catch (error) {
+    reportError("player", "danmaku.load", error)
   }
 }
 
@@ -647,7 +652,9 @@ subscribeStorageChanges(() => {
       applySponsorSegmentsForCid()
       emitStore()
     })
-    .catch(() => {})
+    .catch((error: unknown) => {
+      reportError("player", "sponsor.reload", error)
+    })
 })
 
 export async function openVideo(item: UnifiedVideoItem, options: OpenVideoOptions = {}): Promise<void> {
@@ -657,7 +664,8 @@ export async function openVideo(item: UnifiedVideoItem, options: OpenVideoOption
   streamSwitchPending = true
   try {
     ctrl.pause()
-  } catch {
+  } catch (error) {
+    reportError("player", "open.pause", error)
   }
   await ensureAudioSession()
 
@@ -724,7 +732,8 @@ export async function openVideo(item: UnifiedVideoItem, options: OpenVideoOption
   try {
     ctrl.clearSubtitles()
     ctrl.clearDanmaku()
-  } catch {
+  } catch (error) {
+    reportError("player", "open.clearTracks", error)
   }
   subtitleVttCache.clear()
   danmakuXmlCache.clear()
@@ -757,7 +766,9 @@ export async function openVideo(item: UnifiedVideoItem, options: OpenVideoOption
       }
       emitStore()
     })
-    .catch(() => {})
+    .catch((error: unknown) => {
+      reportError("player", "detail.load", error)
+    })
 
   if (!item.isLive) {
     void getCommentPage(item.provider, item.rawId, { sort: storeState.commentsSort })
@@ -768,8 +779,9 @@ export async function openVideo(item: UnifiedVideoItem, options: OpenVideoOption
         storeState.commentsLoading = false
         emitStore()
       })
-      .catch(() => {
+      .catch((error: unknown) => {
         if (requestId !== openRequestSeq) return
+        reportError("player", "comments.load", error)
         storeState.commentsLoading = false
         emitStore()
       })
@@ -785,7 +797,9 @@ export async function openVideo(item: UnifiedVideoItem, options: OpenVideoOption
         applySponsorSegmentsForCid()
         emitStore()
       })
-      .catch(() => {})
+      .catch((error: unknown) => {
+        reportError("player", "sponsor.load", error)
+      })
   }
 
   try {
@@ -895,7 +909,8 @@ export async function seekTo(seconds: number): Promise<void> {
   emitProgress()
   try {
     await ctrl.seek(target)
-  } catch {
+  } catch (error) {
+    reportError("player", "seek", error)
   }
 }
 
@@ -967,7 +982,8 @@ export async function selectQuality(qualityId: string): Promise<void> {
     if (currentPos > 0.5 && !isLivePlayback()) {
       try {
         await ctrl.seek(currentPos)
-      } catch {
+      } catch (error) {
+        reportError("player", "quality.seek", error)
       }
     }
     await restoreControllerSettings()
@@ -1092,7 +1108,8 @@ export async function selectPage(pagePart: VideoPagePart): Promise<void> {
   streamSwitchPending = true
   try {
     ctrl.pause()
-  } catch {
+  } catch (error) {
+    reportError("player", "switch.pause", error)
   }
 
   try {
@@ -1190,7 +1207,8 @@ export function setFullscreen(fullscreen: boolean): void {
         savedOrientations && savedOrientations.length > 0 ? savedOrientations : ["portrait"]
       savedOrientations = null
     }
-  } catch {
+  } catch (error) {
+    reportError("player", "fullscreen.orientation", error)
   }
   storeState.isFullscreen = fullscreen
   emitStore()
@@ -1235,7 +1253,8 @@ export async function closePlayer(): Promise<void> {
   releaseAllPrefetchers()
   try {
     await withTimeout(ctrl.stop(), STOP_TIMEOUT_MS)
-  } catch {
+  } catch (error) {
+    reportError("player", "close.stop", error)
   }
   storeState.presentationMode = "hidden"
   storeState.currentItem = null
@@ -1298,7 +1317,8 @@ export async function reloadComments(): Promise<void> {
     if (storeState.currentItem?.id !== item.id || storeState.commentsSort !== sort) return
     storeState.comments = page.comments
     storeState.commentsCursor = page.cursor
-  } catch {
+  } catch (error) {
+    reportError("player", "comments.reload", error)
   } finally {
     if (storeState.currentItem?.id === item.id) {
       storeState.commentsLoading = false
@@ -1328,7 +1348,8 @@ export async function loadMoreComments(): Promise<void> {
     const fresh: CommentItem[] = page.comments.filter((comment: CommentItem): boolean => !seen.has(comment.id))
     storeState.comments = fresh.length > 0 ? [...storeState.comments, ...fresh] : storeState.comments
     storeState.commentsCursor = page.cursor
-  } catch {
+  } catch (error) {
+    reportError("player", "comments.more", error)
   } finally {
     storeState.commentsLoadingMore = false
     emitStore()
@@ -1356,7 +1377,8 @@ export async function loadCommentReplies(commentId: string): Promise<void> {
       const fresh: CommentItem[] = page.comments.filter((reply: CommentItem): boolean => !seen.has(reply.id))
       return { ...comment, replies: [...existing, ...fresh], replyCursor: page.cursor }
     })
-  } catch {
+  } catch (error) {
+    reportError("player", "comments.replies", error)
   } finally {
     storeState.repliesLoading = { ...storeState.repliesLoading, [commentId]: false }
     emitStore()

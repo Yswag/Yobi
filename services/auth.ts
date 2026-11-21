@@ -1,6 +1,7 @@
 import { fetch } from "scripting"
 import type { Provider, ProviderAuthState } from "../types"
 import { setYoutubeLocale } from "./youtube/locale"
+import { reportError } from "./errors"
 
 const AUTH_KEY = "yobi.auth.v1"
 const BILI_REFERER = "https://www.bilibili.com/"
@@ -406,7 +407,8 @@ async function fetchYoutubeProfile(
       userId: typeof header["channelId"] === "string" ? header["channelId"] : undefined,
       avatarUrl: largestThumbnailUrl(header["accountPhoto"]),
     }
-  } catch {
+  } catch (error) {
+    reportError("auth", "profile.fetch", error)
     return undefined
   }
 }
@@ -418,7 +420,8 @@ async function collectCookies(
   let webCookies: CookieLike[] = []
   try {
     webCookies = await controller.getAllCookies()
-  } catch {
+  } catch (error) {
+    reportError("auth", "cookies.read", error)
     webCookies = []
   }
   const collected: Record<string, string> = {}
@@ -439,7 +442,8 @@ async function readYoutubeVisitorData(controller: WebViewController): Promise<st
     const parsed = JSON.parse(raw) as { visitor?: string; hl?: string; gl?: string }
     setYoutubeLocale(parsed.hl, parsed.gl)
     return parsed.visitor && parsed.visitor.length > 0 ? parsed.visitor : undefined
-  } catch {
+  } catch (error) {
+    reportError("auth", "visitor.read", error)
     return undefined
   }
 }
@@ -455,7 +459,8 @@ async function loginBili(): Promise<ProviderAuthState> {
         injectionTime: "documentEnd",
         forMainFrameOnly: true,
       })
-    } catch {
+    } catch (error) {
+      reportError("auth", "userScript.inject", error)
     }
 
     await controller.loadURL(BILI_LOGIN_URL)
@@ -471,7 +476,8 @@ async function loginBili(): Promise<ProviderAuthState> {
   } finally {
     try {
       controller.dispose()
-    } catch {
+    } catch (error) {
+      reportError("auth", "controller.dispose", error)
     }
   }
 }
@@ -507,7 +513,8 @@ async function loginYoutube(): Promise<ProviderAuthState> {
   } finally {
     try {
       controller.dispose()
-    } catch {
+    } catch (error) {
+      reportError("auth", "controller.dispose", error)
     }
   }
 }

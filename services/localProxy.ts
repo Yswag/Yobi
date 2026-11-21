@@ -3,6 +3,7 @@ import type { AbortSignal } from "scripting"
 import { Prefetcher } from "./prefetch"
 import { recordDownload } from "./netMeter"
 import { getSettings } from "./storage"
+import { reportError } from "./errors"
 import {
   isLineBanned,
   lineScore,
@@ -494,7 +495,8 @@ function disarmTimeout(id: number): void {
   if (id < 0) return
   try {
     clearTimeout(id)
-  } catch {
+  } catch (error) {
+    reportError("proxy", "timer.disarm", error)
   }
 }
 
@@ -592,7 +594,8 @@ function refreshPrimary(source: BiliFileSource, announce: boolean): void {
   if (!announce || !biliLineSwitchListener) return
   try {
     biliLineSwitchListener(best)
-  } catch {
+  } catch (error) {
+    reportError("proxy", "lineSwitch.listener", error)
   }
 }
 
@@ -839,7 +842,8 @@ export function stopLocalProxy(): void {
   if (server) {
     try {
       server.stop()
-    } catch (_error) {
+    } catch (error) {
+      reportError("proxy", "server.stop", error)
     }
   }
   server = null
