@@ -2,12 +2,6 @@ import { fetch } from "scripting"
 import type { SubtitleTrackInfo } from "../../types"
 import { BILI_REFERER, BILI_USER_AGENT, getBiliRequestHeaders, signWbiParams } from "./wbi"
 
-/**
- * bilibili 的字幕清單在播放器資訊裡（`/x/player/wbi/v2` 的 `data.subtitle.subtitles`），
- * 每條給一個 `subtitle_url`，內容是 JSON（`body: [{ from, to, content }]`）。
- * 未登入或 UP 沒上傳字幕時清單是空的。
- */
-
 const SUBTITLE_API: string = "https://api.bilibili.com/x/player/wbi/v2"
 
 interface BiliSubtitleEntry {
@@ -20,7 +14,6 @@ interface BiliSubtitleEntry {
   ai_status?: number
 }
 
-/** `subtitle_url` 可能是 `//` 開頭的相對網址。 */
 function absoluteUrl(url: string): string {
   if (!url) return ""
   if (url.startsWith("//")) return `https:${url}`
@@ -28,7 +21,6 @@ function absoluteUrl(url: string): string {
   return url
 }
 
-/** 抓播放器資訊裡的字幕軌；失敗時回空陣列，不要擋住播放。 */
 export async function fetchBiliSubtitleTracks(
   bvid: string,
   cid: number,
@@ -50,7 +42,6 @@ export async function fetchBiliSubtitleTracks(
       const url: string = absoluteUrl(String(raw?.subtitle_url ?? ""))
       if (!url) continue
       const languageCode: string = String(raw?.lan ?? "")
-      // ai_type 0 = 人工、其他 = AI；ai_status 不是 2 代表這條 AI 字幕還沒生成好。
       const generated: boolean = Number(raw?.ai_type ?? 0) !== 0 || Number(raw?.type ?? 0) === 1
       if (generated && raw?.ai_status !== undefined && Number(raw.ai_status) !== 2) continue
       tracks.push({

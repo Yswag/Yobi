@@ -1,36 +1,23 @@
 import { AbortController } from "scripting"
 import type { AbortSignal } from "scripting"
 
-/**
- * 片段預抓：播放器要第 N 塊時，背景先抓後面幾塊。
- * Scripting 播放器自己抓片段時 4K 會轉圈，先抓好就能直接從記憶體回。
- * 所有預抓器共用一個記憶體上限；同時只會播一支影片。
- */
-
 const MAX_CACHED_BYTES: number = 96 * 1024 * 1024
-/** 這麼久沒被要資料的預抓器（換畫質、換影片後）會被清掉快取。 */
 const IDLE_MS: number = 10_000
 
 export interface ChunkSource {
-  /** 總塊數；還不知道時回 null。 */
   count(): number | null
-  /** 總數未知時，回 null 代表超過結尾；網路錯誤要丟例外，才不會被當成結尾。 */
   fetch(index: number, signal: AbortSignal): Promise<Uint8Array | null>
 }
 
 export interface PrefetcherOptions {
   ahead: number
-  /** 同時抓幾塊；有狀態的來源（SABR）要設 1。 */
   concurrency: number
-  /** 單塊的預期大小；用來估算「正在抓」的塊有多少位元組，預設 1 MB。 */
   chunkBytes?: number
 }
 
 interface InFlight {
   promise: Promise<Uint8Array | null>
-  /** 正在等這塊的播放器請求數；有人在等就不取消。 */
   waiters: number
-  /** 取消後立刻釋放名額並回 null；被 abort 的 fetch 不一定會結束，不能等它。 */
   cancel: () => void
 }
 
@@ -57,24 +44,16 @@ function dropIdle(current: Prefetcher): void {
 export class Prefetcher {
   private readonly source: ChunkSource
   private readonly options: PrefetcherOptions
-  /** 單塊的預期大小；只在估算「正在抓」的塊時用到。 */
   private readonly chunkBytes: number
   private readonly cache: Map<number, Uint8Array> = new Map()
   private readonly inFlight: Map<number, InFlight> = new Map()
-  /** warm() 先抓的塊：不受 trimOutside 影響，播放器第一次要到時才轉進一般快取。 */
   private readonly pinned: Map<number, { promise: Promise<Uint8Array | null>; controller: AbortController }> = new Map()
   private queue: Queued[] = []
   private running: number = 0
-  /** 抓到 null 的最小塊號，之後不再往後預抓。 */
   private endIndex: number = Number.POSITIVE_INFINITY
   private lastRequestAt: number = 0
-  /** 播放器最近要的塊號。 */
   private lastIndex: number = -1
   cachedBytes: number = 0
-  /**
-   * 正在播的影片的軌：不當成閒置。播放器緩衝滿了會十幾秒不要資料，
-   * 音軌 1 MB 更是一分多鐘才要一格，不能因此被另一條軌清掉預抓。
-   */
   held: boolean = false
 
   constructor(source: ChunkSource, options: PrefetcherOptions) {
@@ -109,14 +88,9 @@ export class Prefetcher {
 
     const bytes: Uint8Array | null = await result
     if (bytes || index >= this.endIndex) return bytes
-    // 第一次失敗通常是暫時性的，直接再抓一次。
     return this.cache.get(index) ?? this.wait(index)
   }
 
-  /**
-   * 先把這塊抓好放著，給「開片後馬上要跳過去」的位置用（續播、換畫質）。
-   * 開片時播放器先讀檔頭，一般快取會以檔頭為中心清掉遠處的塊，所以另外放。
-   */
   warm(index: number): void {
     if (this.cache.has(index) || this.inFlight.has(index) || this.pinned.has(index)) return
     if (index >= this.endIndex) return
@@ -205,7 +179,6 @@ export class Prefetcher {
     return flight.promise
   }
 
-  /** 依同時上限排隊；回傳 true 代表輪到了，false 代表排隊中被取消。 */
   private schedule(index: number, urgent: boolean): Promise<boolean> {
     if (this.running < this.options.concurrency) {
       this.running++
@@ -231,17 +204,12 @@ export class Prefetcher {
     if (position > 0) this.queue.unshift(...this.queue.splice(position, 1))
   }
 
-  /** 名額交給下一個排隊者；沒人排隊才真的減少。 */
   private finishOne(): void {
     const next: Queued | undefined = this.queue.shift()
     if (next) next.resolve(true)
     else this.running = Math.max(0, this.running - 1)
   }
 
-  /**
-   * 保留前一塊（播放器偶爾重抓）與後面的預抓範圍，其餘釋放。
-   * 拖動後舊範圍的預抓直接取消，但播放器還在等的那塊不動，否則新舊請求會互相取消。
-   */
   private trimOutside(index: number): void {
     const keep = (chunk: number): boolean => chunk >= index - 1 && chunk <= index + this.options.ahead
     for (const [chunk, bytes] of this.cache) {
@@ -255,21 +223,14 @@ export class Prefetcher {
     }
   }
 
-  /** 預抓窗口的格數（給 HUD 顯示上限用）。 */
   get windowGrids(): number {
     return this.options.ahead
   }
 
-  /** 單格的預期位元組。 */
   get chunkSize(): number {
     return this.chunkBytes
   }
 
-  /**
-   * 播放位置之後連續可用的位元組。
-   * 「正在抓」的塊也算進去：拼片段時每寫一格就推一次 lastIndex，
-   * 下一格幾乎總是在飛；不把它算進來，數字會在滿與 0 之間乱跳。
-   */
   aheadBytes(): number {
     let total: number = 0
     const limit: number = 4096
@@ -309,10 +270,6 @@ export class Prefetcher {
   }
 }
 
-/**
- * 正在用的預抓器裡，播放位置之後最多的連續位元組；沒有就回 null。
- * 取最多的那個是影片軌：音軌位元組少，換算秒數會失真。
- */
 export function prefetchedAheadBytes(): number | null {
   const now: number = Date.now()
   let best: number | null = null
@@ -323,7 +280,6 @@ export function prefetchedAheadBytes(): number | null {
   return best
 }
 
-/** 目前最活躍的預抓器窗口；給 HUD 顯示「已填 / 上限」。 */
 export function prefetchWindow(): { grids: number; bytes: number } | null {
   const now: number = Date.now()
   let best: Prefetcher | null = null
@@ -340,7 +296,6 @@ export function prefetchWindow(): { grids: number; bytes: number } | null {
   return { grids: best.windowGrids, bytes: best.windowGrids * best.chunkSize }
 }
 
-/** 停止播放時釋放所有預抓的資料。 */
 export function releaseAllPrefetchers(): void {
   for (const prefetcher of prefetchers) prefetcher.release()
 }

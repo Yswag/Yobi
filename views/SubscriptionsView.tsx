@@ -45,11 +45,6 @@ type LayoutMode = "row" | "grid"
 const STRIP_AVATAR_SIZE: number = 56
 const STRIP_RING: number = 3
 
-/**
- * 跨頻道聚合：
- * 全部影片都有 `publishedAt` 時依時間新到舊排序；
- * 否則保持「各頻道第 1 部 → 各頻道第 2 部」的交錯順序，避免單一頻道洗版。
- */
 function buildTimeline(groups: UnifiedVideoItem[][]): UnifiedVideoItem[] {
   const merged: UnifiedVideoItem[] = []
   const seen: Set<string> = new Set()
@@ -216,7 +211,6 @@ export function SubscriptionsView(props: SubscriptionsViewProps): VirtualNode {
       settleRefresh()
       return
     }
-    // 快取只用來避免切換篩選時重複請求，強制重抓由 refresh() 清空快取觸發。
     const missing: SubscriptionChannel[] = activeChannels.filter(
       (ch: SubscriptionChannel): boolean => !cache[ch.id] && !failedIds[ch.id],
     )
@@ -244,7 +238,6 @@ export function SubscriptionsView(props: SubscriptionsViewProps): VirtualNode {
             nextFailed[id] = true
           }
         })
-        // 沒有任何成功結果時不改動狀態，避免快取身分變動造成無限重抓。
         if (failedCount < results.length) setCache(next)
         if (failedCount > 0 || Object.keys(failedIds).length > 0) setFailedIds(nextFailed)
         setErrorText(failedCount === results.length ? "訂閱動態載入失敗，請確認網路後重試" : null)

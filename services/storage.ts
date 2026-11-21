@@ -43,8 +43,6 @@ export const DEFAULT_SETTINGS: PlayerSettings = {
 const listeners = new Set<() => void>()
 let settingsCache: PlayerSettings | null = null
 
-// 這幾把 key 只有本檔在寫，所以讀過就留在模組裡：Storage.get 是原生呼叫，每次都要反序列化，
-// 首頁每張卡片都會問一次播放位置。寫入一律走下面的 save*，快取同步換掉，不會讀到舊值。
 let subscriptionsCache: SubscriptionChannel[] | null = null
 let historyCache: WatchHistoryEntry[] | null = null
 let positionById: Map<string, number> = new Map()
@@ -55,7 +53,6 @@ function notify(): void {
     try {
       listener()
     } catch {
-      // A listener must never break storage mutations.
     }
   }
 }
@@ -92,15 +89,12 @@ function normalizeSettings(patch: Partial<PlayerSettings>): PlayerSettings {
     merged.preferredQualityHeight = DEFAULT_SETTINGS.preferredQualityHeight
   }
   if (typeof merged.biliLineSwitch !== "boolean") merged.biliLineSwitch = DEFAULT_SETTINGS.biliLineSwitch
-  // 舊版留下的同類欄位，值是 auto，不能拿來當現在的設定。
   delete (merged as Partial<PlayerSettings> & { playbackBackend?: unknown }).playbackBackend
   if (!["auto", "native", "system", "remux"].includes(merged.videoBackend)) {
     merged.videoBackend = DEFAULT_SETTINGS.videoBackend
   }
   return merged
 }
-
-// ─── Settings ───────────────────────────────────────────────────────────────
 
 export function getSettings(): PlayerSettings {
   if (!settingsCache) {
@@ -118,9 +112,6 @@ export function updateSettings(patch: Partial<PlayerSettings>): PlayerSettings {
   return cloneSettings(next)
 }
 
-// ─── Subscriptions ──────────────────────────────────────────────────────────
-
-/** 唯讀；要改請先複製。 */
 function loadSubscriptions(): SubscriptionChannel[] {
   if (subscriptionsCache === null) subscriptionsCache = readArray<SubscriptionChannel>(KEYS.subscriptions)
   return subscriptionsCache
@@ -131,7 +122,6 @@ function saveSubscriptions(list: SubscriptionChannel[]): void {
   subscriptionsCache = list
 }
 
-/** 唯讀；要改請先複製。 */
 export function getSubscriptions(): SubscriptionChannel[] {
   return loadSubscriptions()
 }
@@ -140,7 +130,6 @@ export function isSubscribed(id: string): boolean {
   return loadSubscriptions().some(channel => channel.id === id)
 }
 
-/** Returns true when the channel is now subscribed. */
 export function toggleSubscription(channel: SubscriptionChannel): boolean {
   const list = loadSubscriptions().slice()
   const index = list.findIndex(entry => entry.id === channel.id)
@@ -156,15 +145,11 @@ export function toggleSubscription(channel: SubscriptionChannel): boolean {
   return true
 }
 
-// ─── Watch history ──────────────────────────────────────────────────────────
-
-// 索引跟快取一起重算：紀錄最多 300 筆，寫入遠比讀取少（讀取是每張卡片每次重繪）。
 function rebuildHistoryCache(entries: WatchHistoryEntry[]): void {
   const sorted = entries.slice().sort((a, b) => b.watchedAt - a.watchedAt)
   const byId = new Map<string, number>()
   const byIdCid = new Map<string, number>()
   for (const entry of sorted) {
-    // 同 id 只留最新一筆（清單已照時間排好），對齊原本 find 第一個命中的行為。
     if (!byId.has(entry.item.id)) byId.set(entry.item.id, entry.position)
     const cid = entry.cid ?? entry.item.cid
     if (cid !== undefined) {
@@ -177,7 +162,6 @@ function rebuildHistoryCache(entries: WatchHistoryEntry[]): void {
   positionByIdCid = byIdCid
 }
 
-/** 唯讀；要改請先複製。 */
 function loadHistory(): WatchHistoryEntry[] {
   if (historyCache === null) rebuildHistoryCache(readArray<WatchHistoryEntry>(KEYS.history))
   return historyCache ?? []
@@ -189,7 +173,6 @@ function saveHistory(entries: WatchHistoryEntry[]): void {
   rebuildHistoryCache(limited)
 }
 
-/** 唯讀；要改請先複製。 */
 export function getWatchHistory(): WatchHistoryEntry[] {
   return loadHistory()
 }
@@ -223,8 +206,6 @@ export function clearWatchHistory(): void {
   notify()
 }
 
-// ─── Watch later ────────────────────────────────────────────────────────────
-
 export function getWatchLater(): UnifiedVideoItem[] {
   return readArray<UnifiedVideoItem>(KEYS.watchLater)
 }
@@ -233,7 +214,6 @@ export function isInWatchLater(id: string): boolean {
   return getWatchLater().some(item => item.id === id)
 }
 
-/** Returns true when the item is now in "watch later". */
 export function toggleWatchLater(item: UnifiedVideoItem): boolean {
   const list = getWatchLater()
   const index = list.findIndex(entry => entry.id === item.id)
@@ -248,8 +228,6 @@ export function toggleWatchLater(item: UnifiedVideoItem): boolean {
   notify()
   return true
 }
-
-// ─── Playlists ──────────────────────────────────────────────────────────────
 
 function makeId(prefix: string): string {
   return `${prefix}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`
@@ -308,8 +286,6 @@ export function removeVideoFromPlaylist(playlistId: string, videoId: string): vo
   notify()
 }
 
-// ─── Search history ─────────────────────────────────────────────────────────
-
 export function getSearchHistory(): string[] {
   return readArray<string>(KEYS.searchHistory).filter(
     entry => typeof entry === "string" && entry.length > 0,
@@ -329,8 +305,6 @@ export function clearSearchHistory(): void {
   writeArray(KEYS.searchHistory, [])
   notify()
 }
-
-// ─── Import / export ────────────────────────────────────────────────────────
 
 export function exportAllData(): string {
   return JSON.stringify(
@@ -390,8 +364,6 @@ export function importAllData(jsonText: string): boolean {
     return false
   }
 }
-
-// ─── Change subscription ────────────────────────────────────────────────────
 
 export function subscribeStorageChanges(listener: () => void): () => void {
   listeners.add(listener)

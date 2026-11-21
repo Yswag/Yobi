@@ -44,17 +44,14 @@ import { NetSpeedLabel, PlaybackStatsPanel } from "./PlaybackStats"
 export interface PlayerControlsOverlayProps {
   width: number
   height: number
-  // 下拉位移要量的座標空間名稱（掛在靜止的根層，不跟著卡片跑）。
   dragSpace: string
   onOpenQualitySheet?: () => void
   onOpenDanmakuSheet?: () => void
-  // 下拉收成迷你播放器的位移回報，收合動畫由 PlayerHost 依這個值跟手。
   onMinimizeDragChanged?: (dy: number, dx: number) => void
   onMinimizeDragEnded?: (dy: number, dx: number, predictedDy: number) => void
 }
 
 const AUTO_HIDE_MS: number = 4000
-// 進場慢一點、退場快一點，收起時才不會拖泥帶水。
 const CONTROLS_FADE_IN_SECONDS: number = 0.15
 const CONTROLS_FADE_OUT_SECONDS: number = 0.09
 const DOUBLE_TAP_MS: number = 230
@@ -64,10 +61,8 @@ const EDGE_SCRIM_HEIGHT: number = 96
 const SCRUBBER_HEIGHT: number = 22
 const SCRUBBER_TRACK: number = 3
 const SCRUBBER_KNOB: number = 11
-// 64pt 以下一律放大到 44pt 的觸控框（HIG 最小值），視覺尺寸不變。
 const MIN_HIT_SIZE: number = 44
 const SPINNER_BOX: number = 60
-// 網速掛在轉圈正下方；用 offset 不佔版面，控制列開著或收著都對得齊。
 const SPEED_OFFSET_Y: number = 44
 
 function GlassCircle(props: { icon: string; size: number; iconSize: number; onTap: () => void }): VirtualNode {
@@ -96,7 +91,6 @@ function GlassCircle(props: { icon: string; size: number; iconSize: number; onTa
   )
 }
 
-// 頂列與底列的小圖示：畫多大隨人，吃點擊的一律 44×44。
 function IconControl(props: { icon: string; size: number; onTap: () => void }): VirtualNode {
   return (
     <Button action={props.onTap} buttonStyle="plain">
@@ -123,16 +117,11 @@ function rateLabel(rate: number): string {
   return `${rate === Math.floor(rate) ? rate.toFixed(0) : String(rate)}×`
 }
 
-/** 拖曳進度條時的預覽；null 代表沒在拖。 */
 export interface ScrubPreview {
   seconds: number
   duration: number
 }
 
-/**
- * 底部時間、進度條與全螢幕鈕。只有這塊需要跟著 timeupdate 重畫，所以自己訂閱 progress；
- * 控制列其餘部分（標題、按鈕、Menu）不必每個 tick 重建。
- */
 function ProgressBar(props: {
   trackWidth: number
   barWidth: number
@@ -146,7 +135,6 @@ function ProgressBar(props: {
   const store: PlayerStoreSnapshot = usePlayerStore()
   const progress: PlayerProgressSnapshot = usePlayerProgress()
   const duration: number = progress.duration || 0
-  // 直播沒有時間軸：不顯示時長、不能拖、也不靠進度條撐開版面。
   const live: boolean = store.currentItem?.isLive === true
   const scrubWidthRef = useRef<number>(1)
   const scrubTargetRef = useRef<number | null>(null)
@@ -155,7 +143,6 @@ function ProgressBar(props: {
     if (duration <= 0) return
     const x: number = Math.max(0, Math.min(scrubWidthRef.current, d.location.x))
     const value: number = (x / scrubWidthRef.current) * duration
-    // 拖動時只預覽，放開才 seek：逐格 seek 會把本機代理灌滿分段請求。
     scrubTargetRef.current = value
     props.onScrub({ seconds: value, duration })
   }
@@ -183,7 +170,6 @@ function ProgressBar(props: {
     })
   }
 
-  // 細進度條：拖曳直接用位置換算，圓點標出目前播放位置。
   function renderScrubber(width: number): VirtualNode | null {
     if (duration <= 0) return null
     scrubWidthRef.current = width
@@ -292,8 +278,6 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
   const statusRef = useRef<string>(store.status)
   statusRef.current = store.status
 
-  // 播完不要把控制列收掉：收掉後只剩定格，看起來就像卡住。
-  // 重播之後才恢復自動隱藏。
   useEffect(() => {
     if (store.status === "ended") {
       setControlsVisible(true)
@@ -313,7 +297,6 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
   const sideSafeInset: number = Math.max(Device.safeAreaInsets?.leading ?? 0, Device.safeAreaInsets?.trailing ?? 0)
   const edgeInset: number = store.isFullscreen ? Math.max(24, sideSafeInset) : 12
   const trackWidth: number = Math.max(1, props.width - edgeInset * 2)
-  // 底列是「進度條＋全螢幕」，進度條吃掉剩下的寬。
   const barWidth: number = Math.max(1, trackWidth - 4 - MIN_HIT_SIZE)
 
   function clearAutoHide(): void {
@@ -346,7 +329,6 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
     armAutoHide()
   }
 
-  // 拖進度條時先把自動隱藏停掉，放開才重新計時。
   function handleScrub(preview: ScrubPreview | null): void {
     setScrub(preview)
     if (preview) clearAutoHide()
@@ -358,8 +340,6 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
     clearAutoHide()
   }
 
-  // 秒數／章節標題那行是唯讀文字：點它只切換控制列，不參與雙擊跳轉，
-  // 也不會讓後續的點擊接成雙擊。
   function handleChromeTap(): void {
     lastTapAtRef.current = null
     if (controlsVisible) hideControls()
@@ -369,7 +349,6 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
   function handleTap(loc: Point): void {
     const now: number = Date.now()
     const lastTapAt: number | null = lastTapAtRef.current
-    // 直播沒有可跳轉的位置，雙擊只當普通點擊切換控制列。
     if (lastTapAt !== null && now - lastTapAt < DOUBLE_TAP_MS && !store.currentItem?.isLive) {
       lastTapAtRef.current = null
       if (loc.x < props.width * 0.42) {
@@ -381,7 +360,6 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
       }
       return
     }
-    // 不排延遲：隱藏或顯示都當下反應，雙擊只負責跳轉，不會先顯示再收回。
     lastTapAtRef.current = now
     if (controlsVisible) hideControls()
     else showControls()
@@ -408,7 +386,6 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
 
   function handleRetry(): void {
     if (!store.currentItem) return
-    // 重試要重開使用者選的那個畫質，不能默默換回預設。
     if (store.manifest) {
       void selectQuality(store.selectedQualityId)
       return
@@ -455,7 +432,6 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
               iconSize={14}
               onTap={handleBack}
             />
-            {/* 一般模式下方分頁已有完整標題，重複截一行只會擠掉右側按鈕。 */}
             {store.isFullscreen ? (
               <Text
                 font={type.cardTitle + 1}
@@ -507,7 +483,6 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
                   ))}
                 </Menu>
               ) : (
-                // 沒字幕時也留位置，只是淡掉，使用者才知道這部片沒有字幕可選。
                 <VStack frame={{ width: MIN_HIT_SIZE, height: MIN_HIT_SIZE }} contentShape="rect" opacity={0.35}>
                   <Image systemName="captions.bubble" font={17} foregroundStyle={palette.onMedia} />
                 </VStack>
@@ -550,7 +525,6 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
 
           <Spacer />
 
-          {/* 直播不能跳轉，中央只留播放／暫停。 */}
           <HStack spacing={store.isFullscreen ? 44 : 28}>
             {store.currentItem?.isLive ? null : (
               <GlassCircle icon="gobackward.10" size={44} iconSize={18} onTap={() => void seekBy(-10)} />
@@ -653,7 +627,6 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
             frame={{ width: props.width, height: props.height, alignment: "topLeading" }}
             allowsHitTesting={false}
           >
-            {/* 控制列開著時讓出頂列，收起時貼頂。 */}
             <VStack padding={{ leading: edgeInset, top: controlsVisible ? (store.isFullscreen ? 64 : 56) : 10 }}>
               <PlaybackStatsPanel />
             </VStack>
@@ -748,7 +721,6 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
         onTapGesture={{ count: 1, coordinateSpace: "local", perform: handleTap }}
         onDragGesture={{
           minDistance: 10,
-          // 卡片自己會跟著手指移動又要縮小，對它自身量位移會愈拖愈偏；要對靜止的根層量。
           coordinateSpace: props.dragSpace,
           onChanged: handleDragChanged,
           onEnded: handleDragEnded,

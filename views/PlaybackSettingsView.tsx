@@ -45,7 +45,6 @@ const STREAM_MODE_OPTIONS: Option<YoutubeStreamPreference>[] = [
   { label: "SABR 優先", value: "sabr" },
 ]
 
-// Stored values may predate the option list; snap to the closest so the picker always shows a selection.
 export function nearest(options: Option<number>[], value: number): number {
   let best: number = options[0].value
   for (const option of options) {

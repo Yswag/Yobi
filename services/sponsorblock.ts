@@ -94,7 +94,6 @@ export async function fetchSponsorSegments(
   const id = (rawId ?? "").trim()
   if (!id) return []
 
-  // 全部分類都取消 = 不想跳任何東西，不是「用預設值」。
   if (categories.length === 0) return []
   const allowed = categories
   const key = cacheKey(provider, id, allowed)
@@ -122,7 +121,6 @@ export async function fetchSponsorSegments(
   }
 }
 
-/** 只取目前分P 的片段；沒有對應的 cid 就退回全部（cid 對不上時至少還有功能）。 */
 export function filterSegmentsForCid(
   segments: readonly SponsorSegment[],
   cid?: number,
@@ -132,7 +130,6 @@ export function filterSegmentsForCid(
   return matched.length > 0 ? matched : segments.slice()
 }
 
-/** Returns the segment covering `currentTimeSec`, ignoring `poi` highlights. */
 export function findActiveSponsorSegment(
   segments: readonly SponsorSegment[],
   currentTimeSec: number,

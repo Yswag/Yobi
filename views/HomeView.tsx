@@ -43,7 +43,6 @@ type LayoutMode = "grid" | "row"
 
 const CONTINUE_CARD_WIDTH: number = 220
 const CONTINUE_LIMIT: number = 8
-// 看到這個比例就算看完，不再放進繼續觀看。
 const FINISHED_RATIO: number = 0.95
 
 function entryRatio(entry: WatchHistoryEntry): number {
@@ -57,7 +56,6 @@ function continueEntriesOf(history: WatchHistoryEntry[]): WatchHistoryEntry[] {
     .slice(0, CONTINUE_LIMIT)
 }
 
-// 播放中每幾秒就存一次進度；只在順序或進度條跨過 5% 時才重繪首頁。
 function continueSignature(entries: WatchHistoryEntry[]): string {
   return entries
     .map((entry: WatchHistoryEntry): string => `${entry.item.id}:${entry.cid ?? entry.page ?? 0}:${Math.floor(entryRatio(entry) * 20)}`)
@@ -125,7 +123,6 @@ async function openLinkFlow(): Promise<void> {
       placeholder: "https://... 或 BV1xx411c7mD",
       confirmLabel: "開啟",
     })
-    // 取消是 undefined，不是 null；空白也只算取消。
     if (typeof input !== "string" || !input.trim()) return
     detected = await detectAnyInput(input)
   }

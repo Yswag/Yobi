@@ -44,7 +44,6 @@ function formatBitrate(bitsPerSecond: number | undefined): string | null {
   return mbps >= 10 ? `${Math.round(mbps)} Mbps` : `${mbps.toFixed(1)} Mbps`
 }
 
-/** 播放器實際回報的解碼器與硬體加速，加上目前畫質的標稱碼率。 */
 function decoderSummary(selected: VideoQualityTrack | undefined): string | null {
   let info: VideoPlaybackInfo | null = null
   try {

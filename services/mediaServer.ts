@@ -4,16 +4,8 @@ import { getBiliStreamAccess } from "./localProxy"
 import type { BiliStreamAccess } from "./localProxy"
 import type { SidxEntry } from "./sidx"
 
-/**
- * 串流用的本機 HTTP 伺服器（node:net 自寫 HTTP/1.1）。
- * 只在回應「媒體位元組」時使用：先送 header、每抓一格就寫一段、socket 關閉就停手。
- * 清單只有幾 KB，順便同源供檔，讓播放器不必跨 port 解析相對網址。
- */
-
-/** 一條軌在 HLS 裡需要的東西；位元組仍由 localProxy 的預抓器提供。 */
 export interface MediaTrack {
   itag: number
-  /** localProxy 的來源 id（registerBiliFileSource 回傳的那個）。 */
   sourceId: string
   mimeType: string
   initStart: number
@@ -23,25 +15,20 @@ export interface MediaTrack {
 
 export interface MediaSession {
   master: string
-  /** itag → media playlist 內容。 */
   media: Map<number, string>
   tracks: Map<number, MediaTrack>
 }
 
 interface Session {
   session: MediaSession
-  /** 追蹤每條軌的預抓器，順便讓同一個 sourceId 不必重查。 */
   access: Map<number, BiliStreamAccess>
 }
 
 const PIPELINE: number = 6
-// 等格子時沒東西可寫，socket 閒置時間不能比單格逾時短，不然會被自己砍掉。
 const IDLE_TIMEOUT_MS: number = 60000
-/** 同一格最多要幾次（預抓器內部已經會重試一次）。 */
 const GRID_TRIES: number = 3
 
 const sessions: Map<string, Session> = new Map()
-/** 最近註冊的 session 就是正在播的；只有它的預抓器會被保住。 */
 let currentSessionId: string | null = null
 let server: Server | null = null
 let serverPort: number = 0
@@ -54,17 +41,12 @@ function headerBlock(status: string, headers: Record<string, string>): string {
   return lines.join("\r\n")
 }
 
-/** HTTP 要求標頭都是 ASCII；逐位元組組字串比 Buffer 型別可靠。 */
 function latin1(bytes: Uint8Array): string {
   let out: string = ""
   for (let index = 0; index < bytes.length; index++) out += String.fromCharCode(bytes[index])
   return out
 }
 
-/**
- * 背壓時等播放器讀完，不設時限：音軌一格 1 MB 要播一分多鐘才讀得完，暫停時更久。
- * 播放器不要了會關連線，那時才算失敗。
- */
 async function writeChunk(socket: Socket, bytes: Uint8Array): Promise<boolean> {
   if (socket.destroyed) return false
   if (socket.write(bytes)) return true
@@ -81,7 +63,6 @@ async function writeChunk(socket: Socket, bytes: Uint8Array): Promise<boolean> {
   })
 }
 
-/** 最近一次抓不到片段的說明，給播放統計面板看。 */
 let lastFailure: string | null = null
 
 function noteFailure(text: string): void {
@@ -92,10 +73,8 @@ export function lastMediaFailure(): string | null {
   return lastFailure
 }
 
-/** 播放器等一格超過這麼久就記下來，對照卡頓的時間點。 */
 const SLOW_GRID_MS: number = 1000
 
-/** 要一格；失敗就再要一次，換線路由 localProxy 自己處理。 */
 async function fetchGrid(access: BiliStreamAccess, index: number): Promise<Uint8Array | null> {
   const startedAt: number = Date.now()
   for (let attempt = 0; attempt < GRID_TRIES; attempt++) {
@@ -114,11 +93,6 @@ async function fetchGrid(access: BiliStreamAccess, index: number): Promise<Uint8
   return null
 }
 
-/**
- * 回答 [start, end] 這段：第一格到就先送 header，之後每格到就寫一段；
- * 播放器斷線（seek 很常發生）就停手，不再往後抓。
- * 中途拿不到格子時只能斷線（長度已經宣告了），所以抓格子本身先重試。
- */
 async function streamRange(
   socket: Socket,
   track: MediaTrack,
@@ -131,7 +105,6 @@ async function streamRange(
   const requested: RegExpMatchArray | null = /bytes=(\d*)-(\d*)/.exec(rangeHeader ?? "")
   const from: number = requested && requested[1] ? Math.max(start, Number(requested[1])) : start
   const total: number | null = access.total()
-  // 檔尾沒那麼多位元組就先修正結尾，不要宣告了長度又寫不滿。
   const rawTo: number = requested && requested[2] ? Math.min(end, Number(requested[2])) : end
   const to: number = total !== null ? Math.min(rawTo, total - 1) : rawTo
   if (to < from) {
@@ -152,7 +125,6 @@ async function streamRange(
     "Content-Type": track.mimeType || "video/mp4",
     "Content-Length": String(to - from + 1),
     "Accept-Ranges": "bytes",
-    // Content-Range 只能出現在 206；跟 200 一起送 ffmpeg 會回 Invalid data。
     ...(partial ? { "Content-Range": `bytes ${from}-${to}/${total ?? "*"}` } : {}),
   }
 
@@ -174,7 +146,6 @@ async function streamRange(
 
   const first: Uint8Array | null = await pending.get(firstIndex)!
   if (!first || aborted()) {
-    // header 還沒送，來得及回一個乾淨的錯誤。
     if (!socket.destroyed) {
       socket.write(headerBlock("503 Service Unavailable", { "Content-Type": "text/plain", "Content-Length": "0" }))
       socket.end()
@@ -183,14 +154,12 @@ async function streamRange(
   }
 
   socket.write(headerBlock(partial ? "206 Partial Content" : "200 OK", headers))
-  // 開始送 body 後就不再用閒置逾時：播放器照播放速度讀，長時間沒進度是正常的。
   socket.setTimeout(0)
 
   for (let index = firstIndex; index <= lastIndex; index++) {
     if (aborted()) return
     const bytes: Uint8Array | null = index === firstIndex ? first : await pending.get(index)!
     if (!bytes) {
-      // 已經宣告長度了，與其送半截讓播放器判 Invalid data，不如把連線切掉。
       noteFailure(`片段 ${from}-${to} 第 ${index} 格拿不到`)
       socket.destroy()
       return
@@ -276,7 +245,6 @@ function route(socket: Socket, method: string, path: string, rangeHeader: string
     return
   }
   if (audio) {
-    // 音軌不切段：整條當一片送，避免每個接縫的 AAC priming 造成雜音。
     const head: SidxEntry | undefined = track.entries[0]
     const tail: SidxEntry | undefined = track.entries[track.entries.length - 1]
     if (!head || !tail) {
@@ -356,7 +324,6 @@ async function start(): Promise<number> {
   return starting
 }
 
-/** 註冊一個 HLS session，回傳 master playlist 的本地網址。 */
 export async function registerMediaSession(id: string, session: MediaSession): Promise<string> {
   const port: number = await start()
   lastFailure = null
@@ -374,7 +341,6 @@ export function unregisterMediaSession(id: string): void {
   sessions.delete(id)
 }
 
-/** 產生 HLS 通路用的相對網址；播放清單與片段同源。 */
 export function mediaPaths(id: string, itag: number, sequence: number): {
   media: string
   init: string

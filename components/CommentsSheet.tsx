@@ -178,8 +178,6 @@ export function CommentsSheet(props: CommentsSheetProps): VirtualNode {
     if (willExpand && loaded === 0 && comment.replyCursor) props.onLoadReplies(comment.id)
   }
 
-  // VStack 會一次建完所有孩子，footer 一掛就會 onAppear，自動載入會一路連抓到最後一頁，
-  // 所以這裡只留明確的「載入更多」按鈕（原本的 onAppear 觸發只適用 Lazy 容器）。
   const footer: VirtualNode = (
     <VStack
       padding={{ horizontal: space.page, vertical: 14 }}
@@ -198,8 +196,6 @@ export function CommentsSheet(props: CommentsSheetProps): VirtualNode {
   return (
     <VStack spacing={0} frame={{ maxWidth: "infinity" }}>
       {sortBar}
-      {/* 不用 LazyVStack：追加留言後它會用估算行高重算，往回捲時位置會飄、甚至到不了頂。
-          一次一頁 20 筆、列數有限，用 VStack 讓每列高度都是真的。 */}
       <VStack spacing={0} padding={{ top: 4 }} frame={{ maxWidth: "infinity" }}>
         {props.comments.map((comment: CommentItem) => (
           <CommentThread

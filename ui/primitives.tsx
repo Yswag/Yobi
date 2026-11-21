@@ -146,7 +146,6 @@ export function SearchField(props: {
   value: string
   prompt: string
   onChange: (value: string) => void
-  /** 按鍵盤的「搜尋」。不給就是邊打邊篩。 */
   onCommit?: () => void
 }): VirtualNode {
   const onCommit: (() => void) | undefined = props.onCommit
@@ -285,10 +284,8 @@ export function Thumbnail(props: {
     : props.durationText ?? (props.duration && props.duration > 0 ? formatDuration(props.duration) : null)
   const compact: boolean = props.width !== undefined && props.width < 200
   const inset: number = compact ? 6 : 10
-  // 請求縮圖大小而不是原圖：捲動中每張都解一張 1920×1080 是最貴的一項。
   const image: string | undefined = thumbnailUrl(props.url, props.width ?? 480)
 
-  // A 16:9 plate carries the layout; the scale-to-fill image sits in its overlay so it can't resize the card.
   return (
     <Rectangle
       fill="secondarySystemFill"
@@ -298,8 +295,6 @@ export function Thumbnail(props: {
       aspectRatio={{ value: 16 / 9, contentMode: "fit" }}
       overlay={
         <ZStack frame={{ maxWidth: "infinity", maxHeight: "infinity" }}>
-          {/* 圖片掛在標籤層的 background：不是 16:9 的縮圖（例如 4:3 的 hqdefault）填滿後會比卡片高，
-              跟標籤層當兄弟會把它撐高，上緣的來源標籤與下緣的進度條就被裁掉。 */}
           <VStack
             spacing={0}
             frame={{ maxWidth: "infinity", maxHeight: "infinity" }}

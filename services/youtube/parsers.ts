@@ -1,9 +1,3 @@
-/**
- * Innertube 巢狀 JSON → 統一資料模型。
- *
- * 同時支援舊版 `videoRenderer` / `compactVideoRenderer` / `gridVideoRenderer`
- * 與新版首頁大量使用的 `lockupViewModel`。
- */
 
 import type {
   ChannelDetail,
@@ -25,7 +19,6 @@ const VIDEO_RENDERER_KEYS: string[] = [
   "lockupViewModel",
   "playlistVideoRenderer",
   "videoWithContextRenderer",
-  // 登入後的頻道內搜尋：沒有縮圖與時長。
   "channelVideoPlayerRenderer",
 ]
 
@@ -38,7 +31,6 @@ function asArray(value: unknown): unknown[] {
   return Array.isArray(value) ? value : []
 }
 
-/** 讀出 simpleText / runs / content / 純字串。 */
 export function readText(node: unknown): string {
   if (node === null || node === undefined) return ""
   if (typeof node === "string") return node
@@ -60,7 +52,6 @@ export function readText(node: unknown): string {
 function readThumbnailUrl(node: unknown): string {
   const object: JsonObject | null = asObject(node)
   if (!object) return ""
-  // Renderers list `thumbnails`; view models (lockupViewModel) list `sources`.
   const thumbnails: unknown[] = asArray(object["thumbnails"] ?? object["sources"])
   let best: JsonObject | null = null
   let bestWidth: number = -1
@@ -82,7 +73,6 @@ function readThumbnailUrl(node: unknown): string {
   return ""
 }
 
-/** 深度尋找第一個縮圖來源（lockupViewModel 的結構很浮動）。 */
 function findThumbnailDeep(node: unknown, depth: number = 0): string {
   if (!node || depth > 8) return ""
   if (Array.isArray(node)) {
@@ -103,7 +93,6 @@ function findThumbnailDeep(node: unknown, depth: number = 0): string {
   return ""
 }
 
-/** `"12:34"` / `"1:02:03"` → 秒數。 */
 export function parseDurationText(text: string): number {
   if (!text) return 0
   const trimmed: string = text.trim()
@@ -115,7 +104,6 @@ export function parseDurationText(text: string): number {
     if (third === undefined) return first * 60 + second
     return first * 3600 + second * 60 + third
   }
-  // ISO 8601 形式（PT1H2M3S）
   const iso: RegExpMatchArray | null = trimmed.match(/^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$/)
   if (iso) {
     return Number(iso[1] ?? 0) * 3600 + Number(iso[2] ?? 0) * 60 + Number(iso[3] ?? 0)
@@ -123,7 +111,6 @@ export function parseDurationText(text: string): number {
   return 0
 }
 
-/** `"1.2M views"` / `"1,234 views"` / `"1.2萬次觀看"` → 數值。 */
 export function parseViewCountText(text: string): number | undefined {
   if (!text) return undefined
   const normalized: string = text.replace(/,/g, "").trim()
@@ -160,7 +147,6 @@ function parsePublishedAt(text: string): number | undefined {
   if (numberMatch) {
     return now - Number(numberMatch[1]) * (unitMs[numberMatch[2]] ?? 0)
   }
-  // lockup 的縮寫寫法：1y ago / 4w ago / 3d ago
   const shortMatch: RegExpMatchArray | null = lower.match(/(\d+)\s*(s|m|h|d|w|y)\s+ago/)
   if (shortMatch) {
     const shorts: Record<string, string> = { s: "second", m: "minute", h: "hour", d: "day", w: "week", y: "year" }
@@ -199,7 +185,6 @@ function browseIdOf(command: unknown): string {
   return browse && typeof browse["browseId"] === "string" ? browse["browseId"] : ""
 }
 
-/** Channel id off a lockup metadata part, which hides its endpoint in `commandRuns`. */
 function commandRunBrowseId(node: unknown): string {
   const object: JsonObject | null = asObject(node)
   if (!object) return ""
@@ -211,7 +196,6 @@ function commandRunBrowseId(node: unknown): string {
   return runNavigationBrowseId(node)
 }
 
-/** 「頻道會員專屬」：lockup 用 `badgeViewModel`，`videoRenderer` 用 `metadataBadgeRenderer`。 */
 function isMembersBadge(style: string, label: string): boolean {
   if (style.toUpperCase().includes("MEMBERS")) return true
   return /members only|會員|会员/i.test(label)
@@ -287,7 +271,6 @@ function fromVideoRenderer(renderer: JsonObject): UnifiedVideoItem | null {
     "yt",
     rawId,
     title,
-    // mqdefault 是 16:9 且每部影片都有，hqdefault 是帶黑邊的 4:3。
     readThumbnailUrl(renderer["thumbnail"]) || `https://i.ytimg.com/vi/${rawId}/mqdefault.jpg`,
     parseDurationText(lengthText),
     parseViewCountText(viewText),
@@ -328,7 +311,6 @@ function fromLockupViewModel(renderer: JsonObject): UnifiedVideoItem | null {
   const title: string = readText(metadata?.["title"])
   const rows: unknown[] = asArray(asObject(asObject(metadata?.["metadata"])?.["contentMetadataViewModel"])?.["metadataRows"])
 
-  // Home and next carry the owner avatar under `metadata.image`; channel pages leave it out.
   const decorated: JsonObject | null = asObject(asObject(metadata?.["image"])?.["decoratedAvatarViewModel"])
   const ownerAvatar: string =
     readThumbnailUrl(asObject(asObject(decorated?.["avatar"])?.["avatarViewModel"])?.["image"]) ||
@@ -337,7 +319,6 @@ function fromLockupViewModel(renderer: JsonObject): UnifiedVideoItem | null {
     asObject(asObject(asObject(decorated?.["rendererContext"])?.["commandContext"])?.["onTap"])?.["innertubeCommand"],
   )
 
-  // Each row joins several facts ("8.5K views · 2 weeks ago"), so classify part by part.
   const parts: string[] = []
   const partNodes: unknown[] = []
   let membersOnly: boolean = false
@@ -357,7 +338,6 @@ function fromLockupViewModel(renderer: JsonObject): UnifiedVideoItem | null {
     }
   }
 
-  // Duration badges sit ~8 levels deep inside thumbnail overlays.
   const imageTexts: string[] = []
   collectStrings(renderer["contentImage"], imageTexts, 0, 14)
   const durationText: string = imageTexts.find((text: string): boolean => /^\d+:\d{2}(?::\d{2})?$/.test(text.trim())) ?? ""
@@ -374,16 +354,13 @@ function fromLockupViewModel(renderer: JsonObject): UnifiedVideoItem | null {
     const text: string = parts[index]
     if (/watching|正在觀看|正在观看|人觀看中/i.test(text)) {
       watching = true
-      // 「3,922 人正在觀看」也要把數字留下來，別只當成直播標記。
       if (viewCount === undefined) viewCount = parseViewCountText(text)
       continue
     }
-    // 「1y ago」「3 週前」這類才是發佈時間，不要拿單個「前」去認。
     if (/\d/.test(text) && /(ago|前)/i.test(text) && !/view|觀看|观看/i.test(text)) {
       if (!publishedText) publishedText = text
       continue
     }
-    // 觀看數可能是「72M」這種純數量，不一定帶 "views"。
     if (/\d/.test(text) && (/view|觀看|观看|次/i.test(text) || bareCount.test(text))) {
       if (viewCount === undefined) viewCount = parseViewCountText(text)
       continue
@@ -434,7 +411,6 @@ function fromRenderer(renderer: JsonObject): UnifiedVideoItem | null {
   return fromVideoRenderer(renderer)
 }
 
-/** 從任意巢狀回應撈出所有影片項目（含 lockupViewModel）。 */
 export function extractVideoItems(root: unknown): UnifiedVideoItem[] {
   const results: UnifiedVideoItem[] = []
   const seen: Set<string> = new Set()
@@ -472,9 +448,7 @@ export function extractVideoItems(root: unknown): UnifiedVideoItem[] {
   return results
 }
 
-/** 解析 next response 的推薦影片（`compactVideoRenderer` 與新版 `lockupViewModel` 都吃）。 */
 export function parseRelatedVideos(next: JsonObject): UnifiedVideoItem[] {
-  // 推薦清單在 contents.twoColumnWatchNextResults.secondaryResults 裡，外層再包一層同名節點。
   const watch: JsonObject | null = asObject(asObject(next["contents"])?.["twoColumnWatchNextResults"])
   const holder: JsonObject | null = asObject(watch?.["secondaryResults"] ?? next["secondaryResults"])
   const nested: unknown[] = asArray(asObject(holder?.["secondaryResults"])?.["results"])
@@ -499,11 +473,9 @@ export function parseRelatedVideos(next: JsonObject): UnifiedVideoItem[] {
   }
   if (items.length > 0) return items
 
-  // 其他版型（例如 reel / 精選）直接掃整塊推薦區。
   return extractVideoItems(holder ?? next)
 }
 
-/** 解析 player response 的字幕軌。 */
 export function parseSubtitleTracks(player: JsonObject): SubtitleTrackInfo[] {
   const tracks: unknown[] = asArray(
     asObject(asObject(player["captions"])?.["playerCaptionsTracklistRenderer"])?.["captionTracks"],
@@ -514,7 +486,6 @@ export function parseSubtitleTracks(player: JsonObject): SubtitleTrackInfo[] {
     if (!track) continue
     const rawUrl: string = String(track["baseUrl"] ?? track["url"] ?? "")
     if (!rawUrl) continue
-    // 有些 client （SABR 路線）給的是「/api/timedtext?…」這種相對路徑。
     const url: string = rawUrl.startsWith("//")
       ? `https:${rawUrl}`
       : rawUrl.startsWith("/") ? `https://www.youtube.com${rawUrl}` : rawUrl
@@ -536,11 +507,8 @@ function parseTimestamp(text: string): number {
   return parseDurationText(text)
 }
 
-/** 章節：支援 macroMarkersListRenderer 與 playerBar chapters。 */
 export function parseChapters(next: JsonObject): VideoChapter[] {
   const found: VideoChapter[] = []
-  // 兩個 renderer 帶的是同一份章節清單（各自還會出現兩遍），所以用「開始秒數」當唯一鍵；
-  // 原本拿 title + 毫秒去比，跟 macro 的秒數永遠對不上，整排就重複了。
   const seen: Set<number> = new Set()
 
   const visit = (node: unknown, depth: number): void => {
@@ -627,7 +595,6 @@ function parseCommentEntity(entity: JsonObject): CommentItem | null {
   const content: string = readText(properties["content"])
   if (!commentId || !content) return null
 
-  // author / toolbar 是同一層的兄弟節點，不在 properties 裡。
   const author: JsonObject | null = asObject(entity["author"])
   const toolbar: JsonObject | null = asObject(entity["toolbar"])
   const likeText: string = readText(toolbar?.["likeCountNotliked"]) || readText(toolbar?.["likeCountLiked"])
@@ -648,7 +615,6 @@ function parseCommentEntity(entity: JsonObject): CommentItem | null {
   return item
 }
 
-/** 續頁 token：continuationItemRenderer 可能直挂 endpoint，也可能是「Show more replies」按鈕。 */
 function continuationTokenOf(item: JsonObject | null): string | null {
   if (!item) return null
   const renderer: JsonObject | null = asObject(item["continuationItemRenderer"])
@@ -659,15 +625,10 @@ function continuationTokenOf(item: JsonObject | null): string | null {
   return typeof command?.["token"] === "string" ? String(command["token"]) : null
 }
 
-/** 一組項目陣列最後一項若是續頁項目，取出它的 token。 */
 export function lastItemToken(items: unknown[]): string | null {
   return continuationTokenOf(asObject(items[items.length - 1]))
 }
 
-/**
- * 續頁 token：把整棵樹的 token 都收起來，排除剛用掉的那個，取**最長**的。
- * browse 的主 feed token 最長；取第一個／最深的那個會拿到子貨架的 token，YouTube 會回 400。
- */
 function collectTokens(node: unknown, out: string[], depth: number = 0): void {
   if (!node || typeof node !== "object" || depth > 30) return
   if (Array.isArray(node)) {
@@ -696,10 +657,6 @@ export function findContinuationToken(response: JsonObject, currentToken: string
   return best || null
 }
 
-/**
- * 排序 chip 的清單（標題＋它自己的 continuation token）。
- * 順序通常是 Latest / Popular / Oldest，但依標籤挑才不會因語系或頻道差異挑錯。
- */
 export function extractSortChips(response: JsonObject): { label: string; token: string }[] {
   const chips: JsonObject[] = []
 
@@ -731,14 +688,10 @@ export function extractSortChips(response: JsonObject): { label: string; token: 
   })
 }
 
-/**
- * 排序 chip 的 continuation token。保留給只需要 token 的呼叫端。
- */
 export function extractSortTokens(response: JsonObject): string[] {
   return extractSortChips(response).map((chip: { label: string; token: string }): string => chip.token)
 }
 
-/** 回應裡所有 continuation token（依出現順序）。 */
 export function collectContinuationTokens(response: JsonObject): string[] {
   const tokens: string[] = []
 
@@ -759,10 +712,6 @@ export function collectContinuationTokens(response: JsonObject): string[] {
   return tokens
 }
 
-/**
- * 頻道「關於」頁的資訊；`videoCountText` 是精確數字（例：`1,014 videos`）。
- * header 上那行會被縮寫（mrbeast 顯示 `1K videos`），所以總數要從這裡拿。
- */
 export interface AboutChannelInfo {
   videoCountText?: string
   subscriberCountText?: string
@@ -801,7 +750,6 @@ export function parseAboutChannel(response: JsonObject): AboutChannelInfo | null
   }
 }
 
-/** 頻道影片分頁：續頁回應只要影片與下一個 token。 */
 export function parseChannelVideosPage(
   response: JsonObject,
   currentToken: string = "",
@@ -809,7 +757,6 @@ export function parseChannelVideosPage(
   return { videos: extractVideoItems(response), next: findContinuationToken(response, currentToken) }
 }
 
-/** 回應裡最後一組項目陣列的續頁 token（留言頁與回覆頁共用）。 */
 export function findPageCursor(response: JsonObject): string | null {
   let cursor: string | null = null
 
@@ -822,7 +769,6 @@ export function findPageCursor(response: JsonObject): string | null {
     const object: JsonObject | null = asObject(node)
     if (!object) return
     for (const key of Object.keys(object)) {
-      // 整塊跳過：展開回覆的 token 也長在一樣的陣列裡，遞迴下去會認錯。
       if (key === "continuationItems") {
         const token: string | null = lastItemToken(asArray(object[key]))
         if (token) cursor = token
@@ -836,7 +782,6 @@ export function findPageCursor(response: JsonObject): string | null {
   return cursor
 }
 
-/** 解析留言（舊版 commentRenderer 與新版 commentEntityPayload 皆支援）。 */
 export function parseComments(next: JsonObject): CommentItem[] {
   const comments: CommentItem[] = []
   const seen: Set<string> = new Set()
@@ -851,7 +796,6 @@ export function parseComments(next: JsonObject): CommentItem[] {
     const object: JsonObject | null = asObject(node)
     if (!object) return
 
-    // 每則留言的回覆 token 掛在 thread 上，留言本體卻在 frameworkUpdates，先記下來再配對。
     const thread: JsonObject | null = asObject(object["commentThreadRenderer"])
     if (thread) {
       const viewModel: JsonObject | null = asObject(thread["commentViewModel"])
@@ -892,7 +836,6 @@ export function parseComments(next: JsonObject): CommentItem[] {
   return comments
 }
 
-/** 播放頁的頻道區塊：next 的 videoSecondaryInfoRenderer.owner.videoOwnerRenderer。 */
 interface VideoOwnerInfo {
   name: string
   avatar: string
@@ -900,13 +843,11 @@ interface VideoOwnerInfo {
   collaborators: VideoCollaborator[]
 }
 
-// 合作頻道的副標題長這樣：「‎⁨@handle⁩ • ⁨6.73M subscribers⁩」。
 function collaboratorSubscribers(subtitle: string): string {
   const parts: string[] = subtitle.replace(/[\u200e\u200f\u2066-\u2069]/g, "").split("•")
   return parts.length > 1 ? parts[parts.length - 1].trim() : ""
 }
 
-/** 合作影片：owner 點下去的 Collaborators 對話框列出每個頻道。 */
 function parseCollaborators(owner: JsonObject): VideoCollaborator[] {
   const dialog: JsonObject | null = asObject(
     asObject(asObject(asObject(owner["navigationEndpoint"])?.["showDialogCommand"])?.["panelLoadingStrategy"])?.["inlineContent"],
@@ -955,13 +896,6 @@ function parseVideoOwner(next: JsonObject): VideoOwnerInfo | null {
   return null
 }
 
-/**
- * 直播的「正在觀看」人數。
- *
- * 直播的 `videoDetails.viewCount` 恆為 0，人數只在 `next` 的
- * `videoPrimaryInfoRenderer.viewCount.videoViewCountRenderer`（`originalViewCount`）。
- * 一般影片也有同一個 renderer，所以要看 `isLive` 或文字有沒有「觀看中」才算。
- */
 export function parseLiveViewerCount(next: JsonObject | null): number | undefined {
   if (!next) return undefined
   let viewers: number | undefined
@@ -991,7 +925,6 @@ export function parseLiveViewerCount(next: JsonObject | null): number | undefine
   return viewers
 }
 
-/** 觀看頁的發佈時間：優先用相對時間（`15 小時前`），沒有才退回 `dateText`。 */
 function parsePrimaryDateText(next: JsonObject): string {
   const results: JsonObject | null = asObject(
     asObject(asObject(asObject(next["contents"])?.["twoColumnWatchNextResults"])?.["results"])?.["results"],
@@ -1004,7 +937,6 @@ function parsePrimaryDateText(next: JsonObject): string {
   return ""
 }
 
-/** `2026-11-18T21:09:49-08:00` 這種原字串不能直接上畫面。 */
 function formatPublishDate(iso: string): string {
   if (!iso) return ""
   const at: number = Date.parse(iso)
@@ -1017,7 +949,6 @@ function formatPublishDate(iso: string): string {
   return iso.slice(0, 10)
 }
 
-/** 解析 player + next 成 VideoDetail。 */
 export function parseVideoDetail(videoId: string, player: JsonObject, next: JsonObject | null): VideoDetail {
   const details: JsonObject = asObject(player["videoDetails"]) ?? {}
   const microformat: JsonObject =
@@ -1063,7 +994,6 @@ export function parseVideoDetail(videoId: string, player: JsonObject, next: Json
   return item
 }
 
-/** 解析頻道頁。 */
 export function parseChannelDetail(channelId: string, browse: JsonObject): ChannelDetail {
   const metadata: JsonObject = asObject(browse["metadata"]) ?? {}
   const channelMetadata: JsonObject = asObject(metadata["channelMetadataRenderer"]) ?? {}
@@ -1087,7 +1017,6 @@ export function parseChannelDetail(channelId: string, browse: JsonObject): Chann
     readThumbnailUrl(asObject(channelMetadata["banner"])) ||
     readThumbnailUrl(asObject(asObject(asObject(pageHeader["banner"])?.["imageBannerViewModel"])?.["image"]))
 
-  // 頻道的影片分頁不帶作者；合作影片則帶「A and B」，保留。
   const videos: UnifiedVideoItem[] = extractVideoItems(browse).map((video: UnifiedVideoItem): UnifiedVideoItem => {
     if (video.authorName && video.authorId) return video
     return {
@@ -1098,7 +1027,6 @@ export function parseChannelDetail(channelId: string, browse: JsonObject): Chann
     }
   })
 
-  // metadata 那行是「527M subscribers · 1K videos」，拆成訂閱數與影片總數。
   const headerMetadata: JsonObject | null = asObject(pageHeader["metadata"])
   const metaParts: string[] = []
   for (const row of asArray(asObject(headerMetadata?.["contentMetadataViewModel"])?.["metadataRows"])) {

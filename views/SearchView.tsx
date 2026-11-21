@@ -147,7 +147,6 @@ export function SearchView(props: SearchViewProps): VirtualNode {
   const [history, setHistory] = useState<string[]>(getSearchHistory())
   const [linkLoading, setLinkLoading] = useState<boolean>(false)
   const [linkError, setLinkError] = useState<string | null>(null)
-  // Reported by the system when the search tab expands; never set it to false ourselves (that cancels the tab).
   const searchPresented = useObservable<boolean>(false)
 
   const loadResults = async (keyword: string, nextFilter: FeedFilter): Promise<void> => {

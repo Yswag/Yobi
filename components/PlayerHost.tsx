@@ -25,26 +25,18 @@ import { DanmakuSheet, QualitySheet } from "./PlaybackSheets"
 import { PlayerControlsOverlay } from "./PlayerControlsOverlay"
 import { WatchView } from "../views/WatchView"
 
-// Sized and inset to line up with the floating tab bar, like the system bottom accessory.
 const MINI_HEIGHT: number = 56
 const MINI_MARGIN: number = 21
 const MINI_RADIUS: number = MINI_HEIGHT / 2
-// A plain rounded rect, pulled in far enough that its leading corners clear the capsule's curve.
 const MINI_VIDEO_INSET_V: number = 8
 const MINI_VIDEO_INSET_LEADING: number = 10
 const MINI_VIDEO_RADIUS: number = 10
-// From the bottom safe-area edge up to the tab bar's top edge, plus the gap above it.
 const TAB_BAR_CLEARANCE: number = 44 + 8
-/** Space pages keep free above the tab bar while a video is loaded. */
 export const MINI_PLAYER_RESERVED_HEIGHT: number = MINI_HEIGHT + 8
 const MORPH_SECONDS: number = 0.38
-// Layers that belong to only one end of the morph leave right away and arrive in its last stretch,
-// so nothing is half-visible while the card is still changing shape.
 const FADE_OUT_SECONDS: number = 0.12
 const FADE_IN_SECONDS: number = 0.2
-// 手勢掛在會移動的卡片上，位移一定要對一個「靜止」的座標空間量，不然誤差會隨卡片下移累積。
 const PLAYER_DRAG_SPACE: string = "playerRoot"
-// 卡片上緣跟著手指 1:1 走，所以「拖到迷你播放器位置」剛好就是收完；放開時走過這個比例才收。
 const MINIMIZE_DRAG_RATIO: number = 0.45
 
 function clamp01(value: number): number {
@@ -55,7 +47,6 @@ function mix(from: number, to: number, t: number): number {
   return from + (to - from) * t
 }
 
-/** Same shape at any point between expanded and mini, so the card can follow the finger. */
 function blendGeometry(from: CardGeometry, to: CardGeometry, t: number): CardGeometry {
   return {
     width: mix(from.width, to.width, t),
@@ -93,23 +84,15 @@ interface CardGeometry {
   radius: number
 }
 
-/**
- * The only place the player controller is bound to a surface. It stays mounted for the app's lifetime;
- * expanding, minimizing, fullscreen and closing only change this card's frame and offset, so the video
- * view never detaches and re-attaches.
- */
 export function PlayerHost(props: {
   onOpenChannel: (provider: Provider, authorId: string, authorName: string, avatarUrl?: string) => void
 }): VirtualNode {
   const store: PlayerStoreSnapshot = usePlayerStore()
   const [showQualitySheet, setShowQualitySheet] = useState<boolean>(false)
   const [showDanmakuSheet, setShowDanmakuSheet] = useState<boolean>(false)
-  // 拖曳過程中手指的垂直位移（pt）；null 代表手指不在畫面上。
   const [dragTranslation, setDragTranslation] = useState<number | null>(null)
-  // 展開到迷你的垂直距離，每次重繪更新，回呼裡要用最新值。
   const dragTravelRef = useRef<number>(1)
 
-  // 這個元件隨播放進度重繪；給 WatchView 的回呼要固定，不然整個播放頁跟著重繪。
   const onOpenChannelRef = useRef(props.onOpenChannel)
   onOpenChannelRef.current = props.onOpenChannel
   const openChannel = useCallback(
@@ -121,34 +104,26 @@ export function PlayerHost(props: {
   const openQualitySheet = useCallback((): void => setShowQualitySheet(true), [])
   const openDanmakuSheet = useCallback((): void => setShowDanmakuSheet(true), [])
 
-  // 垂直往下的拖曳才跟手；偏水平或往上就讓卡片留在展開位置。
   const handleMinimizeDragChanged = useCallback((dy: number, dx: number): void => {
     setDragTranslation(dy > 0 && dy > Math.abs(dx) ? dy : 0)
   }, [])
   const handleMinimizeDragEnded = useCallback((dy: number, dx: number, predictedDy: number): void => {
     const travel: number = dragTravelRef.current
-    // 甩一下也算：預測位移最多多算 1/4 路程，免得小閃一下就收。
     const projected: number = Math.max(dy, Math.min(predictedDy, dy + travel * 0.25))
-    // 先換模式再清位移：兩個更新若分成兩次重繪，中途也不會退回展開的幾何。
     if (projected > travel * MINIMIZE_DRAG_RATIO && dy > Math.abs(dx)) minimizeToMiniPlayer()
     setDragTranslation(null)
   }, [])
 
-  // Keep drawing the last video while the card slides away after closing.
   const lastItemRef = useRef<UnifiedVideoItem | null>(null)
   if (store.currentItem) lastItemRef.current = store.currentItem
   const item: UnifiedVideoItem | null = store.currentItem ?? lastItemRef.current
-  // A surface bound before the controller has ever opened media stays black on the first video.
-  // Attach it with the first video instead, then keep it for the app's lifetime.
   const surfaceMounted: boolean = item !== null
 
   const mode: PlayerPresentationMode = store.currentItem ? store.presentationMode : "hidden"
-  // Where a hidden card rests: closing from the mini bar drops it below the tab bar, otherwise it waits under the screen.
   const restingModeRef = useRef<PlayerPresentationMode>("expanded")
   if (mode !== "hidden") restingModeRef.current = mode
   const fullscreen: boolean = store.isFullscreen && mode === "expanded"
 
-  // Window insets turn to landscape values in fullscreen; remember the portrait ones.
   const insetsRef = useRef<Insets>(FALLBACK_INSETS)
   const liveInsets = Device.safeAreaInsets
   if (!store.isFullscreen && liveInsets && liveInsets.leading === 0 && liveInsets.top > 0) {
@@ -205,25 +180,19 @@ export function PlayerHost(props: {
 
   const isExpanded: boolean = mode === "expanded"
   const isMini: boolean = mode === "mini"
-  // 播放頁永遠照展開時的尺寸排版，收合只靠卡片裁切；尺寸一變，裡面的 GeometryReader 與分頁 TabView 會逐幀重排。
   const watchHeight: number = Math.max(0, expanded.height - expanded.topInset - expanded.rowHeight)
-  // 迷你列同理：照收好時的寬度排版，外框從 0 長開時內容才不會被拉開、滑進來。
   const miniBarWidth: number = mini.width - mini.videoWidth - mini.videoInset
-  // 插值用的路程：卡片從展開位置走到迷你播放器要走多遠。
   const dragTravel: number = Math.max(1, mini.y - expanded.y)
   dragTravelRef.current = dragTravel
-  // 拖曳中、且還在展開狀態時才跟手；進度直接拿位移除以路程，卡片上緣才會貼著手指。
   const drag: number | null = isExpanded && !fullscreen && dragTranslation !== null
     ? clamp01(dragTranslation / dragTravel)
     : null
   const geometry: CardGeometry = drag === null ? settled : blendGeometry(expanded, mini, drag)
-  // 0 = 完全展開、1 = 完全收成迷你播放器；分層的不透明度都吃這個值。
   const morph: number = drag !== null ? drag : isMini ? 1 : 0
   const watchOpacity: number = isExpanded ? clamp01(1 - morph / 0.3) : 0
   const controlsOpacity: number = 1 - clamp01(morph / 0.3)
   const surfaceOpacity: number = 1 - clamp01((morph - 0.35) / 0.65)
   const miniBarOpacity: number = clamp01((morph - 0.5) / 0.5)
-  // 跟手拖曳時這個元件每幀重繪；播放頁自己接 store，不必跟著重建。
   const watchNode: VirtualNode = useMemo(
     () => (
       <WatchView
@@ -243,7 +212,6 @@ export function PlayerHost(props: {
     <ZStack
       alignment="topLeading"
       coordinateSpace={PLAYER_DRAG_SPACE}
-      // In landscape the root is shorter than the screen, so a fixed-size frame would be centered and leave a gap.
       frame={fullscreen
         ? { maxWidth: "infinity", maxHeight: "infinity", alignment: "topLeading" }
         : { width: screenWidth, height: screenHeight, alignment: "topLeading" }}
@@ -255,7 +223,6 @@ export function PlayerHost(props: {
         offset={{ x: geometry.x, y: geometry.y }}
         opacity={mode === "hidden" && restsMini ? 0 : 1}
         allowsHitTesting={mode !== "hidden"}
-        // 拖曳途中值不變，所以幾何直接貼著手指；放開後才用動畫收尾。
         animation={{
           animation: Animation.smooth({ duration: MORPH_SECONDS }),
           value: `${mode}|${fullscreen}|${drag === null ? "settled" : "drag"}`,
@@ -266,7 +233,6 @@ export function PlayerHost(props: {
           content: <QualitySheet onDone={() => setShowQualitySheet(false)} />,
         }}
       >
-        {/* 陰影只由這個形狀投出、內部挖空：掛在整張卡片上會連影片與播放頁一起離屏重畫，實心底則會被玻璃取樣。 */}
         <ZStack
           frame={{ width: geometry.width, height: geometry.height }}
           opacity={morph}
@@ -292,8 +258,6 @@ export function PlayerHost(props: {
             glassEffect={{ glass: UIGlass.regular(), shape: { type: "rect", cornerRadius: geometry.radius } }}
             opacity={morph}
           />
-          {/* 帶自己 animation 的層會把裡面的幾何變化也換成那個動畫（含延遲），所以淡入淡出層只放固定尺寸的內容，
-              會變的 frame 留在外層跟著卡片走。底色在卡片移動時都要在：展開馬上出現、收合快到位才退。 */}
           <ZStack alignment="topLeading" frame={{ width: geometry.width, height: geometry.height, alignment: "topLeading" }}>
             <Rectangle
               fill={surfaceColor}
@@ -360,8 +324,6 @@ export function PlayerHost(props: {
                 frame={{ width: Math.max(0, geometry.width - geometry.videoWidth - geometry.videoInset), height: geometry.rowHeight, alignment: "topLeading" }}
                 allowsHitTesting={isMini}
                 clipped
-                // SwiftUI 把位置變化推到最底下會畫東西的層才套動畫，內層就會吃到自己的延遲淡入、晚一步滑進來；
-                // geometryGroup 讓位置在這層用卡片的動畫解完，內層只剩固定座標。
                 geometryGroup
               >
                 <ZStack
@@ -369,7 +331,6 @@ export function PlayerHost(props: {
                   opacity={miniBarOpacity}
                   animation={{ animation: isMini ? fadeInLate : fadeOut, value: isMini }}
                 >
-                  {/* 展開時不掛：迷你列會跟著 progress 重畫，沒顯示就別讓它存在。 */}
                   {morph > 0 ? (
                     <MiniPlayerBar
                       item={item}

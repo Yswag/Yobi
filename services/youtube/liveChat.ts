@@ -1,10 +1,3 @@
-/**
- * YouTube 直播聊天室。
- *
- * 走 innertube 的 `live_chat/get_live_chat`：先從 `next` 的
- * `conversationBar.liveChatRenderer` 拿 reload continuation（順便拿到最近一批訊息），
- * 之後照回應裡的 invalidation／timed continuation 往後追，間隔用回應給的 `timeoutMs`。
- */
 
 import { fetch } from "scripting"
 import {
@@ -23,7 +16,6 @@ const MAX_POLL_MS: number = 30_000
 
 export type LiveChatKind = "text" | "paid" | "membership" | "sticker"
 
-/** 訊息裡的一段：文字或自訂表情圖（表情在 YouTube 也是一張圖）。 */
 export interface LiveChatRun {
   text?: string
   imageUrl?: string
@@ -34,13 +26,10 @@ export interface LiveChatMessage {
   authorId: string
   authorName: string
   avatarUrl?: string
-  /** 純文字版；表情用捷徑名或 emoji 字元。 */
   text: string
   runs: LiveChatRun[]
   kind: LiveChatKind
-  /** YouTube 給的作者名稱顏色（#RRGGBB）；會員、斗內、版主才有。 */
   color?: string
-  /** 收到的時間（毫秒）。 */
   at: number
 }
 
@@ -64,7 +53,6 @@ function asArray(value: unknown): unknown[] {
   return Array.isArray(value) ? value : []
 }
 
-/** `{simpleText}`、`{runs}` 兩種寫法都吃。 */
 function readText(node: unknown): string {
   const object: JsonObject | null = asObject(node)
   if (!object) return typeof node === "string" ? node : ""
@@ -123,12 +111,10 @@ function textOf(renderer: JsonObject): string {
   return ""
 }
 
-/** 自訂表情的 emojiId 是長 ID，一般 emoji 是字元本身；後者直接用字元。 */
 function emojiIsCharacter(emojiId: string): boolean {
   return emojiId.length > 0 && emojiId.length <= 8 && /[^\x00-\x7f]/.test(emojiId)
 }
 
-/** 表情圖挑小張的那個（24/48），聊天室不需要大圖。 */
 function emojiImageUrl(emoji: JsonObject): string | undefined {
   const thumbnails: unknown[] = asArray(asObject(emoji["image"])?.["thumbnails"])
   let best: JsonObject | null = null
@@ -150,7 +136,6 @@ function pushText(runs: LiveChatRun[], text: string): void {
   runs.push({ text })
 }
 
-/** `message.runs` 轉成文字與表情圖交錯的片段。 */
 function runsOf(renderer: JsonObject): LiveChatRun[] {
   const runs: LiveChatRun[] = []
   for (const raw of asArray(asObject(renderer["message"])?.["runs"])) {
@@ -198,7 +183,6 @@ function cursorOf(liveChat: JsonObject): LiveChatCursor | null {
   return null
 }
 
-/** 把回應轉成訊息與下一個游標；聊天室關掉時 `cursor` 會是 null。 */
 function parseChatResponse(response: JsonObject): LiveChatBatch {
   const liveChat: JsonObject | null = asObject(asObject(response["continuationContents"])?.["liveChatContinuation"])
   if (!liveChat) return { messages: [], cursor: null }
@@ -214,7 +198,6 @@ function parseChatResponse(response: JsonObject): LiveChatBatch {
     const entry: RendererEntry | null = rendererOf(item)
     if (!entry) continue
     const runs: LiveChatRun[] = runsOf(entry.renderer)
-    // 聊天室常在句尾帶空白，兩端清掉；中間的保留。
     const head: LiveChatRun | undefined = runs[0]
     if (head && head.text) head.text = head.text.replace(/^\s+/, "")
     const tail: LiveChatRun | undefined = runs[runs.length - 1]
@@ -243,7 +226,6 @@ function parseChatResponse(response: JsonObject): LiveChatBatch {
   return { messages, cursor: cursorOf(liveChat) }
 }
 
-/** `next` 裡的聊天室起點；直播沒開聊天室就回 null。 */
 export async function fetchLiveChatStart(videoId: string): Promise<LiveChatCursor | null> {
   const next: JsonObject = await fetchNextResponse(videoId)
   const conversationBar: JsonObject | null = asObject(
@@ -253,7 +235,6 @@ export async function fetchLiveChatStart(videoId: string): Promise<LiveChatCurso
   return liveChat ? cursorOf(liveChat) : null
 }
 
-/** 有游標之後的每一批訊息。 */
 export async function fetchLiveChatBatch(videoId: string, cursor: LiveChatCursor): Promise<LiveChatBatch> {
   const locale = getYoutubeLocale()
   const auth = getYoutubeAuth()

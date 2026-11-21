@@ -29,7 +29,6 @@ export function TabStack(props: {
   onOpenChannel: OpenChannel
   onExitApp: () => void
   showsNavigationBar?: boolean
-  /** Extra bottom safe area so scroll content clears the floating mini player. */
   bottomInset?: number
   children: VirtualNode
 }): VirtualNode {
@@ -75,14 +74,12 @@ export function TabStack(props: {
 
   return (
     <NavigationStack path={props.path}>
-      {/* Each page is hosted separately, so the stack's own safe area never reaches it; pad every page root. */}
       <Group
         toolbarVisibility={props.showsNavigationBar ? "automatic" : "hidden"}
         safeAreaPadding={bottomPadding}
         navigationDestination={
           <NavigationDestination>
             {(route: string) => (
-              // 推入頁都用系統導覽列：邊緣返回、標題截斷、捲動材質都靠它，自己畫標頭拿不到這些。
               <Group toolbarVisibility="automatic" safeAreaPadding={bottomPadding}>
                 {renderRoute(route)}
               </Group>

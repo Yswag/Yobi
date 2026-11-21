@@ -1,11 +1,3 @@
-/**
- * YouTube SABR (Server-enforced Adaptive Bitrate) 橋接。
- *
- * - UMP (Unified Media Protocol) 二進位封包解析（VarInt 長度前綴）。
- * - 輕量 protobuf 編碼 / 解碼（VideoPlaybackAbrRequest、MediaHeader、NextRequestPolicy）。
- * - 依 SabrHlsManifestBuilder / SabrDashManifestBuilder 產生本機 HLS / DASH manifest。
- * - 直連 `url` 的格式（IOS / ANDROID_VR）可用 HTTP Range + sidx 抓切片。
- */
 
 import { fetch } from "scripting"
 import type { AudioStreamTrack, VideoQualityTrack } from "../../types"
@@ -42,10 +34,6 @@ const SABR_MAX_ATTEMPTS: number = 4
 const SABR_MAX_BACKOFF_MS: number = 10_000
 
 const SEGMENT_DURATION_MS: number = 5000
-
-/* ------------------------------------------------------------------ *
- * 格式
- * ------------------------------------------------------------------ */
 
 export interface SabrByteRange {
   start: number
@@ -96,7 +84,6 @@ function lastModifiedOf(format: JsonObject): string {
   return text.replace(/[^\d]/g, "") || "0"
 }
 
-/** 解析 adaptiveFormats。 */
 export function parseAdaptiveFormats(formats: unknown[], fpsMap: Map<number, number> = new Map()): SabrFormat[] {
   const result: SabrFormat[] = []
   for (const entry of formats) {
@@ -138,7 +125,6 @@ export function parseAdaptiveFormats(formats: unknown[], fpsMap: Map<number, num
   return result
 }
 
-/** 選擇最佳音訊（偏好 m4a / 非 DRC / 高碼率）。 */
 export function pickBestAudioFormat(formats: SabrFormat[]): SabrFormat | undefined {
   const audios: SabrFormat[] = formats.filter((format: SabrFormat): boolean => format.isAudio)
   if (audios.length === 0) return undefined
@@ -151,18 +137,15 @@ export function pickBestAudioFormat(formats: SabrFormat[]): SabrFormat | undefin
   return audios.sort((a: SabrFormat, b: SabrFormat): number => score(b) - score(a))[0]
 }
 
-/** 同一個解析度 SABR 會給好幾份編碼（avc1／av01），清單只留一份，跟 bilibili 一樣。 */
 function videoCodecScore(format: SabrFormat): number {
   const codec: string = codecOf(format.mimeType).toLowerCase()
   if ((format.height ?? 0) >= 2160) {
-    // 4K 的 AVC 要 13 Mbps 以上，native 解不動。
     if (codec.startsWith("av01")) return 3
     return codec.startsWith("hvc") || codec.startsWith("hev") ? 2 : 0
   }
   return codec.startsWith("av01") ? 1 : 3
 }
 
-/** 視訊軌（可切換畫質清單）。只取 MP4：時間軸靠 sidx，webm 的 Cues 不支援。 */
 export function pickVideoFormats(formats: SabrFormat[], includeAv1: boolean = true): SabrFormat[] {
   const videos: SabrFormat[] = formats.filter((format: SabrFormat): boolean => {
     if (!format.isVideo || !format.mimeType.startsWith("video/mp4")) return false
@@ -185,10 +168,6 @@ export function pickVideoFormats(formats: SabrFormat[], includeAv1: boolean = tr
     (a: SabrFormat, b: SabrFormat): number => (b.height ?? 0) - (a.height ?? 0) || (b.fps ?? 0) - (a.fps ?? 0),
   )
 }
-
-/* ------------------------------------------------------------------ *
- * UMP
- * ------------------------------------------------------------------ */
 
 export interface UmpPart {
   type: number
@@ -235,7 +214,6 @@ function writeVarInt(value: number, out: number[]): void {
   }
 }
 
-/** 解析完整 UMP 封包（無串流狀態）。 */
 export function parseUmpParts(bytes: Uint8Array): UmpPart[] {
   const parts: UmpPart[] = []
   let offset: number = 0
@@ -253,10 +231,6 @@ export function parseUmpParts(bytes: Uint8Array): UmpPart[] {
   }
   return parts
 }
-
-/* ------------------------------------------------------------------ *
- * Protobuf
- * ------------------------------------------------------------------ */
 
 export type ProtoValue = number | Uint8Array
 
@@ -342,7 +316,6 @@ function readProtoVarint(bytes: Uint8Array, offset: number): [number, number] {
   return [0, offset]
 }
 
-/** 解出 protobuf 欄位（僅保留 last-write / repeated）。 */
 export function decodeProto(bytes: Uint8Array): Map<number, ProtoField[]> {
   const fields: Map<number, ProtoField[]> = new Map()
   let offset: number = 0
@@ -399,7 +372,6 @@ function protoBytes(fields: Map<number, ProtoField[]>, field: number): Uint8Arra
   return entry.value
 }
 
-/** Repeated int32 values, packed or not. */
 function protoInts(fields: Map<number, ProtoField[]>, field: number): number[] {
   const out: number[] = []
   for (const entry of fields.get(field) ?? []) {
@@ -422,10 +394,6 @@ function protoString(fields: Map<number, ProtoField[]>, field: number): string |
   const value: Uint8Array | undefined = protoBytes(fields, field)
   return value ? new TextDecoder().decode(value) : undefined
 }
-
-/* ------------------------------------------------------------------ *
- * 媒體標頭 / 政策
- * ------------------------------------------------------------------ */
 
 export interface SabrMediaHeader {
   headerId: number
@@ -455,11 +423,6 @@ export function decodeMediaHeader(bytes: Uint8Array): SabrMediaHeader {
   return header
 }
 
-/**
- * UMP part 42 (`FormatInitializationMetadata`): which encode of the itag the server is actually
- * sending (`lastModified`) and where its init and index boxes sit. The same itag can exist in two
- * encodes, so this, not the player response, describes the file the segments come from.
- */
 export interface SabrFormatInitMetadata {
   itag: number
   lastModified: string
@@ -521,10 +484,6 @@ export function decodeSabrRedirect(bytes: Uint8Array): string | undefined {
   return protoString(fields, 1)
 }
 
-/* ------------------------------------------------------------------ *
- * Session 設定
- * ------------------------------------------------------------------ */
-
 export interface SabrSessionConfig {
   videoId: string
   serverAbrStreamingUrl: string
@@ -536,20 +495,13 @@ export interface SabrSessionConfig {
   clientVersion?: string
   cookie?: string
   userAgent?: string
-  /**
-   * Direct URLs (e.g. from the IOS player) used only to read init and index ranges, which sit at the
-   * start of the file and stay reachable without a PO token. SABR segments match the sidx entries.
-   */
   indexUrls?: Record<number, string>
-  /** The video/audio pair this session plays; SABR responses carry both tracks. */
-  /** Session nonce; also sent in the player request so the SABR URL and the player agree. */
   cpn?: string
   pairedItags?: { video: number; audio: number }
-  /** Replacement token when the server answers "attestation required" (stream protection 3) without media. */
   refreshPoToken?: (staleToken: string) => Promise<string>
 }
 
-/** Accepts URL-safe base64 without padding, which is how ustreamer configs and PO tokens arrive. */function base64ToBytes(value: string): Uint8Array | null {
+function base64ToBytes(value: string): Uint8Array | null {
   if (!value) return null
   let normalized: string = value.replace(/-/g, "+").replace(/_/g, "/").replace(/\./g, "=")
   while (normalized.length % 4 !== 0) normalized += "="
@@ -569,7 +521,6 @@ function concatBytes(chunks: Uint8Array[]): Uint8Array {
   return out
 }
 
-/** 16-char client playback nonce (`cpn`), same alphabet the player uses. */
 export function makeClientPlaybackNonce(): string {
   const alphabet: string = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-"
   let nonce: string = ""
@@ -596,11 +547,8 @@ export class SabrSession {
   private backoffMs: number = 0
   private nextRequestAt: number = 0
   private tokenRefreshed: boolean = false
-  /** Client playback nonce, sent as `cpn` the way the official player does. */
   private readonly cpn: string
-  /** Last `StreamProtectionStatus.status`: 1 = ok, 2 = attestation pending, 3 = attestation required. */
   lastProtectionStatus?: number
-  /** UMP part ids and segment keys of the most recent response, for diagnostics. */
   lastParts: number[] = []
   lastKeys: string[] = []
   lastError?: string
@@ -640,10 +588,6 @@ export class SabrSession {
     return { startMs, durationMs: segmentMs }
   }
 
-  /**
-   * Load the segment index before a playlist is built so its count and durations match the media
-   * (same as upstream ingesting initialization data). Without it the 5 s grid points seeks at the wrong segments.
-   */
   async prepareTimeline(itag: number): Promise<boolean> {
     if (this.indexedCounts.has(itag)) return true
     const format: SabrFormat | undefined = this.formatsByItag.get(itag)
@@ -660,11 +604,6 @@ export class SabrSession {
     return true
   }
 
-  /**
-   * The segment index of the file the server actually sends. Like the official player, take it from
-   * the server's own init response (`ftyp`/`moov`/`sidx`); a direct URL from another client only
-   * counts when part 42 says it is the same encode.
-   */
   private async timelineIndex(format: SabrFormat): Promise<SidxIndex | null> {
     if (!this.config.serverAbrStreamingUrl) return this.sidxFor(format)
     const init: Uint8Array | null = await this.fetchInitialization(format.itag).catch(() => null)
@@ -684,11 +623,9 @@ export class SabrSession {
     })
   }
 
-  /** `NextRequestPolicy` readahead the server asked for, reported back as `rbuf`. */
   private readaheadMs: number = 0
   private endpoint(): string {
     const separator: string = this.streamingUrl.includes("?") ? "&" : "?"
-    // Query params the official player puts on the SABR URL (mweb player: rn/rbuf/ump/srfvp/alr/pot).
     const params: string[] = [
       `rn=${this.requestNumber}`,
       `rbuf=${this.readaheadMs}`,
@@ -715,7 +652,6 @@ export class SabrSession {
     const clientKey: InnertubeClientKey = this.config.clientKey ?? "WEB_SABR"
     const profile = INNERTUBE_CLIENTS[clientKey]
     const client: JsonObject = asObject(profile.context["client"]) ?? {}
-    // Field numbers follow googlevideo's StreamerContext.ClientInfo.
     const result: ProtoWriter = new ProtoWriter()
     result.string(1, getYoutubeLocale().hl)
     if (client["deviceMake"]) result.string(12, String(client["deviceMake"]))
@@ -738,10 +674,6 @@ export class SabrSession {
     return { video, audio }
   }
 
-  /**
-   * Same adaptation set as the target: container and codec family (the server otherwise switches
-   * e.g. avc1 to av01, or mp4a to opus), plus the audio track for audio.
-   */
   private preferredFormats(target: SabrFormat): SabrFormat[] {
     const family = (format: SabrFormat): string => {
       const [container, codecs] = format.mimeType.split(";")
@@ -762,9 +694,7 @@ export class SabrSession {
     const { video, audio } = this.pairedFormats(format)
     const abrState: ProtoWriter = new ProtoWriter().int64(28, playerTimeMs)
     abrState.int64(29, 0).uint32(34, 1).float(35, 1).int64(39, 0)
-    // enabledTrackTypesBitfield: 0 = audio and video, 1 = audio only, 2 = video only.
     abrState.uint32(40, video && audio ? 0 : format.isAudio ? 1 : 2)
-    // Playback capabilities the server weighs in its ABR decisions.
     abrState.uint32(22, 0).uint32(46, 0).int64(68, 0)
     const target: SabrFormat | undefined = format.isAudio ? audio : video
     if (target?.bitrate) abrState.int64(23, target.bitrate)
@@ -797,9 +727,7 @@ export class SabrSession {
       : Math.max(0, Math.floor(this.segmentTiming(format.itag, sequence).startMs))
     const { video, audio } = this.pairedFormats(format)
 
-    // VideoPlaybackAbrRequest as the mweb player serializes it (`Lja`).
     const request: ProtoWriter = new ProtoWriter().message(1, this.abrStateMessage(format, playerTimeMs))
-    // Formats the client already has init for; the server sends init for the rest.
     for (const selected of [video, audio]) {
       if (selected && this.initCache.has(selected.itag)) request.message(2, this.formatIdMessage(selected))
     }
@@ -824,7 +752,6 @@ export class SabrSession {
     const visitorData: string | undefined = this.config.visitorData ?? auth.visitorData
     if (visitorData) headers["X-Goog-Visitor-Id"] = visitorData
     if (this.config.cookie ?? auth.cookie) headers["Cookie"] = String(this.config.cookie ?? auth.cookie)
-    // Age-restricted and members-only streams are only served to a hash-authenticated web session.
     if (auth.authorization && (clientKey === "MWEB" || clientKey === "WEB_SABR")) {
       headers["Authorization"] = auth.authorization
       headers["X-Origin"] = "https://www.youtube.com"
@@ -833,7 +760,6 @@ export class SabrSession {
     return headers
   }
 
-  /** 發送一次 ABR 請求，回傳本次收到的切片。 */
   private async requestOnce(format: SabrFormat, sequence: number | "init"): Promise<Map<string, Uint8Array>> {
     const wait: number = this.nextRequestAt - Date.now()
     if (wait > 0) await new Promise<void>((resolve) => setTimeout(resolve, Math.min(wait, SABR_MAX_BACKOFF_MS)))
@@ -933,10 +859,6 @@ export class SabrSession {
     this.contextChanged = true
   }
 
-  /**
-   * Repeats the request while the server answers with new SABR contexts or a backoff instead of media,
-   * as the player does. The first request of a session typically waits out a ~5 s backoff.
-   */
   private async requestWithContext(format: SabrFormat, sequence: number | "init", key: string): Promise<Map<string, Uint8Array>> {
     let segments: Map<string, Uint8Array> = new Map()
     for (let attempt = 0; attempt < SABR_MAX_ATTEMPTS; attempt++) {
@@ -949,7 +871,6 @@ export class SabrSession {
     return segments
   }
 
-  /** Swaps in a fresh PO token once per session. */
   private async refreshToken(): Promise<boolean> {
     if (this.tokenRefreshed || !this.config.refreshPoToken) return false
     this.tokenRefreshed = true
@@ -961,14 +882,12 @@ export class SabrSession {
     }
   }
 
-  /** 初始化切片。 */
   async fetchInitialization(itag: number): Promise<Uint8Array | null> {
     const cached: Uint8Array | undefined = this.initCache.get(itag)
     if (cached) return cached
     const format: SabrFormat | undefined = this.formatsByItag.get(itag)
     if (!format) return null
     const indexUrl: string | undefined = this.indexUrlFor(format)
-    // With SABR the init must come from the server too: a direct URL may point at the other encode.
     if (!this.config.serverAbrStreamingUrl) {
       if (!indexUrl || !format.initRange) return null
       const direct: Uint8Array | null = await fetchRange(indexUrl, format.initRange.start, format.initRange.end, this.headers())
@@ -995,7 +914,6 @@ export class SabrSession {
     }
   }
 
-  /** 第 sequence 個媒體切片（1 起算）。 */
   async fetchSegment(itag: number, sequence: number): Promise<Uint8Array | null> {
     const key: string = `${itag}:${sequence}`
     const cached: Uint8Array | undefined = this.segmentCache.get(key)
@@ -1014,12 +932,10 @@ export class SabrSession {
     return this.segmentCache.get(key) ?? null
   }
 
-  /** `indexUrls` win: a SABR client's own `url` still needs `n` decoding and a PO token. */
   private indexUrlFor(format: SabrFormat): string | undefined {
     return this.config.indexUrls?.[format.itag] ?? format.url
   }
 
-  // 只快取成功的結果，失敗的下次還能再讀。
   private async sidxFor(format: SabrFormat): Promise<SidxIndex | null> {
     const cached: SidxIndex | undefined = this.sidxCache.get(format.itag) ?? undefined
     if (cached) return cached
@@ -1063,10 +979,6 @@ async function fetchRange(
   return new Uint8Array(buffer)
 }
 
-/* ------------------------------------------------------------------ *
- * Manifest 產生器（對齊 SabrHlsManifestBuilder / SabrDashManifestBuilder）
- * ------------------------------------------------------------------ */
-
 function codecOf(mimeType: string): string {
   const index: number = mimeType.indexOf("codecs=")
   if (index < 0) return ""
@@ -1096,10 +1008,6 @@ export interface SabrManifestBuilderInput {
   audio: SabrFormat
 }
 
-/**
- * 拿掉 init 裡的 sidx。播放器的 ffmpeg 5.0.1 讀到太大的 sidx 會解析錯位，
- * 直接以 AVERROR_PATCHWELCOME 拒開；HLS 的分段時間軸本來就看本地清單，不需要它。
- */
 function stripSidxBoxes(bytes: Uint8Array | null): Uint8Array | null {
   if (!bytes) return bytes
   const readSize = (offset: number): number =>
@@ -1224,17 +1132,12 @@ export function buildDashManifest(input: SabrManifestBuilderInput): string {
   return lines.join("\n")
 }
 
-/* ------------------------------------------------------------------ *
- * 對外：建立 SABR 畫質 session
- * ------------------------------------------------------------------ */
-
 export interface SabrQualitySession {
   session: SabrSession
   urls: SabrProxyUrls
   video: SabrFormat
   audio: SabrFormat
   quality: VideoQualityTrack
-  /** 影片與音訊都讀到真正的分段時間軸時為 true；false 時不該拿來播。 */
   prepare: () => Promise<boolean>
 }
 
@@ -1265,10 +1168,6 @@ export function audioTrackOf(format: SabrFormat): AudioStreamTrack {
   return track
 }
 
-/**
- * 為單一視訊畫質建立本機 SABR 代理 session。
- * 每個畫質各自一個 session id，切畫質時直接換 Master URL。
- */
 export function createSabrQualitySession(
   config: SabrSessionConfig,
   video: SabrFormat,
@@ -1278,14 +1177,12 @@ export function createSabrQualitySession(
   const sessionId: string = `sabr-${config.videoId}-${video.itag}-${audio.itag}`
   const input: SabrManifestBuilderInput = { sessionId, session, video, audio }
 
-  // 每個 itag 一個預抓器；session 有狀態（context、backoff、token），所以一次只抓一段。
   const prefetchers: Map<number, Prefetcher> = new Map()
   const prefetcherFor = (itag: number): Prefetcher => {
     let prefetcher: Prefetcher | undefined = prefetchers.get(itag)
     if (!prefetcher) {
       prefetcher = new Prefetcher(
         {
-          // 序號從 1 開始，就拿序號當塊號。
           count: (): number => session.segmentCount(itag) + 1,
           fetch: (sequence: number): Promise<Uint8Array | null> => session.fetchSegment(itag, sequence),
         },

@@ -92,7 +92,6 @@ function parseCookieString(raw: string): Record<string, string> {
   return result
 }
 
-/** 推入子頁的一列：圖示、標題、目前設定的摘要。 */
 function LinkRow(props: {
   icon: string
   color: Color
@@ -352,7 +351,6 @@ export function SettingsView(props: SettingsViewProps): VirtualNode {
     showToast("已清空觀看紀錄")
   }
 
-  // 結束 App 現在也放在上面，不用滑到最底。
   const handleExit = async (): Promise<void> => {
     if (!props.onExitApp) return
     const index: number | null = await Dialog.actionSheet({

@@ -1,5 +1,3 @@
-// YouTube 的自動字幕 VTT 帶逐字時間標記、空白 cue 與 10ms 的銜接 cue，播放器的解析器整份拒收。
-// 這裡只取時間與純文字，重新輸出成帶 CC 底框樣式的 WebVTT。
 
 interface Cue {
   start: number
@@ -10,9 +8,7 @@ interface Cue {
 const TIMING: RegExp = /((?:\d+:)?\d{1,2}:\d{2}[.,]\d{3})\s*-->\s*((?:\d+:)?\d{1,2}:\d{2}[.,]\d{3})/
 const MIN_CUE_SECONDS: number = 0.05
 
-// 照 YouTube 的 CC：無襯線粗體、清晰字級、約 70% 不透明的深黑底（播放器只吃 hex）。
 const CUE_STYLE: string = "STYLE\n::cue {\n  background-color: #000000B3;\n  color: #FFFFFF;\n  font-family: PingFang SC;\n  font-weight: bold;\n  font-size: 70%;\n}"
-// 最後一行放在倒數第二行的位置，離底邊留一行；多行往上長。
 const CUE_SETTINGS: string = "line:-2"
 
 function parseTime(text: string): number {
@@ -41,7 +37,6 @@ function decodeEntities(text: string): string {
     .replace(/&amp;/g, "&")
 }
 
-// SRT 與 VTT 都是「時間行＋文字行」的區塊，同一套解析。
 function parseCues(source: string): Cue[] {
   const cues: Cue[] = []
   for (const block of source.replace(/\r\n?/g, "\n").split(/\n{2,}/)) {
@@ -63,12 +58,10 @@ function parseCues(source: string): Cue[] {
   return cues
 }
 
-/** SRT／WebVTT → 只有時間、純文字與 CC 樣式的 WebVTT；沒有任何可用的 cue 時回傳空字串。 */
 export function toCleanVtt(source: string): string {
   return cuesToVtt(parseCues(source))
 }
 
-/** 已解析好的 cue 直接輸出成帶 CC 樣式的 WebVTT。 */
 export function cuesToVtt(cues: Cue[]): string {
   if (cues.length === 0) return ""
   const blocks: string[] = cues.map(
@@ -77,10 +70,6 @@ export function cuesToVtt(cues: Cue[]): string {
   return `WEBVTT\n\n${CUE_STYLE}\n\n${blocks.join("\n\n")}\n`
 }
 
-/**
- * bilibili 的 CC 字幕是 JSON：`{ body: [{ from, to, content }] }`。
- * 解析失敗或沒有可用句子時回空字串。
- */
 export function biliSubtitleToVtt(source: string): string {
   let parsed: unknown
   try {

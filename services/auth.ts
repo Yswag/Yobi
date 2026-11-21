@@ -10,7 +10,6 @@ const BILI_USER_AGENT =
 const YT_USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36"
 const YT_CLIENT_VERSION = "2.20250219.01.00"
-/** Google sign-in page; `continue` brings the browser back to YouTube with `.youtube.com` cookies seeded. */
 const YOUTUBE_LOGIN_URL =
   "https://accounts.google.com/ServiceLogin?service=youtube&uilel=3&passive=true&continue=" +
   encodeURIComponent("https://m.youtube.com/")
@@ -23,9 +22,6 @@ interface CookieLike {
   domain?: string
 }
 
-// ─── Pure TS helpers ────────────────────────────────────────────────────────
-
-/** UTF-8 encode a string into bytes without relying on TextEncoder. */
 export function utf8Bytes(input: string): Uint8Array {
   const out: number[] = []
   for (let i = 0; i < input.length; i++) {
@@ -67,7 +63,6 @@ function hex32(value: number): string {
   return (value >>> 0).toString(16).padStart(8, "0")
 }
 
-/** Zero-dependency SHA-1, returns a lowercase hex digest. */
 export function sha1Hex(input: string): string {
   const bytes = utf8Bytes(input)
   const bitLength = bytes.length * 8
@@ -135,8 +130,6 @@ export function sha1Hex(input: string): string {
   return hex32(h0) + hex32(h1) + hex32(h2) + hex32(h3) + hex32(h4)
 }
 
-// ─── Store ──────────────────────────────────────────────────────────────────
-
 function parseStore(raw: unknown): AuthStore {
   if (typeof raw === "string") {
     try {
@@ -149,7 +142,6 @@ function parseStore(raw: unknown): AuthStore {
   return raw && typeof raw === "object" ? (raw as AuthStore) : {}
 }
 
-/** Cookies live in Keychain (encrypted); a plain Storage record from older versions is migrated once. */
 function readStore(): AuthStore {
   let stored: string | null = null
   try {
@@ -171,7 +163,6 @@ function writeStore(store: AuthStore): void {
     Storage.remove(AUTH_KEY)
     return
   }
-  // Keychain refused (locked or over capacity): keep the login working from the sandbox copy.
   Storage.set(AUTH_KEY, store)
 }
 
@@ -208,7 +199,6 @@ export function getAuthState(provider: Provider): ProviderAuthState {
   return state ? { ...state, cookies: { ...state.cookies } } : emptyState(provider)
 }
 
-/** YouTube visitor id stored with the login; undefined when signed out. */
 export function getYoutubeVisitorData(): string | undefined {
   const visitor: unknown = readStore()["yt"]?.visitorData
   return typeof visitor === "string" && visitor.length > 0 ? visitor : undefined
@@ -228,7 +218,6 @@ export function setAuthCookies(
     if (typeof value === "string") merged[name] = value
   }
 
-  // A different SAPISID means a different Google account, so the stored visitor id no longer matches.
   const sapisidChanged: boolean =
     provider === "yt" &&
     typeof cookies["SAPISID"] === "string" &&
@@ -249,7 +238,6 @@ export function setAuthCookies(
   }
 
   if (!state.loggedIn && !profile) {
-    // Nothing logged in and no profile info: keep the record cheap but consistent.
     state.username = undefined
     state.userId = undefined
     state.avatarUrl = undefined
@@ -270,9 +258,6 @@ export function getCookieHeader(provider: Provider): string {
   return getAuthState(provider).cookieHeader
 }
 
-// ─── YouTube SAPISIDHASH ────────────────────────────────────────────────────
-
-/** `SAPISIDHASH` for a cookie set; the origin is fixed to www.youtube.com, where Innertube lives. */
 function sapisidHash(
   cookies: Record<string, string>,
   origin = "https://www.youtube.com",
@@ -289,9 +274,6 @@ export function buildYoutubeSapisidHashHeader(
   return Promise.resolve(sapisidHash(getAuthState("yt").cookies, origin))
 }
 
-// ─── WebView login ──────────────────────────────────────────────────────────
-
-/** Google sets same-name cookies (SID, SAPISID…) on `.google.com`; only the `.youtube.com` ones authenticate Innertube. */
 function isYoutubeHost(domain: string | undefined): boolean {
   const host: string = (domain ?? "").toLowerCase().replace(/^\./, "")
   return host === "youtube.com" || host.endsWith(".youtube.com")
@@ -327,21 +309,18 @@ async function fetchBiliProfile(
   }
 }
 
-/** Hides the "App 内打开" pill and other app-download overlays on m.bilibili.com. */
 const BILI_APP_PROMPT_CSS = `
 .m-open-app, .fixed-openapp, .m-fixed-openapp, .m-navbar-openapp, .launch-app-btn {
   display: none !important;
 }
 `
 
-/** Mobile feed hides its login entry under the sheet's title bar, so start at passport. */
 const BILI_LOGIN_URL =
   "https://passport.bilibili.com/h5-app/passport/login?gourl=" +
   encodeURIComponent("https://m.bilibili.com/")
 
 type JsonNode = Record<string, any>
 
-/** Depth-first search for the first object stored under `key`. */
 function findKey(node: unknown, key: string, depth: number = 0): JsonNode | null {
   if (!node || typeof node !== "object" || depth > 12) return null
   if (Array.isArray(node)) {
@@ -360,7 +339,6 @@ function findKey(node: unknown, key: string, depth: number = 0): JsonNode | null
   return null
 }
 
-/** Reads `{ simpleText }` or `{ runs: [...] }` text nodes. */
 function textOf(node: unknown): string | undefined {
   if (typeof node === "string") return node || undefined
   if (!node || typeof node !== "object") return undefined
@@ -382,7 +360,6 @@ function largestThumbnailUrl(node: unknown): string | undefined {
   return last && typeof last["url"] === "string" ? last["url"] : undefined
 }
 
-/** Innertube account menu: the authoritative source for the signed-in name, avatar and channel id. */
 async function fetchYoutubeProfile(
   cookies: Record<string, string>,
   visitorData?: string,
@@ -434,7 +411,6 @@ async function fetchYoutubeProfile(
   }
 }
 
-/** Cookies of the provider's own site from the shared jar (HTTPOnly included). */
 async function collectCookies(
   controller: WebViewController,
   provider: Provider,
@@ -454,7 +430,6 @@ async function collectCookies(
   return collected
 }
 
-/** Logged-in requests must carry the account's visitor id, or YouTube treats them as a fresh visitor. */
 async function readYoutubeVisitorData(controller: WebViewController): Promise<string | undefined> {
   try {
     const raw: unknown = await controller.evaluateJavaScript(
@@ -481,7 +456,6 @@ async function loginBili(): Promise<ProviderAuthState> {
         forMainFrameOnly: true,
       })
     } catch {
-      // Injection is a nicety; never block login on it.
     }
 
     await controller.loadURL(BILI_LOGIN_URL)
@@ -489,7 +463,6 @@ async function loginBili(): Promise<ProviderAuthState> {
 
     const collected: Record<string, string> = await collectCookies(controller, "bili")
     if (!Object.keys(collected).length) {
-      // User dismissed the sheet without logging in.
       return getAuthState("bili")
     }
 
@@ -499,7 +472,6 @@ async function loginBili(): Promise<ProviderAuthState> {
     try {
       controller.dispose()
     } catch {
-      // ignore disposal errors
     }
   }
 }
@@ -509,7 +481,6 @@ async function loginYoutube(): Promise<ProviderAuthState> {
   let harvested: Record<string, string> | null = null
   let visitorData: string | undefined
 
-  // Google seeds the `.youtube.com` cookies during sign-in, but they only count once the page is back on YouTube.
   const harvest = async (): Promise<boolean> => {
     const url: string = controller.url ?? ""
     if (!/^https:\/\/(m|www)\.youtube\.com\//.test(url)) return false
@@ -529,7 +500,6 @@ async function loginYoutube(): Promise<ProviderAuthState> {
     await controller.loadURL(YOUTUBE_LOGIN_URL)
     await controller.present({ navigationTitle: "登入 YouTube" })
 
-    // Either we closed it ourselves above, or the user closed the sheet by hand.
     if (!harvested) await harvest()
     const cookies: Record<string, string> | null = harvested
     if (!cookies) return getAuthState("yt")
@@ -538,12 +508,10 @@ async function loginYoutube(): Promise<ProviderAuthState> {
     try {
       controller.dispose()
     } catch {
-      // ignore disposal errors
     }
   }
 }
 
-/** Opens the provider's own sign-in flow; the YouTube one starts on Google's account page. */
 export async function loginWithWebView(provider: Provider): Promise<ProviderAuthState> {
   return provider === "yt" ? loginYoutube() : loginBili()
 }

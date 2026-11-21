@@ -3,11 +3,6 @@ import { ASTRING_SOURCE } from "./vendor/astring"
 import { MERIYAH_SOURCE } from "./vendor/meriyah"
 import { YT_SOLVER_SOURCE } from "./vendor/ytSolver"
 
-/**
- * Decodes the `n` throttling parameter of googlevideo URLs with yt-dlp's ejs solver,
- * the same solver upstream TypeType-Token vendors. Without it SABR requests return 403.
- */
-
 interface SolverResponse {
   type: "result" | "error"
   data?: Record<string, string>
@@ -24,7 +19,6 @@ interface SolverResult {
 type Solver = (request: Record<string, unknown>) => SolverResult
 
 let solver: Solver | null = null
-// Preprocessed players by URL; the page alternates between a few player builds.
 const MAX_PLAYERS: number = 4
 const preprocessed: Map<string, Promise<string>> = new Map()
 
@@ -72,7 +66,6 @@ function preprocessedPlayer(jsUrl: string): Promise<string> {
   return loading
 }
 
-/** Downloads and preprocesses a player ahead of its first `n` challenge. */
 export function warmThrottlingDecoder(jsUrl: string): void {
   void preprocessedPlayer(jsUrl).catch(() => undefined)
 }
@@ -90,7 +83,6 @@ async function solve(jsUrl: string, values: string[]): Promise<Record<string, st
   return response.data
 }
 
-/** Returns decoded values keyed by the original `n`. The solver occasionally answers `no solutions`; one retry from a fresh player clears it. */
 export async function decodeThrottlingParameters(jsUrl: string, values: string[]): Promise<Record<string, string>> {
   if (values.length === 0) return {}
   try {
@@ -101,7 +93,6 @@ export async function decodeThrottlingParameters(jsUrl: string, values: string[]
   }
 }
 
-/** Rewrites the `n` query parameter of a googlevideo URL. */
 export async function decipherStreamingUrl(url: string, jsUrl: string): Promise<string> {
   const match: RegExpMatchArray | null = url.match(/[?&]n=([^&]+)/)
   if (!match) return url

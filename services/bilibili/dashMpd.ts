@@ -3,10 +3,6 @@ import { registerBiliFileSource, registerVirtualManifest, seedBiliHead, warmBili
 import { parseSidx, type SidxIndex } from "../sidx"
 import { BILI_REFERER, BILI_USER_AGENT } from "./wbi"
 
-/**
- * Minimal shape of the `dash` object returned by
- * `https://api.bilibili.com/x/player/wbi/playurl?fnval=4048`.
- */
 export interface BiliDashSegmentBase {
   indexRange?: string
   index_range?: string
@@ -67,7 +63,6 @@ function durationToIso(seconds: number): string {
 
 type BaseUrlResolver = (media: BiliDashMedia, mimeType: string, index: number) => string
 
-/** 每個子片段的位元組範圍與時長，取自 sidx。 */
 export interface BiliSegmentIndex {
   initRange: string
   sidx: SidxIndex
@@ -76,17 +71,11 @@ export interface BiliSegmentIndex {
 type SegmentIndexLookup = (media: BiliDashMedia) => BiliSegmentIndex | undefined
 
 const SIDX_TIMESCALE: number = 1_000_000
-/**
- * 去掉最後一段後最長的片段時長。播放器用「目標時間 ÷ duration」算段號，
- * 取最長的只會把段號算小：讀到的那段一定從目標之前開始，播放器再往後解到目標。
- * bili 偶爾夾一段短片段（例如 5s 之間一段 1.6s），取平均會把段號算大、跳過目標。
- */
 function segmentDurationOf(index: BiliSegmentIndex): number {
   const body = index.sidx.entries.slice(0, -1)
   return Math.max(...body.map(entry => entry.durationUs))
 }
 
-/** bilibili 不給 Initialization range，慣例是 0 到 indexRange 起點前一個位元組。 */
 function implicitInitRange(indexRange: string | undefined): string | undefined {
   if (!indexRange) return undefined
   const start: number = Number(indexRange.split("-")[0])
@@ -102,7 +91,6 @@ function mediaUrl(media: BiliDashMedia): string {
   return ""
 }
 
-/** baseUrl 加上 backupUrl，順序就是 bili 自己的優先序。 */
 function mediaUrls(media: BiliDashMedia): string[] {
   const out: string[] = []
   const push = (value: string | undefined): void => {
@@ -150,11 +138,6 @@ function mimeTypeOf(media: BiliDashMedia, fallback: string): string {
   return media.mimeType || media.mime_type || fallback
 }
 
-/**
- * 播放器對 SegmentBase 把整個檔當一段讀，seek 只能從檔頭線性讀到目標（4K 中段要讀上百 MB）。
- * 拆成 SegmentList 後每個子片段有明確範圍，seek 直接跳過去。
- * 播放器不認 SegmentList 裡的 SegmentTimeline（會從頭走並報 preroll 錯誤），只能給單一 duration。
- */
 function segmentListXml(index: BiliSegmentIndex): string[] {
   const entries = index.sidx.entries
   const lines: string[] = [
@@ -255,13 +238,6 @@ function collectAudios(dash: BiliDashPayload): BiliDashMedia[] {
   return audios
 }
 
-/**
- * 播放器會把同一組 AdaptationSet 裡每個 Representation 都當一條軌去讀，
- * bilibili 同一個畫質固定給 AVC/HEVC/AV1 三份，4K 時等於三倍流量把頻寬喫滿。
- * 這裡只留一份：優先 AVC，再來 HEVC、AV1。
- * 4K 以上不取 AVC：H.264 在 4K60 要 13Mbps，播放器解不動，音訊會一直 underrun。
- * 8K 反過來優先 AV1：HEVC 8K native 開不起來。
- */
 function preferCodec(medias: BiliDashMedia[]): BiliDashMedia[] {
   if (medias.length <= 1) return medias
   const heightOf = (media: BiliDashMedia): number =>
@@ -288,7 +264,6 @@ function preferCodec(medias: BiliDashMedia[]): BiliDashMedia[] {
   return [best]
 }
 
-/** 音訊也只留一條：優先原生 AAC（Dolby／FLAC 在 4K 只是多餘流量）。 */
 function preferAudio(dash: BiliDashPayload): BiliDashMedia[] {
   const natives: BiliDashMedia[] = (dash.audio ?? []).filter(media => !!mediaUrl(media))
   const pool: BiliDashMedia[] = natives.length ? natives : collectAudios(dash)
@@ -300,11 +275,6 @@ function preferAudio(dash: BiliDashPayload): BiliDashMedia[] {
   return [best]
 }
 
-/**
- * Converts Bilibili's `dash` payload into a standards-compliant MPEG-DASH
- * manifest. When `selectedVideoId` (a Bilibili `qn`) is given, only that
- * quality is included — otherwise the highest codec of every quality.
- */
 function selectMedias(dash: BiliDashPayload, selectedVideoId?: number): { videos: BiliDashMedia[]; audios: BiliDashMedia[] } {
   const allVideos = (dash.video ?? []).filter(media => !!mediaUrl(media))
   const matching =
@@ -343,7 +313,6 @@ export function buildBiliDashMpdXml(
   return lines.join("\n")
 }
 
-/** 舊的 MPD 沒人讀了就刪，避免 tmp 一直累積。 */
 function pruneDashFiles(keep: string): void {
   try {
     const entries: string[] = FileManager.readDirectorySync(FileManager.temporaryDirectory)
@@ -354,32 +323,20 @@ function pruneDashFiles(keep: string): void {
       try {
         FileManager.removeSync(path)
       } catch {
-        // 刪不掉就不用管
       }
     }
   } catch {
-    // 列目錄失敗就跳過清理
   }
 }
 
-/**
- * bilibili 的片段需要 `Referer`，但播放器對本機 manifest 的片段請求不會帶 header，
- * 因此 BaseURL 一律指向本機位元組代理；MPD 則交給 localProxy 供檔（回應必須帶
- * `Content-Length`，DASH 解析器才讀得懂）。
- */
 interface WarmTrack {
   sourceId: string
   index: BiliSegmentIndex
 }
 
-/** 每份 MPD 的片段表，給 warmBiliStart 算「跳到某秒時播放器會先要哪段」。 */
 const warmTracks: Map<string, WarmTrack[]> = new Map()
 const WARM_MAX_MANIFESTS: number = 16
 
-/**
- * 開片前就把跳過去會用到的片段抓起來（影片與音訊各自目標段＋下一段）。
- * 段號用跟 MPD 一樣的 duration 算，才會跟播放器實際要的一致。不是 bili MPD 就不做事。
- */
 export function warmBiliStart(manifestUrl: string, seconds: number): void {
   const tracks: WarmTrack[] | undefined = warmTracks.get(manifestUrl)
   if (!tracks || !(seconds > 0)) return
@@ -391,10 +348,6 @@ export function warmBiliStart(manifestUrl: string, seconds: number): void {
   }
 }
 
-/**
- * 直接向 CDN 抓檔頭（0 到 indexRange 結尾，init＋sidx 約 2 KB）。走代理要先下載整個 1 MB 的第 0 格。
- * 抓到的位元組種進代理，播放器開片要 init 時直接回。讀不到就回 undefined，退回 SegmentBase。
- */
 async function loadSegmentIndex(
   cdnUrl: string,
   media: BiliDashMedia,
@@ -428,14 +381,9 @@ export interface PreparedTrack {
   mimeType: string
   sourceId: string
   localUrl: string
-  /** sidx 讀不到時為 null；HLS 需要它，MPD 可以退回 SegmentBase。 */
   index: BiliSegmentIndex | null
 }
 
-/**
- * 把 dash payload 準備成可播放的軌：註冊本機代理、載入 sidx、預熟第一段。
- * MPD 與 HLS 共用同一份準備結果，避免兩邊選到不同 track。
- */
 export async function prepareBiliPlayback(
   bvid: string,
   cid: number,
@@ -460,7 +408,6 @@ export async function prepareBiliPlayback(
         localUrl = registerBiliFileSource(id, urls, mimeType, Number(media.bandwidth) || 0)
         sourceId = id
       } catch {
-        // 代理起不來就直連
       }
     }
     const loaded: BiliSegmentIndex | undefined = await loadSegmentIndex(
@@ -469,14 +416,12 @@ export async function prepareBiliPlayback(
       sourceId || undefined,
     )
     if (loaded && sourceId) {
-      // 播放器 open() 一定先依序讀完影片與音訊的第一段（就算接著要跳走），這裡先一起抓。
       const first = loaded.sidx.entries[0]
       warmBiliRange(sourceId, first.offset, first.offset + first.size - 1)
     }
     return { media, mimeType, sourceId, localUrl, index: loaded ?? null }
   }
 
-  // 每條軌都要向 CDN 拿一次檔頭（init＋sidx）；並行拿，不然音軌得等影片軌回來。
   const builds: Promise<PreparedTrack>[] = videoMedias.map(
     (media: BiliDashMedia, index: number): Promise<PreparedTrack> => build(media, "video/mp4", index),
   )
@@ -498,7 +443,6 @@ export async function writeBiliDashMpdFile(
   return writeBiliDashMpdFromPrepared(bvid, cid, dash, selectedVideoId, prepared)
 }
 
-/** 用已準備好的軌道產 MPD；避免與 HLS 互為後備時重複準備。 */
 export async function writeBiliDashMpdFromPrepared(
   bvid: string,
   cid: number,

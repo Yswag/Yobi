@@ -20,7 +20,6 @@ import {
 import { ProgressTrack } from "../ui/primitives"
 import { palette, type } from "../ui/theme"
 
-/** Hit area of each trailing button; the close button's center lands on the capsule's end-cap center. */
 export const MINI_BUTTON_SIZE: number = 44
 
 function MiniButton(props: { action: () => void; children: VirtualNode }): VirtualNode {
@@ -33,19 +32,16 @@ function MiniButton(props: { action: () => void; children: VirtualNode }): Virtu
   )
 }
 
-// The trailing part of the minimized player card; the live video sits to its left in PlayerHost.
 export function MiniPlayerBar(props: {
   item: UnifiedVideoItem | null
   height: number
   trailingInset: number
 }): VirtualNode {
   const store: PlayerStoreSnapshot = usePlayerStore()
-  // 進度自己訂閱：PlayerHost 不必為了這條細進度條跟著每次 timeupdate 重畫。
   const progress: PlayerProgressSnapshot = usePlayerProgress()
   const item: UnifiedVideoItem | null = props.item
   const isLoading: boolean = store.status === "loading" || store.status === "buffering"
   const isPlaying: boolean = store.status === "playing"
-  // 播完後這顆按鈕的行為是「重播」，圖示要跟着說。
   const isEnded: boolean = store.status === "ended"
   const duration: number = progress.duration > 0 ? progress.duration : item?.duration ?? 0
   const ratio: number = duration > 0 ? progress.position / duration : 0

@@ -1,8 +1,3 @@
-/**
- * 跨平台統一服務入口。
- *
- * 把 YouTube / BiliBili 的差異收斂在這一層，UI 只認 `Provider` 與統一模型。
- */
 
 import type {
   ChannelDetail,
@@ -86,7 +81,6 @@ async function safe<T>(task: Promise<T>, fallback: T): Promise<T> {
   }
 }
 
-/** 判斷輸入是 YouTube 連結/ID 還是 BiliBili BV/AV 番號。 */
 export function detectInputLink(input: string): DetectedInputLink | null {
   const trimmed: string = (input ?? "").trim()
   if (!trimmed) return null
@@ -102,7 +96,6 @@ export function detectInputLink(input: string): DetectedInputLink | null {
   return null
 }
 
-/** 首頁推薦；`all` 時兩平台平行抓取後交錯排列。 */
 export async function getHomeFeed(filter: FeedFilter = "all"): Promise<UnifiedVideoItem[]> {
   if (filter === "yt") return getYoutubeTrending()
   if (filter === "bili") return getBiliTrending()
@@ -114,7 +107,6 @@ export async function getHomeFeed(filter: FeedFilter = "all"): Promise<UnifiedVi
   return interleave(results)
 }
 
-/** 搜尋；`all` 時兩平台平行搜尋後交錯排列。 */
 export async function searchVideos(query: string, filter: FeedFilter = "all"): Promise<UnifiedVideoItem[]> {
   const trimmed: string = (query ?? "").trim()
   if (!trimmed) return []
@@ -128,7 +120,6 @@ export async function searchVideos(query: string, filter: FeedFilter = "all"): P
   return interleave(results)
 }
 
-/** 搜尋建議（預設 YouTube）。 */
 export async function getSearchSuggestions(query: string, provider: Provider = "yt"): Promise<string[]> {
   const trimmed: string = (query ?? "").trim()
   if (!trimmed) return []
@@ -136,7 +127,6 @@ export async function getSearchSuggestions(query: string, provider: Provider = "
   return getYoutubeSearchSuggestions(trimmed)
 }
 
-/** 影片詳情。 */
 export async function getVideoDetail(provider: Provider, rawId: string): Promise<VideoDetail> {
   if (provider === "bili") return getBiliVideoDetail(rawId)
   return getYoutubeVideoDetail(rawId)
@@ -146,11 +136,9 @@ export interface ResolveStreamOptions {
   cid?: number
   mode?: YoutubeStreamPreference
   preferredHeight?: number
-  /** YouTube 直播走自己的取流路線。 */
   isLive?: boolean
 }
 
-/** 解析可播放串流。 */
 export async function resolveStream(
   provider: Provider,
   rawId: string,
@@ -162,13 +150,11 @@ export async function resolveStream(
   return resolveYoutubeStream(rawId, options.mode ?? "auto", options.preferredHeight ?? 0, options.isLive === true)
 }
 
-/** 留言（只取第一頁）。 */
 export async function getComments(provider: Provider, rawId: string): Promise<CommentItem[]> {
   const page: CommentPage = await getCommentPage(provider, rawId)
   return page.comments
 }
 
-/** 留言分頁：不給 cursor 就是第一頁，回傳的 cursor 為 null 代表沒有更多。 */
 export async function getCommentPage(
   provider: Provider,
   rawId: string,
@@ -178,7 +164,6 @@ export async function getCommentPage(
   return getYoutubeCommentPage(rawId, query)
 }
 
-/** 一則留言的回覆分頁。 */
 export async function getCommentReplies(
   provider: Provider,
   rawId: string,
@@ -189,7 +174,6 @@ export async function getCommentReplies(
   return getYoutubeCommentReplies(rawId, cursor)
 }
 
-/** 頻道 / UP 主。`withAbout: false` 跳過精確總數那一支請求（例如訂閱頁補資料）。 */
 export async function getChannel(
   provider: Provider,
   rawId: string,
@@ -201,16 +185,11 @@ export async function getChannel(
 
 export interface ChannelVideoPage {
   videos: UnifiedVideoItem[]
-  /** 下一頁的 cursor；沒有就是到底了。 */
   nextPageToken?: string
 }
 
 export type ChannelSort = "latest" | "popular" | "oldest"
 
-/**
- * 頻道影片：cursor 沒有就是該排序的第一頁。
- * 排序交給 provider（bili 用 order、YouTube 用 chipBar 的 token），不在地端排序。
- */
 export async function getChannelVideos(
   provider: Provider,
   rawId: string,
@@ -226,7 +205,6 @@ export async function getChannelVideos(
   return getYoutubeChannelVideos(rawId, cursor, sort)
 }
 
-/** 頻道內搜尋；cursor 沒有就是第一頁。 */
 export async function searchChannelVideos(
   provider: Provider,
   rawId: string,

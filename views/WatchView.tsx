@@ -48,7 +48,6 @@ import {
 import { Avatar, EmptyState, SectionHeader } from "../ui/primitives"
 import { palette, providerColor, radius, space, type } from "../ui/theme"
 
-// Everything below the video; PlayerHost owns the video surface and the sheets it opens.
 export interface WatchViewProps {
   onOpenChannel?: (provider: Provider, authorId: string, authorName: string, avatarUrl?: string) => void
   onOpenQualitySheet: () => void
@@ -58,7 +57,6 @@ export interface WatchViewProps {
 const TAB_RELATED: number = 0
 const TAB_COMMENTS: number = 1
 
-/** 直播人數自己訂閱一組資料，人數變動只重畫這一行。 */
 function LiveViewerLabel(props: { videoId: string; publishedText?: string }): VirtualNode {
   const viewers = useLiveViewers()
   const count: number | null = viewers.videoId === props.videoId ? viewers.count : null
@@ -73,9 +71,7 @@ function LiveViewerLabel(props: { videoId: string; publishedText?: string }): Vi
 }
 
 const SEGMENT_CARD_WIDTH: number = 156
-/** 卡片固定高度，一行與兩行標題的卡片才對齊（caption 約 13 + 間距 4 + 兩行標題 31 + 上下 20）。 */
 const SEGMENT_CARD_HEIGHT: number = 70
-/** 留言捲到剩這麼多高度就自動抓下一頁。 */
 const COMMENTS_AUTO_LOAD_PX: number = 320
 
 interface ScrollGeometrySnapshot {
@@ -137,8 +133,6 @@ function SegmentCard(props: { caption: string; title: string; active: boolean; o
   )
 }
 
-// 只有「換章節」才重繪。原本訂閱 progress 是每個 tick 都重建整排卡片，
-// 那會讓正在捲動的頁面持續重排版，看起來一直在抖。
 function useActiveChapterIndex(chapters: VideoChapter[]): number {
   const [index, setIndex] = useState<number>(-1)
   useEffect(() => {
@@ -155,7 +149,6 @@ function useActiveChapterIndex(chapters: VideoChapter[]): number {
   return index
 }
 
-// 只有這塊跟著播放進度重繪，整頁不要訂閱 progress。
 function ChaptersSection(props: { chapters: VideoChapter[] }): VirtualNode {
   const activeIndex: number = useActiveChapterIndex(props.chapters)
   return (
@@ -190,12 +183,9 @@ export function WatchView(props: WatchViewProps): VirtualNode {
   const item: UnifiedVideoItem | null = store.currentItem
   const detail = store.detail
   const itemId: string = item?.id ?? ""
-  // 這個元件跟著播放器常駐（PlayerHost 用 useMemo 包住），換片不會重建；
-  // 所以自己把分頁與捲動位置收回頂部。
   useEffect(() => {
     setTab(TAB_RELATED)
   }, [itemId])
-  // 換頁或關掉播放頁時把凍結解除，不然進度條會一直停住。
   useEffect((): (() => void) => {
     return (): void => setProgressUpdatesPaused(false)
   }, [itemId])
@@ -205,7 +195,6 @@ export function WatchView(props: WatchViewProps): VirtualNode {
   const collaborators: VideoCollaborator[] = detail?.collaborators ?? []
   const isCollab: boolean = collaborators.length > 1
 
-  // 合作影片要每個頻道都訂了才算「已訂閱」。
   const readSubscribed = (): boolean => {
     if (!item) return false
     if (isCollab) {
@@ -234,7 +223,6 @@ export function WatchView(props: WatchViewProps): VirtualNode {
   const deliveryTag: string | null = store.manifest ? store.manifest.delivery.toUpperCase() : null
 
   const headlineParts: string[] = []
-  // 直播沒有累計觀看數，人數走 LiveViewerLabel；會員專屬影片也不給觀看數。
   if (!item.isLive && item.viewCount !== undefined) headlineParts.push(`${formatCount(item.viewCount)} 次觀看`)
   if (item.publishedText) headlineParts.push(item.publishedText)
   const statParts: string[] = []
@@ -501,10 +489,6 @@ export function WatchView(props: WatchViewProps): VirtualNode {
       />
     )
 
-  // 留言捲到底自動抓下一頁。
-  // 用「階段變化」而不是每幀的幾何回呼：幾何版每次捲動畫面都會跨橋進 JS，
-  // 就算立刻 return 也佔主執行緒；階段版一個手勢只回呼一兩次。
-  // 捲動時凍結播放進度通知：捲動是主執行緒最敏感的時刻，這一秒的數字沒人看得到。
   const handleScrollPhase = (next: ScrollPhase): void => {
     setProgressUpdatesPaused(String(next) !== "idle")
   }
@@ -538,8 +522,6 @@ export function WatchView(props: WatchViewProps): VirtualNode {
         },
       }}
     >
-      {/* 頁首當真正的兄弟，佔實際空間（不疊上去、不靠安全區）。 */}
-      {/* 材質要鋪在外層，否則上下內距會露出卡片底色（深色下就是一條黑邊）。 */}
       <VStack
         spacing={0}
         frame={{ maxWidth: "infinity" }}
@@ -557,9 +539,6 @@ export function WatchView(props: WatchViewProps): VirtualNode {
           <Text tag={TAB_COMMENTS}>{item.isLive ? "聊天室" : "留言"}</Text>
         </Picker>
       </VStack>
-      {/* TabView 不會回報自己需要多少高，要自己量。
-          兩頁改成「填滿且靠上」：寫死高度時頁面比容器高，SwiftUI 會把它垂直置中，
-          上緣就溢出到容器外 → 最上面那排內容看起來被切掉。 */}
       <GeometryReader>
         {(proxy: GeometryProxy) => (
           <TabView

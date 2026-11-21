@@ -1,15 +1,3 @@
-/**
- * YouTube 直播取流，與一般影片分開。
- *
- * 直播沒有時間軸，也不吃 VISIONOS / SABR：只有 app client 會回 `hlsManifestUrl`
- * （實測 ANDROID 有，IOS 只有 adaptiveFormats，WEB／TVHTML5／VISIONOS 被風控擋）。
- * 因此依序問幾個 client，取第一個「master、媒體清單、第一段」都真的抓得到的。
- *
- * 清單與片段直接給播放器，不經本機轉手：轉手會把媒體清單快取起來，
- * 直播的滑動窗格不會更新，播完一輪就停。
- *
- * 後端用 system：native 對直播的 1 秒片段、3 秒窗格會一直轉圈（實測），system 正常。
- */
 
 import { fetch } from "scripting"
 import type { StreamManifest, VideoQualityTrack } from "../../types"
@@ -18,7 +6,6 @@ import { fetchPlayerResponse, type InnertubeClientKey, type JsonObject } from ".
 
 interface LiveClientProfile {
   key: InnertubeClientKey
-  /** 大的先問。 */
   preference: number
 }
 
@@ -33,7 +20,6 @@ interface LiveCandidate {
   url: string
   source: InnertubeClientKey
   preference: number
-  /** 網址帶 `/n/` 挑戰時要先改寫才能抓，排在後面。 */
   challenged: boolean
 }
 
@@ -51,7 +37,6 @@ function manifestUrlOf(player: JsonObject): string {
   return typeof hlsvp === "string" ? hlsvp : ""
 }
 
-/** 各 client 的 `hlsManifestUrl`；同一個網址只留一次。 */
 async function collectCandidates(videoId: string): Promise<LiveCandidate[]> {
   const seen: Set<string> = new Set()
   const candidates: LiveCandidate[] = []
@@ -68,7 +53,6 @@ async function collectCandidates(videoId: string): Promise<LiveCandidate[]> {
         challenged: /\/n\/[^/]+\//.test(url),
       })
     } catch {
-      // 這個 client 不能用就換下一個
     }
   }
   return candidates.sort(
@@ -87,7 +71,6 @@ async function fetchText(url: string, timeoutSeconds: number): Promise<{ ok: boo
   }
 }
 
-/** 清單裡第一個非註解行（媒體清單的下一段或 master 的 variant）。 */
 function firstUriLine(text: string, baseUrl: string): string {
   for (const rawLine of text.split(/\r?\n/)) {
     const line: string = rawLine.trim()
@@ -97,7 +80,6 @@ function firstUriLine(text: string, baseUrl: string): string {
   return ""
 }
 
-/** 抓到底：master、第一條媒體清單、第一段。成功才回 master 文字。 */
 async function verifyCandidate(url: string): Promise<string | null> {
   const master = await fetchText(url, 8)
   if (!master.ok || !master.text.includes("#EXTM3U")) return null
@@ -148,7 +130,6 @@ function buildQualities(masterText: string, masterUrl: string): VideoQualityTrac
   return qualities
 }
 
-/** 直播串流：挑一條真的能播的 HLS，畫質清單對應 master 裡的 variant。 */
 export async function resolveYoutubeLiveStream(videoId: string): Promise<StreamManifest> {
   const candidates: LiveCandidate[] = await collectCandidates(videoId)
   if (candidates.length === 0) throw new Error("YouTube 直播沒有 HLS 串流")
@@ -172,7 +153,6 @@ export async function resolveYoutubeLiveStream(videoId: string): Promise<StreamM
     provider: "yt",
     rawId: videoId,
     delivery: "hls",
-    // 直播給 master，讓播放器跟著即時頻寬挑 variant；指定畫質再從選單換。
     primaryUrl: masterUrl,
     backend: "system",
     qualities,

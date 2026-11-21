@@ -4,14 +4,11 @@ import { registerHlsRelayHandler, unregisterHlsRelayHandler, type HlsRelayHandle
 import { Prefetcher } from "./prefetch"
 import { recordDownload } from "./netMeter"
 
-/** HLS 媒體清單轉手：清單裡的片段改指向本機代理，片段由共用預抓器先抓好。 */
-
 const FETCH_TIMEOUT_SECONDS: number = 30
 
 interface ParsedPlaylist {
   lines: string[]
   initUrl: string | null
-  /** 每個片段網址在 `lines` 裡的位置。 */
   segmentLines: number[]
   segmentUrls: string[]
 }
@@ -131,10 +128,6 @@ class HlsRelay implements HlsRelayHandler {
   }
 }
 
-/**
- * 為一支影片的某條媒體清單建立轉手，回傳本機清單網址。
- * 同一個 group 代表同一支影片；換到新的 group 時，舊影片的轉手全部移除。
- */
 export function createHlsRelay(group: string, key: string, upstreamUrl: string): string {
   if (group !== activeGroup) {
     clearHlsRelays()

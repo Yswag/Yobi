@@ -2,12 +2,6 @@ import type { BiliDashMedia, PreparedTrack } from "./dashMpd"
 import { mediaPaths, registerMediaSession } from "../mediaServer"
 import type { MediaSession, MediaTrack } from "../mediaServer"
 
-/**
- * 直接從 dash payload 生 HLS，不經過 MPD：
- * 每段一個帶副檔名的本機網址（native 後端沒副檔名會回 no playable track），
- * 時長取 sidx 的精確值，位元組由 mediaServer 邊抓邊送。
- */
-
 const VIDEO_ITAG: number = 1
 const AUDIO_ITAG: number = 2
 
@@ -22,7 +16,6 @@ function frameRateOf(media: BiliDashMedia): string {
   const text: string = typeof raw === "number" ? String(raw) : raw.trim()
   const direct: number = Number(text)
   if (Number.isFinite(direct) && direct > 0) return trimNumber(direct)
-  // bili 有些片給 "2997/100" 這種分數；HLS 的 FRAME-RATE 只吃十進位。
   const fraction: RegExpExecArray | null = /^(\d+)\s*\/\s*(\d+)$/.exec(text)
   if (fraction) {
     const value: number = Number(fraction[1]) / Number(fraction[2])
@@ -45,10 +38,6 @@ function toMediaTrack(track: PreparedTrack, itag: number): MediaTrack {
   }
 }
 
-/**
- * 音軌整條當一片：AAC 在 fMP4 是每個 segment 各自帶 priming，
- * 切段播放會在每個接縫出現雜音；ATV-Bilibili-demo 也是這樣做。
- */
 function audioPlaylist(sessionId: string, track: MediaTrack): string {
   const total: number = track.entries.reduce(
     (sum: number, entry): number => sum + entry.durationUs,
@@ -99,7 +88,6 @@ function masterPlaylist(
 ): string {
   const media = video.media
   const qn: number = Number(media.id)
-  // 125 = HDR10、126 = 杜比視界；與 ATV-Bilibili-demo 的分法一致。
   const isDolby: boolean = qn === 126
   const isHDR10: boolean = qn === 125
   const isHDR: boolean = isDolby || isHDR10
@@ -109,9 +97,7 @@ function masterPlaylist(
   let frameRate: string = frameRateOf(media) || "25"
   if (isHDR10) {
     videoRange = "PQ"
-    // 不壓幀率：那是 tvOS 的 4K60 HDR 限制；iPhone 支援，宣告真實值才不會跟串流對不上。
   }
-  // DoVi 不能直接宣告 dvh1；要改回 hvc1 並用 SUPPLEMENTAL-CODECS 描述。
   if (videoCodec === "dvh1.08.07" || videoCodec === "dvh1.08.03") {
     supplemental = `${videoCodec}/db4h`
     videoCodec = "hvc1.2.4.L153.b0"
@@ -130,7 +116,6 @@ function masterPlaylist(
     .filter((codec: string): boolean => codec.length > 0)
     .join(",")
   const attributes: string[] = [
-    // DASH 的 bandwidth 是均值，HLS 要的是峰值；宣告太低會被 CoreMedia 判 -12318。
     `BANDWIDTH=${Math.round(average * 1.5)}`,
     `AVERAGE-BANDWIDTH=${average}`,
   ]
@@ -159,10 +144,6 @@ function masterPlaylist(
   return lines.join("\n")
 }
 
-/**
- * 用已準備好的軌道註冊一個 HLS session，回傳可直接 open() 的 master 網址。
- * 沒有 sidx 就丟錯，由呼叫端決定要不要退回 MPD（軌道已準備好，不必重做）。
- */
 export async function writeBiliHlsManifest(
   bvid: string,
   cid: number,

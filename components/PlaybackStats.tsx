@@ -7,7 +7,6 @@ import { palette, type } from "../ui/theme"
 
 const TICK_MS: number = 1000
 
-/** 網速不是事件，自己每秒重讀一次。 */
 function useTicker(): void {
   const [, setTick] = useState<number>(0)
   useEffect(() => {
@@ -32,7 +31,6 @@ function join(parts: (string | null | undefined)[]): string {
   return parts.filter((part: string | null | undefined): part is string => Boolean(part)).join(" · ")
 }
 
-/** 轉圈時放在圈圈下方的即時網速。 */
 export function NetSpeedLabel(props: { offsetY: number }): VirtualNode {
   useTicker()
   return (
@@ -72,7 +70,6 @@ function StatRow(props: { label: string; value: string }): VirtualNode {
   )
 }
 
-/** 網速、緩衝與目前播放檔案的實際規格。 */
 export function PlaybackStatsPanel(): VirtualNode {
   useTicker()
   const store = usePlayerStore()
@@ -93,7 +90,6 @@ export function PlaybackStatsPanel(): VirtualNode {
   const fps: number = video?.frameRate || quality?.fps || 0
   const acceleration: string | null =
     info?.hardwareAccelerated === true ? "硬體" : info?.hardwareAccelerated === false ? "軟體" : null
-  // 播放器讀本機代理隨要隨到，自己只往前讀一點；真正的緩衝是預抓器裡的資料。
   const aheadBytes: number | null = prefetchedAheadBytes()
   const window = prefetchWindow()
   const bitrate: number = quality?.bitrate ?? video?.bitRate ?? 0

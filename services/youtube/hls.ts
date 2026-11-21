@@ -1,10 +1,3 @@
-/**
- * YouTube HLS Master `.m3u8` 解析。
- *
- * 為每個 `#EXT-X-STREAM-INF` 建立單一畫質子 Master：
- * variant 與對應的 `#EXT-X-MEDIA:TYPE=AUDIO` 都改指向本機轉手（片段預抓），
- * 切畫質時才不會失去音訊。
- */
 
 import { fetch } from "scripting"
 import type { VideoQualityTrack } from "../../types"
@@ -72,7 +65,6 @@ function splitAttributes(input: string): Record<string, string> {
   return result
 }
 
-/** 以 base URL 解析相對路徑。 */
 export function resolveUrl(baseUrl: string, relative: string): string {
   if (!relative) return baseUrl
   if (/^https?:\/\//i.test(relative)) return relative
@@ -86,7 +78,6 @@ export function resolveUrl(baseUrl: string, relative: string): string {
   return `${origin}${baseDir}${relative}`
 }
 
-/** 解析 Master playlist 文字。 */
 export function parseHlsMasterText(text: string, masterUrl: string): ParsedHlsMaster {
   const lines: string[] = text
     .split(/\r?\n/)
@@ -177,7 +168,6 @@ function buildSingleVariantMaster(variant: HlsVariant, audio: HlsAudioGroup | un
   return `${lines.join("\n")}\n`
 }
 
-/** 原始 master 逐行改寫：屬性不動，只把 variant 與音訊的網址換成本機轉手。 */
 function relayMasterText(text: string, masterUrl: string, relayGroup: string): string {
   const relay = (uri: string): string => {
     const absolute: string = resolveUrl(masterUrl, uri)
@@ -196,10 +186,6 @@ function relayMasterText(text: string, masterUrl: string, relayGroup: string): s
     .join("\n")
 }
 
-/**
- * 抓取並解析 HLS Master，回傳可切換的畫質軌。
- * 自適應的 `primaryUrl` 是改寫過的本機 master，片段同樣經過預抓。
- */
 export async function resolveHlsManifest(masterUrl: string): Promise<ResolvedHlsManifest> {
   const response = await fetch(masterUrl, {
     headers: { "User-Agent": "com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_3_1 like Mac OS X;)" },
@@ -221,7 +207,6 @@ export async function resolveHlsManifest(masterUrl: string): Promise<ResolvedHls
   const relayGroup: string = `yt${simpleHash(masterUrl)}`
 
   for (const variant of sorted) {
-    // 同一解析度在 master 裡可能有兩三份（不同編碼或碼率）；只留第一份，跟 bilibili 一樣。
     const label: string = qualityLabel(variant.height ?? 0, variant.frameRate)
     if (seenLabels.has(label)) continue
     seenLabels.add(label)
@@ -230,7 +215,6 @@ export async function resolveHlsManifest(masterUrl: string): Promise<ResolvedHls
       ? parsed.audioGroups.find((group: HlsAudioGroup): boolean => group.groupId === variant.audioGroup)
       : parsed.audioGroups.find((group: HlsAudioGroup): boolean => group.isDefault) ?? parsed.audioGroups[0]
 
-    // 手動選的單一畫質走本機轉手，片段由代理先抓好。
     const relayedVariant: HlsVariant = { ...variant, uri: createHlsRelay(relayGroup, simpleHash(variant.uri), variant.uri) }
     const relayedAudio: HlsAudioGroup | undefined = audio
       ? { ...audio, uri: createHlsRelay(relayGroup, simpleHash(audio.uri), audio.uri) }

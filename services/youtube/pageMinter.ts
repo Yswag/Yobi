@@ -2,16 +2,6 @@ import { warmThrottlingDecoder } from "./nsig"
 import { setYoutubeLocale } from "./locale"
 import type { YoutubePoTokens, YoutubeWebConfig } from "./potoken"
 
-/**
- * PO tokens minted by the m.youtube.com player itself, in a hidden watch page.
- *
- * The player's poToken plugin mints a video-bound token synchronously when video data loads
- * (`Av(videoData)` → minter with `videoData.videoId`), and it does so for any video id. Its constructor
- * assigns `this.useLivingRoomPoToken`, so a setter on Object.prototype installed at document start
- * captures the instance; the minting method is then found by behavior, not by its minified name.
- * The page needs neither playback nor being on screen. Media requests are blocked.
- */
-
 const PAGE_ORIGIN: string = "https://m.youtube.com"
 const USER_AGENT: string =
   "Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Mobile/15E148 Safari/604.1"
@@ -77,7 +67,6 @@ function sleep(ms: number): Promise<void> {
   return new Promise<void>((resolve) => setTimeout(resolve, ms))
 }
 
-/** WebKit kills the app when a WebView is driven off the main thread; the SABR proxy calls in from a background one. */
 function onMain<T>(run: () => Promise<T>): Promise<T> {
   if (Thread.isMainThread) return run()
   return new Promise<T>((resolve, reject) => {
@@ -114,7 +103,6 @@ async function readConfig(web: WebViewController): Promise<YoutubeWebConfig> {
   `))
   const config: YoutubeWebConfig & { hl?: string; gl?: string } = JSON.parse(raw)
   if (!config.visitorData || !config.clientVersion || !config.jsUrl) throw new Error("YouTube 頁面缺少 ytcfg")
-  // The watch page is the cheapest place to learn the account's hl/gl.
   setYoutubeLocale(config.hl, config.gl)
   return config
 }
@@ -156,7 +144,6 @@ async function openPage(seedVideoId: string): Promise<MintPage> {
   }
 }
 
-/** Drops a page that stopped minting, e.g. after its web content process was reclaimed. */
 function retire(page: MintPage): void {
   if (current === page) current = null
   disposeWeb(page.web)
@@ -177,12 +164,10 @@ function pageFor(seedVideoId: string): Promise<MintPage> {
   return opening
 }
 
-/** Loads the page ahead of the first playback so the first token is ready without waiting. */
 export function warmYoutubePageMinter(seedVideoId: string = "jNQXAC9IVRw"): void {
   void pageFor(seedVideoId).catch(() => undefined)
 }
 
-/** Video-bound token from the page player, with the page's web config (visitor, STS, client version). */
 export async function getYoutubePageTokens(videoId: string): Promise<YoutubePoTokens> {
   const page: MintPage = await pageFor(videoId)
   try {
@@ -216,10 +201,6 @@ export function disposeYoutubePageMinter(): void {
   if (current) retire(current)
 }
 
-/**
- * Called when the server keeps refusing `staleToken`: reloads the page unless another caller
- * already did, then mints again.
- */
 export async function refreshYoutubePageToken(videoId: string, staleToken: string): Promise<string> {
   if (current && current.tokens.get(videoId) === staleToken) retire(current)
   return (await getYoutubePageTokens(videoId)).visitorBoundPoToken

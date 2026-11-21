@@ -11,15 +11,12 @@ const BUVID_KEY = "yobi.bili.buvid.v1"
 const WBI_TTL = 60 * 60 * 1000
 const BUVID_TTL = 7 * 24 * 60 * 60 * 1000
 
-/** Bilibili's WBI mixing table (64 indices). */
 const MIXIN_KEY_ENC_TAB = [
   46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35,
   27, 43, 5, 49, 33, 9, 42, 19, 29, 28, 14, 39, 12, 38, 41, 13,
   37, 48, 7, 16, 24, 55, 40, 61, 26, 17, 0, 1, 60, 51, 30, 4,
   22, 25, 54, 21, 56, 59, 6, 63, 57, 62, 11, 36, 20, 34, 44, 52,
 ]
-
-// ─── Pure TS MD5 ────────────────────────────────────────────────────────────
 
 const MD5_SHIFT = [
   7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22,
@@ -44,7 +41,6 @@ function littleEndianHex(value: number): string {
   return output
 }
 
-/** Zero-dependency MD5, returns a lowercase hex digest. */
 export function md5Hex(input: string): string {
   const bytes = utf8Bytes(input)
   const bitLength = bytes.length * 8
@@ -104,8 +100,6 @@ export function md5Hex(input: string): string {
 
   return littleEndianHex(a0) + littleEndianHex(b0) + littleEndianHex(c0) + littleEndianHex(d0)
 }
-
-// ─── WBI keys ───────────────────────────────────────────────────────────────
 
 interface WbiKeyCache {
   imgKey: string
@@ -179,7 +173,6 @@ async function getBuvid(): Promise<BuvidCache | null> {
   }
 }
 
-/** Auth cookie header merged with auto-obtained buvid3 / buvid4. */
 export async function getBiliCookieHeader(): Promise<string> {
   const map = parseCookieHeader(getCookieHeader("bili"))
   const buvid = await getBuvid()
@@ -221,7 +214,6 @@ export async function getWbiKeys(): Promise<{ imgKey: string; subKey: string }> 
       }
     }
   } catch {
-    // fall through to cache
   }
 
   if (wbiKeyCache) {
@@ -245,7 +237,6 @@ function cleanValue(value: string): string {
   return value.replace(/[!'()*]/g, "")
 }
 
-/** Returns the signed `k=v&...&wts=...&w_rid=...` query string. */
 export async function signWbiParams(
   params: Record<string, string | number>,
 ): Promise<string> {

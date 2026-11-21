@@ -1,4 +1,3 @@
-/** ISO BMFF `sidx` box 解析：YouTube 直連與 bilibili DASH 都靠它算出每個子片段的位元組範圍。 */
 
 export interface SidxEntry {
   offset: number
@@ -11,7 +10,6 @@ export interface SidxIndex {
   entries: SidxEntry[]
 }
 
-/** 解析 indexRange 開頭的位元組；baseOffset 是這段位元組在檔案裡的起點。 */
 export function parseSidx(bytes: Uint8Array, baseOffset: number): SidxIndex | null {
   if (bytes.length < 16) return null
   const view: DataView = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)

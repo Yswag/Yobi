@@ -268,7 +268,6 @@ export function LibraryView(props: LibraryViewProps): VirtualNode {
     </LazyVStack>
   )
 
-  // Playlist detail replaces the whole page, with its own back affordance.
   if (selectedPlaylist) {
     return (
       <ScrollView axes="vertical" scrollIndicator="hidden" frame={{ maxWidth: "infinity", maxHeight: "infinity" }}>

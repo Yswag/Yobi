@@ -33,3 +33,4 @@
 
 - [index.tsx](file:///var/mobile/Library/Mobile%20Documents/iCloud~com~thomfang~Scripting/Documents/scripts/Yobi/index.tsx) — 應用程式進入點
 - [script.json](file:///var/mobile/Library/Mobile%20Documents/iCloud~com~thomfang~Scripting/Documents/scripts/Yobi/script.json) — 腳本中繼資料與外觀設定
+- [docs/adr](file:///var/mobile/Library/Mobile%20Documents/iCloud~com~thomfang~Scripting/Documents/scripts/Yobi/docs/adr/README.md) — 決策紀錄；程式碼不寫註解，理由看 0010

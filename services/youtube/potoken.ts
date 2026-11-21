@@ -1,17 +1,5 @@
 import { fetch } from "scripting"
 
-/**
- * PO tokens minted on device, following SmartTube's port of bgutil-ytdlp-pot-provider:
- * homepage ytcfg + ytAtN challenge -> BotGuard in an ephemeral WKWebView -> GenerateIT -> minter.
- * The visitor-bound token goes into SABR requests, the video-bound one into the player request.
- *
- * The challenge must come from the homepage snapshot, not /api/jnn/v1/Create: BotGuard reads
- * yt.config_.EVENT_ID from that same page, and challenges minted without it are rejected.
- *
- * `MWEB` mints against m.youtube.com with a Safari/iPhone user agent, i.e. the same engine family
- * (WebKit) the token is later used from; `WEB` mints against the desktop page.
- */
-
 export type PoTokenClient = "WEB" | "MWEB"
 
 const INNERTUBE_API_KEY: string = "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8"
@@ -58,19 +46,14 @@ const PROFILES: Record<PoTokenClient, TokenProfile> = {
 
 export interface YoutubeWebConfig {
   visitorData: string
-  /** Player signature timestamp; WEB player requests without it come back UNPLAYABLE. */
   signatureTimestamp: number
   clientVersion: string
-  /** Path of base.js, used to decode the `n` parameter. */
   jsUrl: string
 }
 
 export interface YoutubePoTokens extends YoutubeWebConfig {
-  /** Sent in SABR requests (streamer context). */
   visitorBoundPoToken: string
-  /** Sent in the player request (serviceIntegrityDimensions.poToken). */
   videoBoundPoToken: string
-  /** User agent the tokens were minted under; keep it for the player and SABR requests. */
   userAgent: string
 }
 
@@ -161,11 +144,9 @@ interface BotGuardChallenge {
   interpreterScript: string
   program: string
   globalName: string
-  /** Object literal from `ytcfg.set({...})`; BotGuard reads `config_.EVENT_ID` out of it. */
   ytcfg: string
 }
 
-/** `ytAtN({...})` and `ytcfg.set({...})` are JS object literals, not JSON. */
 function parseLooseJson(text: string): Record<string, unknown> {
   const unhexed: string = text.replace(
     /\\x([0-9A-Fa-f]{2})/g,
@@ -188,7 +169,6 @@ interface BgChallenge {
   interpreterUrl: { privateDoNotAccessOrElseTrustedResourceUrlWrappedValue: string }
 }
 
-/** Challenge comes from the homepage snapshot; the interpreter script is fetched from its URL. */
 async function fetchChallenge(html: string, profile: TokenProfile): Promise<BotGuardChallenge> {
   const ytcfg: string | undefined = /ytcfg\.set\((\{[\s\S]+?\})\);/.exec(html)?.[1]
   if (!ytcfg) throw new Error("YouTube 首頁沒有 ytcfg")
@@ -273,7 +253,6 @@ function retire(old: BotGuardSession): void {
   try {
     old.web.dispose()
   } catch {
-    // Already gone
   }
 }
 
@@ -308,7 +287,6 @@ async function buildSession(client: PoTokenClient): Promise<BotGuardSession> {
     try {
       web.dispose()
     } catch {
-      // Ignore
     }
     throw error
   }
@@ -333,7 +311,6 @@ async function currentSession(client: PoTokenClient): Promise<BotGuardSession> {
   return started
 }
 
-/** Visitor and video bound tokens plus the web config they were minted against. */
 export async function getYoutubePoTokens(videoId: string, client: PoTokenClient = "WEB"): Promise<YoutubePoTokens> {
   const current: BotGuardSession = await currentSession(client)
   let videoBoundPoToken: string | undefined = current.videoTokens.get(videoId)
@@ -353,7 +330,6 @@ export async function getYoutubePoTokens(videoId: string, client: PoTokenClient 
   }
 }
 
-/** Drops cached sessions so the next call mints from scratch (e.g. after a 403). */
 export function invalidateYoutubePoTokens(): void {
   for (const current of sessions.values()) retire(current)
   sessions.clear()

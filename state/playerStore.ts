@@ -59,7 +59,6 @@ export interface PlayerStoreSnapshot {
   commentsSort: CommentSort
   commentsCursor: string | null
   commentsLoadingMore: boolean
-  /** 正在載入回覆的留言 id。 */
   repliesLoading: Record<string, boolean>
   sponsorSegments: SponsorSegment[]
   activeSponsorPrompt: SponsorSegment | null
@@ -75,11 +74,9 @@ export interface PlayerStoreSnapshot {
   activePage: number
   isFullscreen: boolean
   isPiPActive: boolean
-  /** 目前片源能否進子母畫面：只有 native 後端可以，system（HLS）不行。 */
   pipAvailable: boolean
   danmakuEnabled: boolean
   danmakuCount: number
-  /** 播放器左上角的網速與檔案資訊面板。 */
   statsVisible: boolean
   queue: UnifiedVideoItem[]
   queueIndex: number
@@ -89,7 +86,6 @@ export interface PlayerStoreSnapshot {
 export interface PlayerProgressSnapshot {
   position: number
   duration: number
-  /** 播放器已緩衝到的時間點（秒）。 */
   bufferedUntil: number
   activeChapter: VideoChapter | null
 }
@@ -98,27 +94,15 @@ let controllerInstance: VideoPlaybackController | null = null
 let audioSessionReady: boolean = false
 let openRequestSeq: number = 0
 let lastHistorySaveAt: number = 0
-/**
- * 換片期間（上一支還在播 → 新串流 open() 完成）：controller 吐出的事件都是舊片的。
- * 照收就會把舊片的位置寫成新片的觀看紀錄，下次進來就從那裡續播；狀態也會蓋掉 loading。
- */
 let streamSwitchPending: boolean = false
 let lastSkippedSegmentUuid: string = ""
 let dismissedSegmentUuid: string = ""
-/** 伺服器回的是整部影片（含所有分P）的片段，這裡留全量，切分P 時再收斂。 */
 let sponsorSegmentsAll: SponsorSegment[] = []
 let toastTimer: number | null = null
 let savedRateBeforeBoost: number = 1
 let savedOrientations: typeof Device.supportedInterfaceOrientations | null = null
-/** 直播人數每分鐘重抓一次；換片、收掉播放器都要停。 */
 let liveViewerTimer: number | null = null
 const LIVE_VIEWER_TICK_MS: number = 60_000
-/**
- * 直播即時人數。
- *
- * 不進 `storeState`：那裡一改就是全播放頁重畫，人數每分鐘變一次不值得。
- * 自己一組訂閱，只有顯示人數的那個元件會收到通知。
- */
 export interface LiveViewerSnapshot {
   videoId: string
   count: number | null
@@ -171,13 +155,11 @@ let progressState: PlayerProgressSnapshot = {
   activeChapter: null,
 }
 
-/** 一般影片照設定的後端開；直播的串流只有 system 開得起來，維持來源指定的。 */
 function pickBackend(sourceBackend: PlaybackBackend): PlaybackBackend {
   if (isLivePlayback() || sourceBackend === "system") return sourceBackend
   return storeState.settings.videoBackend
 }
 
-/** 直播沒有可跳轉的時間軸：不續播、不存位置，seek 一律視為無效。 */
 export function isLivePlayback(): boolean {
   return storeState.currentItem?.isLive === true
 }
@@ -196,7 +178,6 @@ function publishLiveViewers(videoId: string, count: number | null): void {
     try {
       listener()
     } catch {
-      // 單一訂閱者出錯不影響其他人
     }
   }
 }
@@ -212,17 +193,12 @@ function startLiveViewerRefresh(item: UnifiedVideoItem): void {
   }, LIVE_VIEWER_TICK_MS)
 }
 
-/** 上次送出的快照；用來在「什麼都沒變」時不要吵醒訂閱者。 */
 let lastEmittedStore: PlayerStoreSnapshot | null = null
-/** 同上，給播放進度用。 */
 let lastEmittedProgress: PlayerProgressSnapshot | null = null
-/** 使用者正在捲動內容時凍結進度通知，捲完再補上。 */
 let progressPaused: boolean = false
 
 function sameProgress(next: PlayerProgressSnapshot, previous: PlayerProgressSnapshot | null): boolean {
   if (previous === null) return false
-  // 播放器每 250ms 發一次，但畫面上看得到的最小單位就是「秒」（時間文字、進度條位置）。
-  // 以 1 秒為粒度，重畫從每秒 4 次降到 1 次；暫停與拖曳時照樣一動都不通知。
   return (
     Math.floor(next.position) === Math.floor(previous.position) &&
     Math.floor(next.duration) === Math.floor(previous.duration) &&
@@ -243,18 +219,13 @@ function sameSnapshot(next: PlayerStoreSnapshot, previous: PlayerStoreSnapshot |
 
 function emitStore(): void {
   const next: PlayerStoreSnapshot = { ...storeState }
-  // 很多欄位（彈幕數、供應片段）會在每個 timeupdate 被重寫成同一個值；
-  // 那種時候 notify 只會讓播放頁與控制列白重畫一次。
   if (sameSnapshot(next, lastEmittedStore)) return
-  // next 與 storeState 必須是不同物件：storeState 之後會被就地改寫，
-  // 拿去當基準就會把改動也一起改掉，永遠比對不到差異。
   lastEmittedStore = next
   storeState = { ...next }
   for (const listener of Array.from(storeListeners)) {
     try {
       listener()
     } catch {
-      // Ignore listener errors
     }
   }
 }
@@ -262,8 +233,6 @@ function emitStore(): void {
 function emitProgress(): void {
   if (progressPaused) return
   const next: PlayerProgressSnapshot = { ...progressState }
-  // 播放器暫停後仍然每 250ms 發一次 progress，位置卻沒有動。
-  // 每次都通知，就等於讓所有顯示時間的元件（章節列、進度條、迷你列）每秒重畫四次。
   if (sameProgress(next, lastEmittedProgress)) return
   lastEmittedProgress = next
   progressState = { ...next }
@@ -271,15 +240,10 @@ function emitProgress(): void {
     try {
       listener()
     } catch {
-      // Ignore listener errors
     }
   }
 }
 
-/**
- * 使用者正在捲動觀看頁時凍結進度通知：這段時間裡一個訂閱者都不叫醒。
- * 停止捲動後補上最新值，所以進度條不會停在凍結那一刻。
- */
 export function setProgressUpdatesPaused(paused: boolean): void {
   if (progressPaused === paused) return
   progressPaused = paused
@@ -288,7 +252,7 @@ export function setProgressUpdatesPaused(paused: boolean): void {
   emitProgress()
 }
 
-/** 播放器 seek／stop 在等代理回資料時可能一直不回來，不能讓介面跟著等。 */function withTimeout<T>(task: Promise<T>, ms: number): Promise<T | "timeout"> {
+function withTimeout<T>(task: Promise<T>, ms: number): Promise<T | "timeout"> {
   return new Promise((resolve: (value: T | "timeout") => void, reject: (reason: unknown) => void): void => {
     const timer: number = setTimeout((): void => resolve("timeout"), ms)
     task.then(
@@ -313,7 +277,6 @@ async function seekForResume(ctrl: VideoPlaybackController, seconds: number): Pr
     if (result === "timeout") throw new Error("載入續播位置逾時")
   } catch (error) {
     if (error instanceof Error && error.message === "載入續播位置逾時") throw error
-    // 其他 seek 失敗就從頭播
   }
 }
 
@@ -348,7 +311,6 @@ async function ensureAudioSession(): Promise<void> {
     await SharedAudioSession.setActive(true)
     audioSessionReady = true
   } catch {
-    // Preview / non-main-app context may restrict audio session changes
   }
 }
 
@@ -372,7 +334,6 @@ function mapControllerState(rawState: VideoPlaybackState): PlaybackStatus {
   }
 }
 
-// 子母畫面只有 native（自訂解碼）後端支援；system（HLS）目前一律 possible=false。
 function refreshPipAvailability(ctrl: VideoPlaybackController): void {
   let available: boolean = false
   try {
@@ -391,7 +352,6 @@ export function getPlayerController(): VideoPlaybackController {
   const ctrl: VideoPlaybackController = new VideoPlaybackController()
   controllerInstance = ctrl
 
-  // bili 線路在代理層自己換，這裡只負責告知。
   setBiliLineSwitchListener((): void => {
     showSkippedToast("已切換線路")
   })
@@ -405,8 +365,6 @@ export function getPlayerController(): VideoPlaybackController {
     }
   })
 
-  // 播放中退到背景就自動接上子母畫面；暫停、收掉或後端不支援就不搶畫面。
-  // 鎖屏時系統不給開 PiP，失敗就靜默。
   AppEvents.scenePhase.addListener((phase: ScenePhase) => {
     if (phase !== "background") return
     if (storeState.status !== "playing" || !storeState.currentItem) return
@@ -441,7 +399,6 @@ export function getPlayerController(): VideoPlaybackController {
       lastHistorySaveAt = now
       recordWatchHistory({
         item: storeState.currentItem,
-        // 直播的位置沒有意義，存了下次進來就會拿去 seek。
         position: storeState.currentItem.isLive ? 0 : pos,
         duration: dur,
         watchedAt: now,
@@ -474,9 +431,7 @@ export function getPlayerController(): VideoPlaybackController {
   })
 
   ctrl.on("ended", () => {
-    // 舊片剛好播完不該把新片的 loading 蓋成 ended。
     if (streamSwitchPending) return
-    // 最後一次 progress 可能差一點點，進度條停在滿格才像「播完了」。
     if (progressState.duration > 0) {
       progressState.position = progressState.duration
       progressState.bufferedUntil = progressState.duration
@@ -566,7 +521,6 @@ export function subscribeLiveViewers(listener: () => void): () => void {
   }
 }
 
-/** 只有顯示直播人數的元件要訂閱這個，不跟整個播放器快照绑在一起。 */
 export function useLiveViewers(): LiveViewerSnapshot {
   const [snap, setSnap] = useState<LiveViewerSnapshot>(() => getLiveViewerSnapshot())
   useEffect(() => {
@@ -581,7 +535,6 @@ export function useLiveViewers(): LiveViewerSnapshot {
 export interface OpenVideoOptions {
   cid?: number
   page?: number
-  /** Explicit start position in seconds; takes precedence over saved history. */
   startSeconds?: number
   queue?: UnifiedVideoItem[]
   autoExpand?: boolean
@@ -613,12 +566,10 @@ function pickInitialQualityTrack(
   return { id: best.id, label: best.label }
 }
 
-/** 貼連結或直播卡片開片時只有欄位不全的項目；詳情回來就把標題、頻道、觀看數補齊。 */
 function enrichItem(item: UnifiedVideoItem, detail: VideoDetail): UnifiedVideoItem {
   const merged: UnifiedVideoItem = {
     ...item,
     title: detail.title || item.title,
-    // 列表帶來的縮圖是 16:9；YouTube 詳情的是帶黑邊的 4:3，只在本來沒有時補。
     thumbnailUrl: item.thumbnailUrl || detail.thumbnailUrl,
     duration: detail.duration || item.duration,
     authorId: detail.authorId || item.authorId,
@@ -636,7 +587,6 @@ function enrichItem(item: UnifiedVideoItem, detail: VideoDetail): UnifiedVideoIt
   return merged
 }
 
-/** 彈幕 XML 換畫質後要重新載入；同一個 cid 不必重抓。 */
 const danmakuXmlCache: Map<number, string> = new Map()
 
 async function loadBiliDanmakuForCid(cid: number): Promise<void> {
@@ -652,11 +602,9 @@ async function loadBiliDanmakuForCid(cid: number): Promise<void> {
     storeState.danmakuCount = report.loaded
     emitStore()
   } catch {
-    // Danmaku failure should not interrupt video playback
   }
 }
 
-/** 多 P 影片在 bsbsb.top 是全部 cid 混在一起回，只留目前這一 P 的。 */
 function applySponsorSegmentsForCid(): void {
   storeState.sponsorSegments = filterSegmentsForCid(sponsorSegmentsAll, storeState.activeCid)
 }
@@ -668,7 +616,6 @@ function sponsorConfigSignature(settings: PlayerSettings): string {
 let sponsorConfig: string = sponsorConfigSignature(storeState.settings)
 let sponsorReloadSeq: number = 0
 
-/** 設定頁改了空降選項要馬上生效，不用重開影片。 */
 subscribeStorageChanges(() => {
   const next: PlayerSettings = getSettings()
   const signature: string = sponsorConfigSignature(next)
@@ -707,13 +654,10 @@ export async function openVideo(item: UnifiedVideoItem, options: OpenVideoOption
   const requestId: number = ++openRequestSeq
   const ctrl: VideoPlaybackController = getPlayerController()
   const settings: PlayerSettings = getSettings()
-  // 換流要解析、等代理，好幾秒；這段時間不能讓上一支繼續出聲。
-  // 先暫停（畫面留在最後一幀），順便擋掉它接下來的事件與 progress。
   streamSwitchPending = true
   try {
     ctrl.pause()
   } catch {
-    // 沒在播就沒事
   }
   await ensureAudioSession()
 
@@ -781,12 +725,10 @@ export async function openVideo(item: UnifiedVideoItem, options: OpenVideoOption
     ctrl.clearSubtitles()
     ctrl.clearDanmaku()
   } catch {
-    // Ignore cleanup errors before open
   }
   subtitleVttCache.clear()
   danmakuXmlCache.clear()
 
-  // Kick off detail, comments, and SponsorBlock in parallel so video opens as fast as possible
   void getVideoDetail(item.provider, item.rawId)
     .then((detail: VideoDetail) => {
       if (requestId !== openRequestSeq) return
@@ -796,7 +738,6 @@ export async function openVideo(item: UnifiedVideoItem, options: OpenVideoOption
       if (storeState.currentItem) {
         const enriched: UnifiedVideoItem = enrichItem(storeState.currentItem, detail)
         storeState.currentItem = enriched
-        // 佇列里的同一個項目也要補，不然下一部會顯示 id。
         if (storeState.queue[storeState.queueIndex]?.id === enriched.id) {
           const queue: UnifiedVideoItem[] = storeState.queue.slice()
           queue[storeState.queueIndex] = enriched
@@ -818,7 +759,6 @@ export async function openVideo(item: UnifiedVideoItem, options: OpenVideoOption
     })
     .catch(() => {})
 
-  // 直播的分頁是聊天室，一般留言不拉。
   if (!item.isLive) {
     void getCommentPage(item.provider, item.rawId, { sort: storeState.commentsSort })
       .then((page: CommentPage) => {
@@ -871,8 +811,6 @@ export async function openVideo(item: UnifiedVideoItem, options: OpenVideoOption
 
     if (requestId !== openRequestSeq) return
 
-    // 續播點在開片前就知道，先把那裡的片段抓起來，跟 open() 同時進行。
-    // 直播沒有時間軸：續播位置只會讓播放器對直播窗格 seek，然後報錯。
     let resumeAt: number = 0
     if (!item.isLive) {
       if (options.startSeconds !== undefined && options.startSeconds > 0) {
@@ -904,7 +842,6 @@ export async function openVideo(item: UnifiedVideoItem, options: OpenVideoOption
 
     await ctrl.play()
     if (requestId !== openRequestSeq) return
-    // 字幕不擋第一幀，開播後才去拿，拿到再補進 manifest。
     const pendingSubtitles = manifest.resolveSubtitles
     if (pendingSubtitles) {
       void pendingSubtitles()
@@ -959,7 +896,6 @@ export async function seekTo(seconds: number): Promise<void> {
   try {
     await ctrl.seek(target)
   } catch {
-    // Ignore superseded seek
   }
 }
 
@@ -1032,12 +968,9 @@ export async function selectQuality(qualityId: string): Promise<void> {
       try {
         await ctrl.seek(currentPos)
       } catch {
-        // Ignore seek failure
       }
     }
-    // 先回到原位再重套字幕與彈幕，字幕下載不卡住續播點。
     await restoreControllerSettings()
-    // open() 也會清掉彈幕內容，只留「已開啟」的開關。
     const activeCid: number | undefined = storeState.activeCid
     if (storeState.currentItem?.provider === "bili" && activeCid && storeState.danmakuEnabled) {
       void loadBiliDanmakuForCid(activeCid)
@@ -1053,7 +986,6 @@ export async function selectQuality(qualityId: string): Promise<void> {
   }
 }
 
-/** 同一條字幕在同一次播放裡不必重抓（bili 的網址每次解析都不同）；換片時清掉。 */
 const subtitleVttCache: Map<string, string> = new Map()
 
 async function fetchSubtitleVtt(sub: SubtitleTrackInfo): Promise<string> {
@@ -1104,10 +1036,6 @@ export async function selectSubtitle(subtitleId: string | null): Promise<void> {
   }
 }
 
-/**
- * 重開串流（切畫質、換分 P、換引擎、重試）後把控制項狀態再套一次。
- * open() 會把控制器自己的字幕與彈幕設定清掉，只留 store 顯示「已開啟」就會跟實際不符。
- */
 async function restoreControllerSettings(): Promise<void> {
   const ctrl: VideoPlaybackController = getPlayerController()
   const settings: PlayerSettings = storeState.settings
@@ -1125,7 +1053,6 @@ async function restoreControllerSettings(): Promise<void> {
       (entry: SubtitleTrackInfo): boolean => entry.id === subtitleId,
     )
     if (!sub) {
-      // 新 manifest 沒有這條字幕（換分 P、換引擎），不要留一個開不了的開關。
       storeState.selectedSubtitleId = null
     } else {
       try {
@@ -1149,7 +1076,6 @@ export async function selectPage(pagePart: VideoPagePart): Promise<void> {
   const settings: PlayerSettings = storeState.settings
   storeState.activeCid = pagePart.cid
   storeState.activePage = pagePart.page
-  // 新分P 的片段與跳過紀錄都不該沿用上一 P 的。
   lastSkippedSegmentUuid = ""
   storeState.activeSponsorPrompt = null
   applySponsorSegmentsForCid()
@@ -1163,12 +1089,10 @@ export async function selectPage(pagePart: VideoPagePart): Promise<void> {
   }
   emitProgress()
   emitStore()
-  // 同 openVideo：換分P之前先停掉舊串流，不然它的事件會蓋掉位置也寫錯紀錄。
   streamSwitchPending = true
   try {
     ctrl.pause()
   } catch {
-    // 沒在播就沒事
   }
 
   try {
@@ -1267,7 +1191,6 @@ export function setFullscreen(fullscreen: boolean): void {
       savedOrientations = null
     }
   } catch {
-    // Orientation lock not supported on all devices
   }
   storeState.isFullscreen = fullscreen
   emitStore()
@@ -1277,7 +1200,6 @@ export function toggleFullscreen(): void {
   setFullscreen(!storeState.isFullscreen)
 }
 
-// 迷你播放器只是監視窗，字幕與彈幕在那麼小的畫面裡只會糊成一團，收起時關掉、展開再依原本的選擇還原。
 function applyOverlayVisibility(visible: boolean): void {
   const ctrl: VideoPlaybackController = getPlayerController()
   const isBili: boolean = storeState.currentItem?.provider === "bili"
@@ -1307,16 +1229,13 @@ export async function closePlayer(): Promise<void> {
     setFullscreen(false)
   }
   const ctrl: VideoPlaybackController = getPlayerController()
-  // 讓還在跑的開片流程停在下一個檢查點。
   openRequestSeq++
   stopLiveViewerRefresh()
   publishLiveViewers("", null)
-  // 先放掉預抓：播放器在等的代理請求會立刻失敗返回，stop 才有機會結束。
   releaseAllPrefetchers()
   try {
     await withTimeout(ctrl.stop(), STOP_TIMEOUT_MS)
   } catch {
-    // Ignore
   }
   storeState.presentationMode = "hidden"
   storeState.currentItem = null
@@ -1380,7 +1299,6 @@ export async function reloadComments(): Promise<void> {
     storeState.comments = page.comments
     storeState.commentsCursor = page.cursor
   } catch {
-    // Ignore
   } finally {
     if (storeState.currentItem?.id === item.id) {
       storeState.commentsLoading = false
@@ -1389,14 +1307,12 @@ export async function reloadComments(): Promise<void> {
   }
 }
 
-/** 換排序：清掉現有留言，從第一頁重載。 */
 export async function setCommentsSort(sort: CommentSort): Promise<void> {
   if (storeState.commentsSort === sort) return
   storeState.commentsSort = sort
   await reloadComments()
 }
 
-/** 接續下一批留言；沒有游標就什麼都不做。 */
 export async function loadMoreComments(): Promise<void> {
   const item: UnifiedVideoItem | null = storeState.currentItem
   const cursor: string | null = storeState.commentsCursor
@@ -1413,14 +1329,12 @@ export async function loadMoreComments(): Promise<void> {
     storeState.comments = fresh.length > 0 ? [...storeState.comments, ...fresh] : storeState.comments
     storeState.commentsCursor = page.cursor
   } catch {
-    // Keep the cursor so the user can retry
   } finally {
     storeState.commentsLoadingMore = false
     emitStore()
   }
 }
 
-/** 載入某則留言的下一批回覆（第一次就是展開）。 */
 export async function loadCommentReplies(commentId: string): Promise<void> {
   const item: UnifiedVideoItem | null = storeState.currentItem
   const target: CommentItem | undefined = storeState.comments.find(
@@ -1443,7 +1357,6 @@ export async function loadCommentReplies(commentId: string): Promise<void> {
       return { ...comment, replies: [...existing, ...fresh], replyCursor: page.cursor }
     })
   } catch {
-    // Keep the cursor so the user can retry
   } finally {
     storeState.repliesLoading = { ...storeState.repliesLoading, [commentId]: false }
     emitStore()

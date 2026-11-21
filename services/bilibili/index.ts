@@ -32,10 +32,6 @@ const VIEW_URL = `${API}/x/web-interface/view`
 const VIEW_DETAIL_URL = `${API}/x/web-interface/view/detail`
 const RELATED_URL = `${API}/x/web-interface/archive/related`
 
-/**
- * `/x/web-interface/view` 的短期快取：開片時詳情與串流解析會同時要同一支影片，
- * 共用同一個 promise 就少一次 round trip（這是主執行緒等最久的那一段）。
- */
 const VIEW_CACHE_MS: number = 20_000
 const viewCache: Map<string, { at: number; promise: Promise<any> }> = new Map()
 
@@ -78,8 +74,6 @@ const AUDIO_LABELS: Record<number, string> = {
   30250: "Dolby Atmos",
   30251: "Hi-Res",
 }
-
-// ─── Small helpers ──────────────────────────────────────────────────────────
 
 function imageUrl(url?: string): string {
   if (typeof url !== "string" || !url) return ""
@@ -176,8 +170,6 @@ function isUhd(media: BiliDashMedia): boolean {
   return height >= 2160
 }
 
-/** 4K 以上的 H.264 不要：4K60 要 13～29 Mbps，native 管線解不動，音訊會沙沙。
- *  8K 反而要 AV1：HEVC 8K native 開不起來（Invalid argument），AV1 可以。 */
 function codecScore(media: BiliDashMedia): number {
   const name = codecName(media)
   const height = Number(media.height) || QN_HEIGHTS[Number(media.id)] || 0
@@ -203,9 +195,6 @@ function qualityLabel(media: BiliDashMedia): string {
   return `${Number(media.id) || 0}p`
 }
 
-// ─── Input parsing ──────────────────────────────────────────────────────────
-
-/** Parses a BV id, av number or bilibili.com link. Short links need `resolveBiliShortUrl`. */
 export function parseBiliInput(input: string): { bvid?: string; aid?: number } | null {
   const text = (input ?? "").trim()
   if (!text) return null
@@ -222,7 +211,6 @@ export function parseBiliInput(input: string): { bvid?: string; aid?: number } |
   return null
 }
 
-/** Resolves `b23.tv` short links (and anything else `parseBiliInput` understands). */
 export async function resolveBiliShortUrl(
   input: string,
 ): Promise<{ bvid?: string; aid?: number } | null> {
@@ -239,7 +227,6 @@ export async function resolveBiliShortUrl(
     const parsed = parseBiliInput(res.url || "")
     if (parsed) return parsed
   } catch {
-    // fall through
   }
   return null
 }
@@ -259,8 +246,6 @@ async function resolveAid(ids: { bvid?: string; aid?: number }): Promise<number>
   }
   return Number(result.data.aid)
 }
-
-// ─── Mapping ────────────────────────────────────────────────────────────────
 
 function mapItem(raw: any): UnifiedVideoItem | null {
   if (!raw || typeof raw !== "object") return null
@@ -311,8 +296,6 @@ function mapItems(rawList: unknown): UnifiedVideoItem[] {
   return items
 }
 
-// ─── Trending / search ──────────────────────────────────────────────────────
-
 export async function getBiliTrending(page = 1): Promise<UnifiedVideoItem[]> {
   try {
     const result: any = await biliFetchJson<any>(
@@ -333,7 +316,6 @@ export async function getBiliTrending(page = 1): Promise<UnifiedVideoItem[]> {
       if (items.length) return items
     }
   } catch {
-    // fall back to the popular endpoint
   }
 
   const popular: any = await biliFetchJson<any>(`${API}/x/web-interface/popular`, {
@@ -396,8 +378,6 @@ export async function getBiliSearchSuggestions(term: string): Promise<string[]> 
   }
 }
 
-// ─── Video detail ───────────────────────────────────────────────────────────
-
 export async function getBiliVideoDetail(bvidOrAid: string): Promise<VideoDetail> {
   const ids = await resolveIds(bvidOrAid)
   const params: Record<string, string | number> = {}
@@ -418,7 +398,6 @@ export async function getBiliVideoDetail(bvidOrAid: string): Promise<VideoDetail
       related = Array.isArray(detail.data.Related) ? detail.data.Related : []
     }
   } catch {
-    // fall back to /view
   }
 
   if (!view) {
@@ -439,7 +418,6 @@ export async function getBiliVideoDetail(bvidOrAid: string): Promise<VideoDetail
       const result: any = await biliFetchJson<any>(RELATED_URL, { bvid })
       if (result?.code === 0 && Array.isArray(result.data)) related = result.data
     } catch {
-      // related videos are optional
     }
   }
 
@@ -471,8 +449,6 @@ export async function getBiliVideoDetail(bvidOrAid: string): Promise<VideoDetail
     tags: tagNames.length ? tagNames : undefined,
   }
 }
-
-// ─── Streams ────────────────────────────────────────────────────────────────
 
 function buildAudioTracks(dash: BiliDashPayload): AudioStreamTrack[] {
   const tracks: AudioStreamTrack[] = []
@@ -517,7 +493,6 @@ function buildQualityTracks(dash: BiliDashPayload): VideoQualityTrack[] {
 
   const tracks: VideoQualityTrack[] = []
   for (const [qn, list] of grouped) {
-    // 4K 以上排除 AVC；連一份替代編碼都沒有就整條畫質不給。
     const pool = isUhd(list[0]) ? list.filter(media => codecName(media) !== "AVC") : list
     if (!pool.length) continue
     const best = pool
@@ -565,10 +540,6 @@ function pickDefaultQuality(
   return ascending[0]
 }
 
-/**
- * 優先用 HLS：native 後端會提前抓下一段，段邊界不會露出空窗。
- * 軌道只準備一次；沒有 sidx 或串流伺服器起不來就退回 SegmentList MPD。
- */
 async function buildBiliPlayable(
   bvid: string,
   cid: number,
@@ -580,7 +551,6 @@ async function buildBiliPlayable(
     try {
       return { url: await writeBiliHlsManifest(bvid, cid, qn, prepared), delivery: "hls" }
     } catch {
-      // 串流伺服器起不來才走下面；軌道不必重做。
     }
   }
   return {
@@ -635,7 +605,6 @@ export async function resolveBiliStream(
   const streamCid = Number(resolvedCid)
   const danmakuXmlUrl = `https://comment.bilibili.com/${streamCid}.xml`
   const dash: BiliDashPayload | undefined = data.dash
-  // 字幕不擋開播：manifest 先回，第一幀之後再用 resolveSubtitles 補上。
   const resolveSubtitles = (): Promise<SubtitleTrackInfo[]> =>
     fetchBiliSubtitleTracks(resolvedBvid, streamCid)
   const subtitles: SubtitleTrackInfo[] = []
@@ -718,8 +687,6 @@ export async function resolveBiliStream(
 
   throw new Error("找不到可用的串流格式")
 }
-
-// ─── Danmaku ────────────────────────────────────────────────────────────────
 
 interface HuffmanTable {
   counts: number[]
@@ -1026,13 +993,10 @@ export async function fetchBiliDanmakuXml(cid: number): Promise<string> {
       const bytes = await res.bytes()
       return decodeDanmakuBytes(bytes)
     } catch {
-      // try the next endpoint
     }
   }
   throw new Error("無法取得彈幕資料")
 }
-
-// ─── Comments ───────────────────────────────────────────────────────────────
 
 function mapReply(raw: any): CommentItem {
   const member = raw?.member ?? {}
@@ -1050,15 +1014,10 @@ function mapReply(raw: any): CommentItem {
     replyCount,
     replies: inline,
   }
-  // 行內只带前幾則，展開時從第一頁重抓（重複的用 id 去掉）。
   if (replyCount > 0) item.replyCursor = "1"
   return item
 }
 
-/**
- * 留言分頁。游標是 `p<頁碼>` 或 `o<offset>`；`sort` 對應 `/reply/main` 的 mode（3 = 熱門、2 = 最新）。
- * 這個端點沒帶 `pagination_str` 就不回傳任何留言。
- */
 export async function getBiliCommentPage(
   bvidOrAid: string,
   query: CommentQuery = {},
@@ -1090,7 +1049,6 @@ export async function getBiliCommentPage(
       }
     }
   } catch {
-    // fall back to the legacy endpoint
   }
 
   const legacy: any = await biliFetchJson<any>(`${API}/x/v2/reply`, {
@@ -1113,7 +1071,6 @@ export async function getBiliComments(
   return result.comments
 }
 
-/** 一层留言的回覆分頁；游標是頁碼。 */
 export async function getBiliCommentReplies(
   bvidOrAid: string,
   rootId: string,
@@ -1133,8 +1090,6 @@ export async function getBiliCommentReplies(
   const comments: CommentItem[] = Array.isArray(replies) ? replies.map(mapReply) : []
   return { comments, cursor: comments.length < 20 ? null : String(page + 1) }
 }
-
-// ─── Channel / UP 主 ────────────────────────────────────────────────────────
 
 interface ChannelProfile {
   name: string
@@ -1159,7 +1114,6 @@ async function fetchChannelProfile(mid: string): Promise<ChannelProfile | null> 
       }
     }
   } catch {
-    // fall back to the public card endpoint
   }
 
   try {
@@ -1174,7 +1128,6 @@ async function fetchChannelProfile(mid: string): Promise<ChannelProfile | null> 
       }
     }
   } catch {
-    // give up below
   }
   return null
 }
@@ -1220,13 +1173,11 @@ async function fetchChannelVideos(
         if (items.length) return { videos: items, total }
       }
     } catch {
-      // try the next endpoint
     }
   }
   return { videos: [], total: 0 }
 }
 
-/** UP 主投稿裡搜關鍵字；cursor 是頁碼。 */
 export async function searchBiliChannelVideos(
   mid: string,
   keyword: string,
@@ -1244,7 +1195,6 @@ export async function getBiliChannel(
 ): Promise<ChannelDetail> {
   const rawMid: string = String(mid ?? "").trim()
   if (!rawMid) throw new Error("缺少 UP 主 ID")
-  // bili 的 order 只有 pubdate / click，沒有「最早」；UI 也不對 bili 顯示這個選項。
   const order: string = sort === "popular" ? "click" : "pubdate"
 
   const profile = await fetchChannelProfile(rawMid)
@@ -1253,7 +1203,6 @@ export async function getBiliChannel(
   let total: number = firstPage.total
 
   if (!videos.length && profile?.name) {
-    // Risk-control fallback: search the UP 主's published works by name.
     videos = await searchBiliVideos(profile.name, page)
     total = 0
   }
@@ -1269,7 +1218,6 @@ export async function getBiliChannel(
       profile?.fans !== undefined ? `${formatCount(profile.fans)} 粉絲` : undefined,
     videoCountText: total > 0 ? formatCount(total) : undefined,
     videos,
-    // 一頁滿 30 筆才可能有下一頁；不足就是到底了。
     nextPageToken: videos.length >= 30 ? String(page + 1) : undefined,
   }
 }

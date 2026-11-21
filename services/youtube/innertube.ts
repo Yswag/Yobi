@@ -1,13 +1,3 @@
-/**
- * YouTube Innertube API 客戶端（純 fetch）。
- *
- * 多種 client context：
- * - VISIONOS：免 PoToken 的 `hlsManifestUrl`（影音合併、可任意 seek，最高 4K），需要 visitorData。
- * - IOS：影片詳情，以及 SABR 備援的直連 adaptiveFormats。
- * - WEB：搜尋、browse、next、留言。
- * - WEB_SABR / MWEB：取得 serverAbrStreamingUrl + ustreamerConfig。
- * - ANDROID / IOS / TVHTML5：直播的 `hlsManifestUrl`（直播只有 app client 會回清單）。
- */
 
 import { fetch } from "scripting"
 import { getAuthState } from "../auth"
@@ -15,7 +5,6 @@ import { getYoutubeLocale } from "./locale"
 
 export type InnertubeClientKey = "VISIONOS" | "WEB" | "WEB_SABR" | "MWEB" | "TVHTML5" | "ANDROID" | "IOS"
 
-/** 鬆散 JSON 型別，對應 Innertube 的巢狀回應。 */
 export type JsonObject = Record<string, any>
 
 export interface InnertubeClientConfig {
@@ -147,7 +136,6 @@ export const INNERTUBE_CLIENTS: Record<InnertubeClientKey, InnertubeClientConfig
 
 let anonymousVisitorData: string | null = null
 
-/** visitorData for requests without a stored one; fetched once per run. */
 export async function getAnonymousVisitorData(): Promise<string | undefined> {
   if (anonymousVisitorData) return anonymousVisitorData
   try {
@@ -171,7 +159,6 @@ let cachedAuth: YoutubeAuthSnapshot | null = null
 let cachedAuthAt: number = 0
 const AUTH_CACHE_MS: number = 30_000
 
-/** 讀取使用者設定的 YouTube 憑證（Cookie + SAPISIDHASH）。 */
 export function getYoutubeAuth(): YoutubeAuthSnapshot {
   const now: number = Date.now()
   if (cachedAuth && now - cachedAuthAt < AUTH_CACHE_MS) {
@@ -205,16 +192,13 @@ export function getYoutubeAuth(): YoutubeAuthSnapshot {
   return cachedAuth
 }
 
-/** 讓外部（登入流程）清掉快取。 */
 export function invalidateYoutubeAuthCache(): void {
   cachedAuth = null
   cachedAuthAt = 0
 }
 
-/** Only the web clients accept `SAPISIDHASH`; the app clients rejected it with HTTP 400 when they were still around. */
 const HASH_AUTH_CLIENTS: InnertubeClientKey[] = ["WEB", "WEB_SABR", "MWEB"]
 
-/** Clients that need the account identity: the web family does personalisation and restricted videos alike. */
 const COOKIE_CLIENTS: InnertubeClientKey[] = ["WEB", "WEB_SABR", "MWEB"]
 
 function buildHeaders(clientKey: InnertubeClientKey, auth: YoutubeAuthSnapshot): Record<string, string> {
@@ -232,7 +216,6 @@ function buildHeaders(clientKey: InnertubeClientKey, auth: YoutubeAuthSnapshot):
   }
   if (auth.cookie && COOKIE_CLIENTS.includes(clientKey)) {
     headers["Cookie"] = auth.cookie
-    // Signed-in requests address the first account slot; without it YouTube keeps the guest session.
     headers["X-Goog-AuthUser"] = "0"
   }
   if (auth.authorization && HASH_AUTH_CLIENTS.includes(clientKey)) {
@@ -249,11 +232,9 @@ export interface InnertubeRequestOptions {
   client?: InnertubeClientKey
   headers?: Record<string, string>
   timeoutSeconds?: number
-  /** Overrides the stored visitorData, e.g. to match the one a PO token was minted for. */
   visitorData?: string
 }
 
-/** 呼叫 Innertube API。`endpoint` 例如 "player"、"search"、"browse"、"next"。 */
 export async function innertubePost(
   endpoint: string,
   payload: JsonObject,
@@ -308,7 +289,6 @@ export interface PlayerRequestOptions {
   visitorData?: string
 }
 
-/** 取得 player response。 */
 export async function fetchPlayerResponse(
   videoId: string,
   clientKey: InnertubeClientKey,
@@ -342,14 +322,12 @@ export async function fetchPlayerResponse(
   return innertubePost("player", payload, { client: clientKey, visitorData: options.visitorData })
 }
 
-/** 搜尋。 */
 export async function fetchSearchResponse(query: string, params?: string): Promise<JsonObject> {
   const payload: JsonObject = { query }
   if (params) payload["params"] = params
   return innertubePost("search", payload, { client: "WEB" })
 }
 
-/** browse（首頁、頻道）；`query` 只給頻道內搜尋用。 */
 export async function fetchBrowseResponse(browseId: string, params?: string, query?: string): Promise<JsonObject> {
   const payload: JsonObject = { browseId }
   if (params) payload["params"] = params
@@ -357,12 +335,10 @@ export async function fetchBrowseResponse(browseId: string, params?: string, que
   return innertubePost("browse", payload, { client: "WEB" })
 }
 
-/** browse 的續頁（頻道影片、播放清單）。 */
 export async function fetchBrowseContinuation(continuation: string): Promise<JsonObject> {
   return innertubePost("browse", { continuation }, { client: "WEB" })
 }
 
-/** next（推薦、章節、留言）。 */
 export async function fetchNextResponse(videoId: string, continuation?: string): Promise<JsonObject> {
   if (continuation) {
     return innertubePost("next", { continuation }, { client: "WEB" })

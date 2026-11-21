@@ -37,7 +37,6 @@ function YobiRootView(): VirtualNode {
     path.setValue([...path.value, route])
   }
 
-  // From the player this minimizes it first, so the channel opens on the tab underneath.
   const handleOpenChannel: OpenChannel = (provider, authorId, authorName, avatarUrl) => {
     if (!authorId) return
     if (getPlayerStoreSnapshot().presentationMode === "expanded") minimizeToMiniPlayer()
@@ -70,11 +69,8 @@ function YobiRootView(): VirtualNode {
       <TabView
         selection={selection}
         tint={palette.brand}
-        // The mini player is placed against the full-size tab bar.
         tabBarMinimizeBehavior="never"
         tabViewSearchActivation="searchTabSelection"
-        // An overlay never sizes the tabs: the screen-size player would otherwise overflow the root when the keyboard
-        // shrinks it, and the centered root would push every tab upward.
         overlay={{ alignment: "topLeading", content: <PlayerHost onOpenChannel={handleOpenChannel} /> }}
       >
         <Tab title="首頁" systemImage="house.fill" value={TAB.home}>
@@ -99,8 +95,6 @@ function YobiRootView(): VirtualNode {
   )
 }
 
-// 冷啟動就把 WKWebView 拉起來會把主執行緒吃滿，首頁那幾秒連點擊都送不進來；
-// 等第一幀站穩再預熱，PO token 只有播放時才要用。
 const WARM_DELAY_MS: number = 2000
 
 async function run(): Promise<void> {

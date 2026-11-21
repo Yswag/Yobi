@@ -44,7 +44,6 @@ export interface ChannelViewProps {
   channelId: string
   initialName?: string
   initialAvatar?: string
-  /** 保留給非推入式的呼叫端；推入頁的返回由系統導覽列提供。 */
   onClose?: () => void
   onOpenChannel?: (provider: Provider, authorId: string, authorName: string, avatarUrl?: string) => void
 }
@@ -54,12 +53,9 @@ type LayoutMode = "row" | "grid"
 
 const BANNER_HEIGHT: number = 132
 const AVATAR_SIZE: number = 76
-/** 離底部這麼近就自動抓下一頁。 */
 const LOAD_MORE_DISTANCE: number = 320
-/** 名字上緣大約在這個位移（封面 132 + 間距 20）之後看不見。 */
 const TITLE_REVEAL_OFFSET: number = 140
 
-// bili 的 arc/search 只有 pubdate / click，所以「最早」只給 YouTube。
 const SORT_OPTIONS_YT: ChipOption<SortMode>[] = [
   { key: "latest", label: "最新" },
   { key: "popular", label: "熱門" },
@@ -80,17 +76,14 @@ export function ChannelView(props: ChannelViewProps): VirtualNode {
   const [sortMode, setSortMode] = useState<SortMode>("latest")
   const [layoutMode, setLayoutMode] = useState<LayoutMode>("row")
   const [descriptionExpanded, setDescriptionExpanded] = useState<boolean>(false)
-  // 導覽列標題跟頻道名走：名字還在畫面上就不顯示，捲出去才浮出來。
   const [titleVisible, setTitleVisible] = useState<boolean>(false)
   const titleShownRef = useRef<boolean>(false)
-  // 影片清單：排序由 provider 決定，所以獨立於 detail 存（換排序就整份重抓）。
   const [videos, setVideos] = useState<UnifiedVideoItem[]>([])
   const [listLoading, setListLoading] = useState<boolean>(false)
   const [nextToken, setNextToken] = useState<string | undefined>(undefined)
   const [loadingMore, setLoadingMore] = useState<boolean>(false)
   const loadingMoreRef = useRef<boolean>(false)
   const requestSeq = useRef<number>(0)
-  // 頻道內搜尋：送出後才打 API，結果另存，清掉關鍵字就回到原本的影片清單、不必重抓。
   const [searchedQuery, setSearchedQuery] = useState<string>("")
   const [results, setResults] = useState<UnifiedVideoItem[]>([])
   const [resultsToken, setResultsToken] = useState<string | undefined>(undefined)
@@ -135,7 +128,6 @@ export function ChannelView(props: ChannelViewProps): VirtualNode {
   const shownVideos: UnifiedVideoItem[] = searching ? results : videos
   const shownToken: string | undefined = searching ? resultsToken : nextToken
 
-  // 頻道影片清單本來就不帶作者，用目前頻道的資料補上。
   const patchVideos = (incoming: UnifiedVideoItem[]): UnifiedVideoItem[] =>
     incoming.map((video: UnifiedVideoItem): UnifiedVideoItem => {
       if (video.authorName && video.authorId) return video
@@ -167,14 +159,12 @@ export function ChannelView(props: ChannelViewProps): VirtualNode {
       ])
       setNextToken(page.nextPageToken)
     } catch {
-      // 保留 token，使用者可以再滑一次重試
     } finally {
       loadingMoreRef.current = false
       setLoadingMore(false)
     }
   }
 
-  // 換排序 = 伺服器重算第一頁（bili 的 order、YouTube 的 chip token），把累積清掉重來。
   const changeSort = async (mode: SortMode): Promise<void> => {
     if (mode === sortMode) return
     const seq: number = ++requestSeq.current
@@ -188,7 +178,6 @@ export function ChannelView(props: ChannelViewProps): VirtualNode {
       setVideos(patchVideos(page.videos))
       setNextToken(page.nextPageToken)
     } catch {
-      // 失敗就留在空清單，使用者可以換回其他排序
     } finally {
       if (seq === requestSeq.current) setListLoading(false)
     }
@@ -257,7 +246,6 @@ export function ChannelView(props: ChannelViewProps): VirtualNode {
 
   const metaParts: string[] = [providerFullName(props.provider)]
   if (detail?.subscriberCountText) metaParts.push(detail.subscriberCountText)
-  // 只顯示頻道總數；抓不到就不寫，不要拿已載入數量充當總數。
   if (detail?.videoCountText) metaParts.push(`${detail.videoCountText} 部影片`)
 
   const banner: VirtualNode = detail?.bannerUrl
@@ -340,7 +328,6 @@ export function ChannelView(props: ChannelViewProps): VirtualNode {
     />
   )
 
-  // 清單是空的就不給「載入更多」：上面已經是空狀態，再接一顆按鈕很怪。
   const footer: VirtualNode | null = shownToken && shownVideos.length > 0 ? (
     <VStack padding={{ vertical: 18 }} frame={{ maxWidth: "infinity" }}>
       {loadingMore ? (
@@ -407,7 +394,6 @@ export function ChannelView(props: ChannelViewProps): VirtualNode {
       refreshable={load}
       navigationBarTitleDisplayMode="inline"
       scrollEdgeEffectStyle="soft"
-      // 只訂閱位移；轉成布林後用 ref 去重，SwiftUI 每幀都回呼但只有跨過門檻才重繪。
       onScrollGeometryChange={{
         of: "contentOffset",
         onChanged: (_old: Readonly<Point>, next: Readonly<Point>): void => {
@@ -452,7 +438,6 @@ export function ChannelView(props: ChannelViewProps): VirtualNode {
           <VStack padding={{ horizontal: space.page }} frame={{ maxWidth: "infinity" }}>
             {filterField}
           </VStack>
-          {/* 搜尋結果由平台排序，排序 chip 對它無效，只留版面切換。 */}
           {searching ? (
             <HStack padding={{ horizontal: space.page }} frame={{ maxWidth: "infinity" }}>
               <Spacer />

@@ -10,11 +10,9 @@ import {
 import { Avatar, EmptyState } from "../ui/primitives"
 import { palette, space, type } from "../ui/theme"
 
-/** 留下來的訊息上限；聊天室刷很快，全部留著會愈來愈慢。 */
 const MAX_MESSAGES: number = 300
 const RETRY_MS: number = 4000
 const MAX_RETRIES: number = 3
-/** 有訊息就馬上再要一輪；跟 yt-dlp 一樣不照 timeoutMs 慢慢等。 */
 const MIN_POLL_MS: number = 150
 const AFTER_MESSAGES_MS: number = 250
 const IDLE_POLL_MS: number = 300
@@ -24,7 +22,6 @@ const EMOJI_SIZE: number = 22
 
 type ChatStatus = "loading" | "ready" | "ended" | "unavailable" | "error"
 
-/** YouTube 只給會員／斗內名稱顏色，其他人用固定色盤抽一個，同一個作者永遠同色。 */
 const NAME_COLORS: Color[] = [
   "#ff6b6b",
   "#ffa94d",
@@ -118,7 +115,6 @@ export interface LiveChatProps {
   videoId: string
 }
 
-/** 直播聊天室：自己輪詢、自己留訊息，不進全域 store。 */
 export function LiveChat(props: LiveChatProps): VirtualNode {
   const [messages, setMessages] = useState<LiveChatMessage[]>([])
   const [status, setStatus] = useState<ChatStatus>("loading")
@@ -146,7 +142,6 @@ export function LiveChat(props: LiveChatProps): VirtualNode {
         changed = true
       }
       if (!changed) return
-      // 只留最新的幾則；游標照樣往前推進，聊天室不會因此中斷。
       if (keepRef.current.length > MAX_MESSAGES) {
         keepRef.current = keepRef.current.slice(keepRef.current.length - MAX_MESSAGES)
       }
@@ -182,8 +177,6 @@ export function LiveChat(props: LiveChatProps): VirtualNode {
         }
         cursorRef.current = batch.cursor
         setStatus("ready")
-        // 伺服器會自己 long-poll（有時休 10 幾秒），所以不照 timeoutMs 等：
-        // 有訊息就立刻接下一輪，沒訊息才短暫休息，不然聊天室會慢半拍。
         const delay: number =
           batch.messages.length > 0 ? AFTER_MESSAGES_MS : elapsed >= LONG_POLL_MS ? 0 : IDLE_POLL_MS
         schedule(Math.max(MIN_POLL_MS, delay))
