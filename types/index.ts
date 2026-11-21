@@ -90,6 +90,7 @@ export interface StreamManifest {
   cid?: number
   isLive?: boolean
   duration: number
+  warnings?: string[]
   resolveQuality?: (qualityId: string) => Promise<{
     url: string
     backend: "auto" | "native" | "system" | "remux"

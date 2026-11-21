@@ -545,17 +545,22 @@ async function buildBiliPlayable(
   cid: number,
   dash: BiliDashPayload,
   qn: number,
-): Promise<{ url: string; delivery: "hls" | "dash" }> {
+): Promise<{ url: string; delivery: "hls" | "dash"; proxyFailed: boolean }> {
   const prepared = await prepareBiliPlayback(bvid, cid, dash, qn)
   if (prepared.videos[0]?.index) {
     try {
-      return { url: await writeBiliHlsManifest(bvid, cid, qn, prepared), delivery: "hls" }
+      return {
+        url: await writeBiliHlsManifest(bvid, cid, qn, prepared),
+        delivery: "hls",
+        proxyFailed: prepared.proxyFailed,
+      }
     } catch {
     }
   }
   return {
     url: await writeBiliDashMpdFromPrepared(bvid, cid, dash, qn, prepared),
     delivery: "dash",
+    proxyFailed: prepared.proxyFailed,
   }
 }
 
@@ -635,6 +640,9 @@ export async function resolveBiliStream(
       cid: streamCid,
       isLive: false,
       duration,
+      warnings: primary.proxyFailed
+        ? ["本機代理未啟動；片段直連 CDN 會被拒（實測 403），播放可能起不來"]
+        : undefined,
       resolveQuality: async (qualityId: string) => {
         const parsed = Number.parseInt(qualityId, 10)
         const qn = Number.isFinite(parsed) && qualities.some(track => track.qn === parsed)

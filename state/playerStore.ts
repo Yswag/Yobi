@@ -845,6 +845,8 @@ export async function openVideo(item: UnifiedVideoItem, options: OpenVideoOption
     }
     emitStore()
 
+    if (manifest.warnings && manifest.warnings.length > 0) showSkippedToast(manifest.warnings[0])
+
     if (requestId !== openRequestSeq) return
 
     let resumeAt: number = 0

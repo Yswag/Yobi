@@ -1,8 +1,10 @@
-# Issue-004 代理起不來就直連，閱讀進度只讀一小段
+# Issue-004 代理起不來就直連，緩衝進度只讀一小段
+
+狀態：代理失敗會進 manifest 的 `warnings` 並提示使用者；統計面板的緩衝拆成「播放器回報」與「預抓估算」。
 
 ## 問題
 
-- `services/bilibili/dashMpd.ts` 在本機代理起不來時直接回直連網址。直連沒有 `Referer`，在 bili 上遲早會 403；而狀態列仍顯示正常。
+- `services/bilibili/dashMpd.ts` 在本機代理起不來時直接回直連網址。直連沒有 `Referer`，實測 CDN 回 403（帶 `Referer` 是 206），而狀態列仍顯示正常。
 - `components/PlaybackStats.tsx` 把「播放器只往前讀一點」當常態，實際緩衝量改由預抓器推算。畫面數字因此不是播放器的真實緩衝。
 
 ## 影響

@@ -409,6 +409,7 @@ export interface PreparedTrack {
   sourceId: string
   localUrl: string
   index: BiliSegmentIndex | null
+  proxyFailed: boolean
 }
 
 export async function prepareBiliPlayback(
@@ -416,7 +417,7 @@ export async function prepareBiliPlayback(
   cid: number,
   dash: BiliDashPayload,
   selectedVideoId?: number,
-): Promise<{ videos: PreparedTrack[]; audio: PreparedTrack | null }> {
+): Promise<{ videos: PreparedTrack[]; audio: PreparedTrack | null; proxyFailed: boolean }> {
   const qn: number = selectedVideoId ?? 0
   const safeBvid: string = (bvid || "unknown").replace(/[^A-Za-z0-9_-]/g, "")
   const { videos: videoMedias, audios } = selectMedias(dash, selectedVideoId)
@@ -429,12 +430,15 @@ export async function prepareBiliPlayback(
     const urls: string[] = mediaUrls(media)
     let localUrl: string = urls[0] ?? ""
     let sourceId: string = ""
+    let proxyFailed: boolean = false
     if (urls.length) {
       const id: string = `bili_${safeBvid}_${cid}_${qn}_${media.id}_${index}`
       try {
         localUrl = registerBiliFileSource(id, urls, mimeType, Number(media.bandwidth) || 0)
         sourceId = id
-      } catch {
+      } catch (error) {
+        proxyFailed = true
+        reportError("proxy", "bili.source.register", error)
       }
     }
     const loaded: BiliSegmentIndex | undefined = await loadSegmentIndex(
@@ -446,7 +450,7 @@ export async function prepareBiliPlayback(
       const first = loaded.sidx.entries[0]
       warmBiliRange(sourceId, first.offset, first.offset + first.size - 1)
     }
-    return { media, mimeType, sourceId, localUrl, index: loaded ?? null }
+    return { media, mimeType, sourceId, localUrl, index: loaded ?? null, proxyFailed }
   }
 
   const builds: Promise<PreparedTrack>[] = videoMedias.map(
@@ -457,7 +461,7 @@ export async function prepareBiliPlayback(
   const built: PreparedTrack[] = await Promise.all(builds)
   const videos: PreparedTrack[] = built.slice(0, videoMedias.length)
   const audio: PreparedTrack | null = audioMedia ? built[videoMedias.length] : null
-  return { videos, audio }
+  return { videos, audio, proxyFailed: built.some((track: PreparedTrack): boolean => track.proxyFailed) }
 }
 
 export async function writeBiliDashMpdFile(
@@ -475,7 +479,7 @@ export async function writeBiliDashMpdFromPrepared(
   cid: number,
   dash: BiliDashPayload,
   selectedVideoId: number | undefined,
-  prepared: { videos: PreparedTrack[]; audio: PreparedTrack | null },
+  prepared: { videos: PreparedTrack[]; audio: PreparedTrack | null; proxyFailed: boolean },
 ): Promise<string> {
   const qn: number = selectedVideoId ?? 0
   const safeBvid: string = (bvid || "unknown").replace(/[^A-Za-z0-9_-]/g, "")

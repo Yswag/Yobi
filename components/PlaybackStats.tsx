@@ -93,18 +93,20 @@ export function PlaybackStatsPanel(): VirtualNode {
   const aheadBytes: number | null = prefetchedAheadBytes()
   const window = prefetchWindow()
   const bitrate: number = quality?.bitrate ?? video?.bitRate ?? 0
-  const buffered: string =
-    aheadBytes !== null
-      ? join([
+  const bufferedSeconds: string = `${Math.max(0, progress.bufferedUntil - progress.position).toFixed(1)} 秒`
+  const prefetched: string | null =
+    aheadBytes === null
+      ? null
+      : join([
           `${(aheadBytes / 1024 / 1024).toFixed(0)} MB`,
           window ? `${window.grids} 格` : null,
           bitrate > 0 ? `≈ ${Math.round((aheadBytes * 8) / bitrate)} 秒` : null,
         ])
-      : `${Math.max(0, progress.bufferedUntil - progress.position).toFixed(1)} 秒`
 
   const rows: { label: string; value: string }[] = [
     { label: "網速", value: formatSpeed(currentDownloadBps()) },
-    { label: "緩衝", value: buffered },
+    { label: "緩衝", value: bufferedSeconds },
+    ...(prefetched ? [{ label: "預抓", value: prefetched }] : []),
     { label: "畫面", value: join([width && height ? `${width}×${height}` : null, fps ? `${Math.round(fps)} fps` : null]) },
     { label: "視訊", value: join([video?.codec ?? quality?.codec, info?.videoDecoder, acceleration]) },
     {
