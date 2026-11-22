@@ -2,7 +2,8 @@ import { HStack, Text, VStack, useEffect, useState } from "scripting"
 import type { VirtualNode } from "scripting"
 import type { VideoQualityTrack } from "../types"
 import { currentDownloadBps, lastDownloadHost, lastMediaFailure, prefetchedAheadBytes, prefetchWindow } from "../services"
-import { getPlayerController, usePlayerProgress, usePlayerStore } from "../state/playerStore"
+import type { PlayerStoreSnapshot } from "../state/playerStore"
+import { getPlayerController, usePlayerProgress, usePlayerSelector } from "../state/playerStore"
 import { palette, type } from "../ui/theme"
 
 const TICK_MS: number = 1000
@@ -72,7 +73,10 @@ function StatRow(props: { label: string; value: string }): VirtualNode {
 
 export function PlaybackStatsPanel(): VirtualNode {
   useTicker()
-  const store = usePlayerStore()
+  const store = usePlayerSelector((s: PlayerStoreSnapshot) => ({
+    manifest: s.manifest,
+    selectedQualityId: s.selectedQualityId,
+  }))
   const progress = usePlayerProgress()
   const info: VideoPlaybackInfo | null = readInfo()
   const tracks: readonly VideoPlaybackTrack[] = info?.tracks ?? []

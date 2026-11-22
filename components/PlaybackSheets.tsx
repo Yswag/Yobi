@@ -14,12 +14,13 @@ import {
 } from "scripting"
 import type { VirtualNode } from "scripting"
 import type { VideoQualityTrack } from "../types"
+import type { PlayerStoreSnapshot } from "../state/playerStore"
 import {
   getPlayerController,
   selectQuality,
   setStatsVisible,
   updateDanmakuSettings,
-  usePlayerStore,
+  usePlayerSelector,
 } from "../state/playerStore"
 import { palette, type } from "../ui/theme"
 
@@ -75,7 +76,11 @@ function SheetShell(props: { title: string; onDone: () => void; children: (Virtu
 }
 
 export function QualitySheet(props: { onDone: () => void }): VirtualNode {
-  const store = usePlayerStore()
+  const store = usePlayerSelector((s: PlayerStoreSnapshot) => ({
+    manifest: s.manifest,
+    selectedQualityId: s.selectedQualityId,
+    statsVisible: s.statsVisible,
+  }))
   const qualities: VideoQualityTrack[] = store.manifest?.qualities ?? []
   const summary: string | null = decoderSummary(
     qualities.find((quality: VideoQualityTrack): boolean => quality.id === store.selectedQualityId),
@@ -122,15 +127,19 @@ export function QualitySheet(props: { onDone: () => void }): VirtualNode {
 }
 
 export function DanmakuSheet(props: { onDone: () => void }): VirtualNode {
-  const store = usePlayerStore()
-  const settings = store.settings
+  const settings = usePlayerSelector((s: PlayerStoreSnapshot) => ({
+    danmakuEnabled: s.danmakuEnabled,
+    danmakuArea: s.settings.danmakuArea,
+    danmakuOpacity: s.settings.danmakuOpacity,
+    danmakuSpeed: s.settings.danmakuSpeed,
+  }))
 
   return (
     <SheetShell title="彈幕" onDone={props.onDone}>
       <Section>
         <Toggle
           title="顯示彈幕"
-          value={store.danmakuEnabled}
+          value={settings.danmakuEnabled}
           onChanged={(value: boolean) => updateDanmakuSettings({ danmakuEnabled: value })}
         />
       </Section>

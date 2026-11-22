@@ -9,13 +9,13 @@ import {
 } from "scripting"
 import type { VirtualNode } from "scripting"
 import type { UnifiedVideoItem } from "../types"
-import type { PlayerProgressSnapshot, PlayerStoreSnapshot } from "../state/playerStore"
+import type { PlaybackStatus, PlayerProgressSnapshot, PlayerStoreSnapshot } from "../state/playerStore"
 import {
   closePlayer,
   expandFromMiniPlayer,
   togglePlayPause,
   usePlayerProgress,
-  usePlayerStore,
+  usePlayerSelector,
 } from "../state/playerStore"
 import { ProgressTrack } from "../ui/primitives"
 import { palette, type } from "../ui/theme"
@@ -37,12 +37,12 @@ export function MiniPlayerBar(props: {
   height: number
   trailingInset: number
 }): VirtualNode {
-  const store: PlayerStoreSnapshot = usePlayerStore()
+  const status: PlaybackStatus = usePlayerSelector((s: PlayerStoreSnapshot): PlaybackStatus => s.status)
   const progress: PlayerProgressSnapshot = usePlayerProgress()
   const item: UnifiedVideoItem | null = props.item
-  const isLoading: boolean = store.status === "loading" || store.status === "buffering"
-  const isPlaying: boolean = store.status === "playing"
-  const isEnded: boolean = store.status === "ended"
+  const isLoading: boolean = status === "loading" || status === "buffering"
+  const isPlaying: boolean = status === "playing"
+  const isEnded: boolean = status === "ended"
   const duration: number = progress.duration > 0 ? progress.duration : item?.duration ?? 0
   const ratio: number = duration > 0 ? progress.position / duration : 0
 

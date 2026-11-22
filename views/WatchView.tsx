@@ -32,6 +32,7 @@ import {
   getVideoShareUrl,
   providerFullName,
 } from "../utils/format"
+import type { PlayerStoreSnapshot } from "../state/playerStore"
 import {
   getCommentsStoreSnapshot,
   getPlayerProgressSnapshot,
@@ -46,7 +47,7 @@ import {
   subscribePlayerProgress,
   useCommentsStore,
   useLiveViewers,
-  usePlayerStore,
+  usePlayerSelector,
 } from "../state/playerStore"
 import { Avatar, EmptyState, SectionHeader } from "../ui/primitives"
 import { motion, palette, providerColor, radius, space, type } from "../ui/theme"
@@ -197,7 +198,15 @@ function WatchCommentsSection(): VirtualNode {
 }
 
 export function WatchView(props: WatchViewProps): VirtualNode {
-  const store = usePlayerStore()
+  const store = usePlayerSelector((s: PlayerStoreSnapshot) => ({
+    currentItem: s.currentItem,
+    detail: s.detail,
+    delivery: s.manifest?.delivery ?? null,
+    selectedQualityLabel: s.selectedQualityLabel,
+    danmakuEnabled: s.danmakuEnabled,
+    activeCid: s.activeCid,
+    activePage: s.activePage,
+  }))
 
   const [showDescription, setShowDescription] = useState(false)
   const [tab, setTab] = useState<number>(TAB_RELATED)
@@ -251,7 +260,7 @@ export function WatchView(props: WatchViewProps): VirtualNode {
 
   const related: UnifiedVideoItem[] = detail?.relatedVideos ?? []
   const tags: string[] = detail?.tags ?? []
-  const deliveryTag: string | null = store.manifest ? store.manifest.delivery.toUpperCase() : null
+  const deliveryTag: string | null = store.delivery ? store.delivery.toUpperCase() : null
 
   const headlineParts: string[] = []
   if (!item.isLive && item.viewCount !== undefined) headlineParts.push(`${formatCount(item.viewCount)} 次觀看`)

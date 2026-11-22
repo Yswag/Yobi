@@ -19,7 +19,7 @@ import {
   getPlayerController,
   minimizeToMiniPlayer,
   setFullscreen,
-  usePlayerStore,
+  usePlayerSelector,
 } from "../state/playerStore"
 import { MINI_BUTTON_SIZE, MiniPlayerBar } from "./MiniPlayerBar"
 import { motion } from "../ui/theme"
@@ -95,7 +95,13 @@ interface CardGeometry {
 export function PlayerHost(props: {
   onOpenChannel: (provider: Provider, authorId: string, authorName: string, avatarUrl?: string) => void
 }): VirtualNode {
-  const store: PlayerStoreSnapshot = usePlayerStore()
+  const store = usePlayerSelector((s: PlayerStoreSnapshot) => ({
+    currentItem: s.currentItem,
+    presentationMode: s.presentationMode,
+    isFullscreen: s.isFullscreen,
+    isPortraitFullscreen: s.isPortraitFullscreen,
+    isLoading: s.status === "loading",
+  }))
   const [showQualitySheet, setShowQualitySheet] = useState<boolean>(false)
   const [showDanmakuSheet, setShowDanmakuSheet] = useState<boolean>(false)
   const [videoFill, setVideoFill] = useState<boolean>(false)
@@ -378,9 +384,9 @@ export function PlayerHost(props: {
                 <Rectangle
                   fill="black"
                   frame={{ width: geometry.videoWidth, height: geometry.videoHeight }}
-                  opacity={store.status === "loading" ? 1 : 0}
+                  opacity={store.isLoading ? 1 : 0}
                   allowsHitTesting={false}
-                  animation={{ animation: motion.exit, value: store.status === "loading" }}
+                  animation={{ animation: motion.exit, value: store.isLoading }}
                 />
                 {isExpanded ? (
                   <ZStack

@@ -34,7 +34,7 @@ import {
   toggleDanmaku,
   toggleFullscreen,
   togglePlayPause,
-  usePlayerStore,
+  usePlayerSelector,
 } from "../state/playerStore"
 import type { SponsorSegment, SubtitleTrackInfo } from "../types"
 import {
@@ -148,7 +148,10 @@ function ProgressBar(props: {
   onScrub: (preview: ScrubPreview | null) => void
   onTapChrome: () => void
 }): VirtualNode {
-  const store: PlayerStoreSnapshot = usePlayerStore()
+  const barState = usePlayerSelector((s: PlayerStoreSnapshot) => ({
+    isLive: s.currentItem?.isLive === true,
+    sponsorSegments: s.sponsorSegments,
+  }))
   const [progress, setProgress] = useState<PlayerProgressSnapshot>(() => getPlayerProgressSnapshot())
   useEffect(() => {
     if (!props.active) return
@@ -157,7 +160,7 @@ function ProgressBar(props: {
     return subscribePlayerProgress(sync)
   }, [props.active])
   const duration: number = progress.duration || 0
-  const live: boolean = store.currentItem?.isLive === true
+  const live: boolean = barState.isLive
   const scrubWidthRef = useRef<number>(1)
   const scrubTargetRef = useRef<number | null>(null)
 
@@ -178,7 +181,7 @@ function ProgressBar(props: {
 
   function renderSponsorBlocks(fullWidth: number, blockHeight: number): VirtualNode[] {
     if (duration <= 0) return []
-    return store.sponsorSegments.map((seg: SponsorSegment) => {
+    return barState.sponsorSegments.map((seg: SponsorSegment) => {
       const leftRatio: number = Math.max(0, Math.min(1, seg.startTime / duration))
       const widthRatio: number = Math.max(0, Math.min(1 - leftRatio, (seg.endTime - seg.startTime) / duration))
       return (
@@ -288,7 +291,26 @@ function ProgressBar(props: {
 }
 
 export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): VirtualNode {
-  const store: PlayerStoreSnapshot = usePlayerStore()
+  const store = usePlayerSelector((s: PlayerStoreSnapshot) => ({
+    currentItem: s.currentItem,
+    hasManifest: s.manifest !== null,
+    subtitles: s.manifest?.subtitles,
+    status: s.status,
+    errorText: s.errorText,
+    isFullscreen: s.isFullscreen,
+    isPortraitFullscreen: s.isPortraitFullscreen,
+    danmakuEnabled: s.danmakuEnabled,
+    selectedSubtitleId: s.selectedSubtitleId,
+    playbackRate: s.playbackRate,
+    isBoosting2x: s.isBoosting2x,
+    selectedQualityId: s.selectedQualityId,
+    selectedQualityLabel: s.selectedQualityLabel,
+    activeCid: s.activeCid,
+    activePage: s.activePage,
+    statsVisible: s.statsVisible,
+    skippedToast: s.skippedToast,
+    activeSponsorPrompt: s.activeSponsorPrompt,
+  }))
 
   const [controlsVisible, setControlsVisible] = useState<boolean>(false)
   const [controlsMounted, setControlsMounted] = useState<boolean>(false)
@@ -568,7 +590,7 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
 
   function handleRetry(): void {
     if (!store.currentItem) return
-    if (store.manifest) {
+    if (store.hasManifest) {
       void selectQuality(store.selectedQualityId)
       return
     }
@@ -606,7 +628,7 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
     const playing: boolean = store.status === "playing"
     const ended: boolean = store.status === "ended"
     const loading: boolean = store.status === "loading" || store.status === "buffering"
-    const hasSubtitles: boolean = (store.manifest?.subtitles.length ?? 0) > 0
+    const hasSubtitles: boolean = (store.subtitles?.length ?? 0) > 0
 
     return (
       <ZStack frame={{ width: props.width, height: props.height }}>
@@ -660,7 +682,7 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
                     systemImage={store.selectedSubtitleId ? undefined : "checkmark"}
                     action={() => void selectSubtitle(null)}
                   />
-                  {(store.manifest?.subtitles ?? []).map((track: SubtitleTrackInfo) => (
+                  {(store.subtitles ?? []).map((track: SubtitleTrackInfo) => (
                     <Button
                       key={track.id}
                       title={track.label}
