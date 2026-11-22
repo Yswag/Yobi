@@ -74,13 +74,9 @@ function LiveViewerLabel(props: { videoId: string; publishedText?: string }): Vi
 
 const SEGMENT_CARD_WIDTH: number = 156
 const SEGMENT_CARD_HEIGHT: number = 70
-const COMMENTS_AUTO_LOAD_PX: number = 320
-
-interface ScrollGeometrySnapshot {
-  contentOffset: { x: number; y: number }
-  contentSize: { width: number; height: number }
-  containerSize: { width: number; height: number }
-}
+const COMMENTS_AUTO_LOAD_PX: number = 600
+const COMMENTS_DECEL_LOOKAHEAD_S: number = 0.4
+const COMMENTS_MAX_LOOKAHEAD_PX: number = 900
 
 function ActionChip(props: { icon: string; label: string; active?: boolean; onTap: () => void }): VirtualNode {
   return (
@@ -504,14 +500,17 @@ export function WatchView(props: WatchViewProps): VirtualNode {
     context: ScrollPhaseChangeContext,
   ): void => {
     handleScrollPhase(next)
-    if (String(next) !== "idle") return
+    const phase: string = String(next)
+    if (phase !== "idle" && phase !== "decelerating") return
     const geometry: ScrollGeometry = context.geometry
     if (geometry.containerSize.height <= 0) return
     const commentsSnap = getCommentsStoreSnapshot()
     if (commentsSnap.cursor === null) return
     if (commentsSnap.loading || commentsSnap.loadingMore) return
+    const velocityY: number = phase === "decelerating" && context.velocity ? Math.max(0, context.velocity.dy) : 0
+    const lookahead: number = Math.min(velocityY * COMMENTS_DECEL_LOOKAHEAD_S, COMMENTS_MAX_LOOKAHEAD_PX)
     const remaining: number = geometry.contentSize.height - geometry.contentOffset.y - geometry.containerSize.height
-    if (remaining > COMMENTS_AUTO_LOAD_PX) return
+    if (remaining - lookahead > COMMENTS_AUTO_LOAD_PX) return
     void loadMoreComments()
   }
 

@@ -1,5 +1,5 @@
-import { FlowLayout, HStack, Image, ProgressView, Text, VStack, useCallback, useRef, useState } from "scripting"
-import type { VirtualNode } from "scripting"
+import { FlowLayout, HStack, Image, ProgressView, Text, VStack, useCallback, useMemo, useRef, useState } from "scripting"
+import type { ScrollVisibilityChangeOptions, VirtualNode } from "scripting"
 import type { CommentItem, CommentRun, CommentSort } from "../types"
 import { formatCount } from "../utils/format"
 import { emojiImageUrl } from "../utils/image"
@@ -17,6 +17,7 @@ const EMOJI_GAP: number = 3
 const WIDE_CHAR: RegExp = /[\u1100-\u11ff\u2e80-\u303f\u3040-\u9fff\uac00-\ud7af\uf900-\ufaff\ufe30-\ufe4f\uff00-\uff60\uffe0-\uffe6]/
 const WIDE_BREAK: RegExp = /[，。！？、；：）」』】》—…]/
 const WIDE_CHUNK_SIZE: number = 3
+const PREFETCH_LEAD_COUNT: number = 6
 
 function textChunks(text: string): string[] {
   const chunks: string[] = []
@@ -228,6 +229,7 @@ function CommentThread(props: {
   comment: CommentItem
   expanded: boolean
   loading: boolean
+  scrollVisibility?: ScrollVisibilityChangeOptions
   onToggle: (comment: CommentItem) => void
   onLoadMore: (commentId: string) => void
 }): VirtualNode {
@@ -253,7 +255,13 @@ function CommentThread(props: {
     : undefined
 
   return (
-    <VStack alignment="leading" spacing={14} padding={{ horizontal: space.page, vertical: 12 }} frame={{ maxWidth: "infinity", alignment: "leading" }}>
+    <VStack
+      alignment="leading"
+      spacing={14}
+      padding={{ horizontal: space.page, vertical: 12 }}
+      frame={{ maxWidth: "infinity", alignment: "leading" }}
+      onScrollVisibilityChange={props.scrollVisibility}
+    >
       <CommentBody comment={comment} avatarSize={34} footer={trigger} />
       {props.expanded ? (
         <VStack alignment="leading" spacing={14} padding={{ leading: 46 }} frame={{ maxWidth: "infinity", alignment: "leading" }}>
@@ -305,6 +313,18 @@ export function CommentsSheet(props: CommentsSheetProps): VirtualNode {
   expandedIdsRef.current = expandedIds
   const onLoadRepliesRef = useRef(props.onLoadReplies)
   onLoadRepliesRef.current = props.onLoadReplies
+  const onLoadMoreRef = useRef(props.onLoadMore)
+  onLoadMoreRef.current = props.onLoadMore
+
+  const prefetchObserver: ScrollVisibilityChangeOptions = useMemo(
+    () => ({
+      threshold: 0.01,
+      onChanged: (visible: boolean): void => {
+        if (visible) onLoadMoreRef.current()
+      },
+    }),
+    [],
+  )
 
   const handleToggle = useCallback((comment: CommentItem): void => {
     const willExpand: boolean = expandedIdsRef.current[comment.id] !== true
@@ -324,11 +344,6 @@ export function CommentsSheet(props: CommentsSheetProps): VirtualNode {
       options={SORT_OPTIONS}
       value={props.sort}
       onChange={props.onSort}
-      trailing={
-        <Text font={type.meta} foregroundStyle="tertiaryLabel">
-          {`${props.comments.length} 則`}
-        </Text>
-      }
     />
   )
 
@@ -367,16 +382,22 @@ export function CommentsSheet(props: CommentsSheetProps): VirtualNode {
     </VStack>
   )
 
+  const prefetchIndex: number =
+    props.hasMore && props.comments.length > 0
+      ? Math.max(0, props.comments.length - PREFETCH_LEAD_COUNT)
+      : -1
+
   return (
     <VStack spacing={0} frame={{ maxWidth: "infinity" }}>
       {sortBar}
       <VStack spacing={0} padding={{ top: 4 }} frame={{ maxWidth: "infinity" }}>
-        {props.comments.map((comment: CommentItem) => (
+        {props.comments.map((comment: CommentItem, index: number) => (
           <CommentThread
             key={comment.id}
             comment={comment}
             expanded={expandedIds[comment.id] === true}
             loading={props.repliesLoading[comment.id] === true}
+            scrollVisibility={index === prefetchIndex ? prefetchObserver : undefined}
             onToggle={handleToggle}
             onLoadMore={handleLoadReplies}
           />

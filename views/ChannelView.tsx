@@ -10,10 +10,11 @@ import {
   VStack,
   ZStack,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "scripting"
-import type { Point, ScrollGeometry, ScrollPhase, ScrollPhaseChangeContext, VirtualNode } from "scripting"
+import type { Point, ScrollGeometry, ScrollPhase, ScrollPhaseChangeContext, ScrollVisibilityChangeOptions, VirtualNode } from "scripting"
 import type { ChannelDetail, Provider, UnifiedVideoItem } from "../types"
 import { VideoCard, VideoCardSkeleton } from "../components/VideoCard"
 import {
@@ -53,7 +54,10 @@ type LayoutMode = "row" | "grid"
 
 const BANNER_HEIGHT: number = 132
 const AVATAR_SIZE: number = 76
-const LOAD_MORE_DISTANCE: number = 320
+const LOAD_MORE_DISTANCE: number = 600
+const DECEL_LOOKAHEAD_S: number = 0.4
+const MAX_LOOKAHEAD_PX: number = 900
+const PREFETCH_LEAD_COUNT: number = 5
 const TITLE_REVEAL_OFFSET: number = 140
 
 const SORT_OPTIONS_YT: ChipOption<SortMode>[] = [
@@ -328,6 +332,26 @@ export function ChannelView(props: ChannelViewProps): VirtualNode {
     />
   )
 
+  const loadMoreRef = useRef<() => void>(() => {})
+  loadMoreRef.current = (): void => {
+    void loadMore()
+  }
+
+  const prefetchObserver: ScrollVisibilityChangeOptions = useMemo(
+    () => ({
+      threshold: 0.01,
+      onChanged: (visible: boolean): void => {
+        if (visible) loadMoreRef.current()
+      },
+    }),
+    [],
+  )
+
+  const prefetchIndex: number =
+    shownToken && shownVideos.length > 0
+      ? Math.max(0, shownVideos.length - PREFETCH_LEAD_COUNT)
+      : -1
+
   const footer: VirtualNode | null = shownToken && shownVideos.length > 0 ? (
     <VStack padding={{ vertical: 18 }} frame={{ maxWidth: "infinity" }}>
       {loadingMore ? (
@@ -371,12 +395,13 @@ export function ChannelView(props: ChannelViewProps): VirtualNode {
   } else {
     listContent = (
       <LazyVStack spacing={layoutMode === "grid" ? space.cardGap : 4} frame={{ maxWidth: "infinity" }}>
-        {shownVideos.map((video: UnifiedVideoItem) => (
+        {shownVideos.map((video: UnifiedVideoItem, index: number) => (
           <VideoCard
             key={video.id}
             item={video}
             layout={layoutMode}
             progressSeconds={getSavedPosition(video.id, video.cid)}
+            scrollVisibility={index === prefetchIndex ? prefetchObserver : undefined}
             onSelect={handleSelect}
             onOpenChannel={props.onOpenChannel}
           />
@@ -408,12 +433,15 @@ export function ChannelView(props: ChannelViewProps): VirtualNode {
         next: ScrollPhase,
         context: ScrollPhaseChangeContext,
       ): void => {
-        if (String(next) !== "idle") return
+        const phase: string = String(next)
+        if (phase !== "idle" && phase !== "decelerating") return
         if (!shownToken || loadingMoreRef.current) return
         const geometry: ScrollGeometry = context.geometry
+        const velocityY: number = phase === "decelerating" && context.velocity ? Math.max(0, context.velocity.dy) : 0
+        const lookahead: number = Math.min(velocityY * DECEL_LOOKAHEAD_S, MAX_LOOKAHEAD_PX)
         const remaining: number =
           geometry.contentSize.height - geometry.contentOffset.y - geometry.containerSize.height
-        if (remaining > LOAD_MORE_DISTANCE) return
+        if (remaining - lookahead > LOAD_MORE_DISTANCE) return
         void loadMore()
       }}
       toolbar={{

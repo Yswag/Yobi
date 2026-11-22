@@ -1111,8 +1111,12 @@ export async function getBiliCommentPage(
     raiseIfBanned(main, "comments.main")
     const replies = main?.data?.replies
     if (Array.isArray(replies)) {
-      const ended: boolean = main?.data?.cursor?.is_end === true || replies.length < 20
-      const nextOffset: string = String(main?.data?.cursor?.pagination_reply?.next_offset ?? "")
+      const cursorInfo = main?.data?.cursor
+      const nextOffset: string = String(cursorInfo?.pagination_reply?.next_offset ?? "")
+      const hasIsEnd: boolean = typeof cursorInfo?.is_end === "boolean"
+      const ended: boolean =
+        cursorInfo?.is_end === true ||
+        (nextOffset === "" && (hasIsEnd ? replies.length === 0 : replies.length < 20))
       return {
         comments: replies.map(mapReply),
         cursor: ended ? null : nextOffset ? `o${nextOffset}` : `p${page + 1}`,
@@ -1131,7 +1135,9 @@ export async function getBiliCommentPage(
   })
   const legacyReplies = legacy?.data?.replies
   const comments: CommentItem[] = Array.isArray(legacyReplies) ? legacyReplies.map(mapReply) : []
-  return { comments, cursor: comments.length < 20 ? null : `p${page + 1}` }
+  const legacyCount: number = Number(legacy?.data?.page?.count ?? 0)
+  const legacyEnded: boolean = comments.length === 0 || (legacyCount > 0 ? page * 20 >= legacyCount : comments.length < 20)
+  return { comments, cursor: legacyEnded ? null : `p${page + 1}` }
 }
 
 export async function getBiliComments(

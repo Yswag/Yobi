@@ -1,5 +1,5 @@
 import { Button, HStack, Image, Menu, Text, VStack } from "scripting"
-import type { VirtualNode } from "scripting"
+import type { ScrollVisibilityChangeOptions, VirtualNode } from "scripting"
 import type { Provider, UnifiedVideoItem } from "../types"
 import {
   addVideoToPlaylist,
@@ -24,6 +24,7 @@ export interface VideoCardProps {
   progressSeconds?: number
   meta?: string
   actions?: CardAction[]
+  scrollVisibility?: ScrollVisibilityChangeOptions
   onSelect: (item: UnifiedVideoItem) => void
   onOpenChannel?: (provider: Provider, authorId: string, authorName: string, avatarUrl?: string) => void
 }
@@ -134,6 +135,7 @@ function RowCard(props: VideoCardProps): VirtualNode {
       padding={{ horizontal: space.page, vertical: 8 }}
       frame={{ maxWidth: "infinity" }}
       contentShape="rect"
+      onScrollVisibilityChange={props.scrollVisibility}
       onTapGesture={() => selectCard(props)}
     >
       <Thumbnail
@@ -177,7 +179,12 @@ function GridCard(props: VideoCardProps): VirtualNode {
   }
 
   return (
-    <VStack spacing={12} padding={{ horizontal: space.page }} frame={{ maxWidth: "infinity" }}>
+    <VStack
+      spacing={12}
+      padding={{ horizontal: space.page }}
+      frame={{ maxWidth: "infinity" }}
+      onScrollVisibilityChange={props.scrollVisibility}
+    >
       <Thumbnail
         url={item.thumbnailUrl}
         cornerRadius={radius.lg}
