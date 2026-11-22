@@ -98,6 +98,7 @@ export function PlayerHost(props: {
   const store: PlayerStoreSnapshot = usePlayerStore()
   const [showQualitySheet, setShowQualitySheet] = useState<boolean>(false)
   const [showDanmakuSheet, setShowDanmakuSheet] = useState<boolean>(false)
+  const [videoFill, setVideoFill] = useState<boolean>(false)
   const [dragTranslation, setDragTranslation] = useState<number | null>(null)
   const [fullscreenGesture, setFullscreenGesture] = useState<{ direction: "enter" | "exit"; distance: number } | null>(null)
   const dragTravelRef = useRef<number>(1)
@@ -153,6 +154,13 @@ export function PlayerHost(props: {
     },
     [],
   )
+  const handleCancelFullscreenDrag = useCallback((): void => {
+    thresholdCrossedRef.current = false
+    setFullscreenGesture(null)
+  }, [])
+  const handleVideoFillChange = useCallback((fill: boolean): void => {
+    setVideoFill(fill)
+  }, [])
 
   const lastItemRef = useRef<UnifiedVideoItem | null>(null)
   if (store.currentItem) lastItemRef.current = store.currentItem
@@ -174,7 +182,12 @@ export function PlayerHost(props: {
   useEffect(() => {
     setShowQualitySheet(false)
     setShowDanmakuSheet(false)
+    setVideoFill(false)
   }, [store.currentItem?.id])
+
+  useEffect(() => {
+    if (!store.isFullscreen) setVideoFill(false)
+  }, [store.isFullscreen])
 
   const shortSide: number = Math.min(Device.screen.width, Device.screen.height)
   const longSide: number = Math.max(Device.screen.width, Device.screen.height)
@@ -354,7 +367,7 @@ export function PlayerHost(props: {
                   <VideoPlaybackView
                     controller={getPlayerController()}
                     gestures={false}
-                    videoGravity={isMini ? "resizeAspectFill" : "resizeAspect"}
+                    videoGravity={isMini || (fullscreen && videoFill) ? "resizeAspectFill" : "resizeAspect"}
                     frame={{ width: geometry.videoWidth, height: geometry.videoHeight }}
                   />
                 ) : (
@@ -380,6 +393,9 @@ export function PlayerHost(props: {
                       onMinimizeDragEnded={handleMinimizeDragEnded}
                       onFullscreenDragChanged={handleFullscreenDragChanged}
                       onFullscreenDragEnded={handleFullscreenDragEnded}
+                      onCancelFullscreenDrag={handleCancelFullscreenDrag}
+                      videoFill={videoFill}
+                      onVideoFillChange={handleVideoFillChange}
                     />
                   </ZStack>
                 ) : (

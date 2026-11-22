@@ -2,6 +2,7 @@ import {
   Button,
   HStack,
   Image,
+  MagnifyGesture,
   Menu,
   ProgressView,
   Rectangle,
@@ -11,10 +12,11 @@ import {
   ZStack,
   gradient,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "scripting"
-import type { DragGestureDetails, Point, VirtualNode } from "scripting"
+import type { DragGestureDetails, MagnifyGestureValue, Point, VirtualNode } from "scripting"
 import type { PlayerProgressSnapshot, PlayerStoreSnapshot } from "../state/playerStore"
 import {
   dismissActiveSponsorSegment,
@@ -48,17 +50,23 @@ export interface PlayerControlsOverlayProps {
   topSafeInset?: number
   bottomSafeInset?: number
   dragSpace: string
+  videoFill?: boolean
+  onVideoFillChange?: (fill: boolean) => void
   onOpenQualitySheet?: () => void
   onOpenDanmakuSheet?: () => void
   onMinimizeDragChanged?: (dy: number, dx: number) => void
   onMinimizeDragEnded?: (dy: number, dx: number, predictedDy: number) => void
   onFullscreenDragChanged?: (direction: "enter" | "exit", translationY: number) => void
   onFullscreenDragEnded?: (direction: "enter" | "exit", translationY: number, predictedY: number) => void
+  onCancelFullscreenDrag?: () => void
 }
 
 const AUTO_HIDE_MS: number = 4000
 const DOUBLE_TAP_MS: number = 230
 const TAP_HINT_MS: number = 650
+const FILL_HINT_MS: number = 1200
+const PINCH_ZOOM_IN_THRESHOLD: number = 1.12
+const PINCH_ZOOM_OUT_THRESHOLD: number = 0.88
 const PLAYBACK_RATES: number[] = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2]
 const EDGE_SCRIM_HEIGHT: number = 96
 const SCRUBBER_HEIGHT: number = 22
@@ -281,11 +289,22 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
   const [controlsVisible, setControlsVisible] = useState<boolean>(false)
   const [scrub, setScrub] = useState<ScrubPreview | null>(null)
   const [tapHint, setTapHint] = useState<"left" | "right" | null>(null)
+  const [fillHint, setFillHint] = useState<string | null>(null)
 
   const lastTapAtRef = useRef<number | null>(null)
   const dragModeRef = useRef<"none" | "minimize" | "enterFullscreen" | "exitFullscreen" | "ignore">("none")
   const hideTimerRef = useRef<number | null>(null)
   const hintTimerRef = useRef<number | null>(null)
+  const fillHintTimerRef = useRef<number | null>(null)
+  const pinchHandledRef = useRef<boolean>(false)
+  const isFullscreenRef = useRef<boolean>(store.isFullscreen)
+  isFullscreenRef.current = store.isFullscreen
+  const videoFillRef = useRef<boolean>(props.videoFill === true)
+  videoFillRef.current = props.videoFill === true
+  const onVideoFillChangeRef = useRef(props.onVideoFillChange)
+  onVideoFillChangeRef.current = props.onVideoFillChange
+  const onCancelFullscreenDragRef = useRef(props.onCancelFullscreenDrag)
+  onCancelFullscreenDragRef.current = props.onCancelFullscreenDrag
   const statusRef = useRef<string>(store.status)
   statusRef.current = store.status
 
@@ -302,8 +321,47 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
     return () => {
       if (hideTimerRef.current !== null) clearTimeout(hideTimerRef.current)
       if (hintTimerRef.current !== null) clearTimeout(hintTimerRef.current)
+      if (fillHintTimerRef.current !== null) clearTimeout(fillHintTimerRef.current)
     }
   }, [])
+
+  const magnifyGesture = useMemo(
+    () =>
+      MagnifyGesture(0.05)
+        .onChanged((value: MagnifyGestureValue): void => {
+          if (!isFullscreenRef.current) return
+          dragModeRef.current = "ignore"
+          onCancelFullscreenDragRef.current?.()
+          if (pinchHandledRef.current) return
+          if (value.magnification >= PINCH_ZOOM_IN_THRESHOLD && !videoFillRef.current) {
+            pinchHandledRef.current = true
+            videoFillRef.current = true
+            HapticFeedback.lightImpact()
+            onVideoFillChangeRef.current?.(true)
+            setFillHint("已縮放以填滿畫面")
+            if (fillHintTimerRef.current !== null) clearTimeout(fillHintTimerRef.current)
+            fillHintTimerRef.current = setTimeout(() => {
+              fillHintTimerRef.current = null
+              setFillHint(null)
+            }, FILL_HINT_MS)
+          } else if (value.magnification <= PINCH_ZOOM_OUT_THRESHOLD && videoFillRef.current) {
+            pinchHandledRef.current = true
+            videoFillRef.current = false
+            HapticFeedback.lightImpact()
+            onVideoFillChangeRef.current?.(false)
+            setFillHint("原始比例")
+            if (fillHintTimerRef.current !== null) clearTimeout(fillHintTimerRef.current)
+            fillHintTimerRef.current = setTimeout(() => {
+              fillHintTimerRef.current = null
+              setFillHint(null)
+            }, FILL_HINT_MS)
+          }
+        })
+        .onEnded((): void => {
+          pinchHandledRef.current = false
+        }),
+    [],
+  )
 
   const landscapeFullscreen: boolean = store.isFullscreen && !store.isPortraitFullscreen
   const portraitFullscreen: boolean = store.isFullscreen && store.isPortraitFullscreen
@@ -652,6 +710,20 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
             </HStack>
             <Spacer />
           </VStack>
+        ) : fillHint ? (
+          <VStack spacing={0} frame={{ width: props.width, height: props.height }}>
+            <HStack spacing={0} padding={{ top: portraitFullscreen ? topInset : 14 }}>
+              <OverlayCapsule>
+                <Image
+                  systemName={props.videoFill ? "arrow.up.left.and.arrow.down.right" : "arrow.down.right.and.arrow.up.left"}
+                  font={11}
+                  foregroundStyle={palette.onMedia}
+                />
+                <Text font={type.meta} fontWeight="semibold" foregroundStyle={palette.onMedia}>{fillHint}</Text>
+              </OverlayCapsule>
+            </HStack>
+            <Spacer />
+          </VStack>
         ) : null}
 
         {tapHint !== null ? (
@@ -796,6 +868,7 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
           onChanged: handleDragChanged,
           onEnded: handleDragEnded,
         }}
+        simultaneousGesture={magnifyGesture}
       />
       <ZStack
         frame={{ width: props.width, height: props.height }}

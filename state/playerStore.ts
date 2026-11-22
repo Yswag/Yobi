@@ -112,6 +112,9 @@ let sponsorSegmentsAll: SponsorSegment[] = []
 let toastTimer: number | null = null
 let savedRateBeforeBoost: number = 1
 let savedOrientations: typeof Device.supportedInterfaceOrientations | null = null
+let waitForLandscapeBeforeAutoExit: boolean = false
+let waitForPortraitBeforeAutoEnter: boolean = false
+let lastPhysicalOrientation: "portrait" | "landscape" | null = null
 let liveViewerTimer: number | null = null
 const HISTORY_SAVE_INTERVAL_MS: number = 15_000
 const LIVE_VIEWER_TICK_MS: number = 60_000
@@ -1359,10 +1362,62 @@ function syncFullscreenOrientation(): void {
 export function setFullscreen(fullscreen: boolean): void {
   if (storeState.isFullscreen === fullscreen) return
   const portrait: boolean = fullscreen && isCurrentVideoPortrait()
+  if (fullscreen && !portrait) {
+    waitForLandscapeBeforeAutoExit = lastPhysicalOrientation !== "landscape"
+    waitForPortraitBeforeAutoEnter = false
+  } else if (!fullscreen) {
+    waitForLandscapeBeforeAutoExit = false
+    waitForPortraitBeforeAutoEnter = lastPhysicalOrientation === "landscape"
+  }
   applyFullscreenOrientation(fullscreen, portrait)
   storeState.isFullscreen = fullscreen
   storeState.isPortraitFullscreen = portrait
   emitStore()
+}
+
+export function startOrientationAutoFullscreen(): () => void {
+  const onOrientation = (orientation: Device.Orientation): void => {
+    const isLandscape: boolean = orientation === "landscapeLeft" || orientation === "landscapeRight"
+    const isPortrait: boolean = orientation === "portrait"
+    if (!isLandscape && !isPortrait) return
+    lastPhysicalOrientation = isLandscape ? "landscape" : "portrait"
+
+    if (storeState.presentationMode !== "expanded" || !storeState.currentItem) {
+      waitForLandscapeBeforeAutoExit = false
+      waitForPortraitBeforeAutoEnter = false
+      return
+    }
+    if (isCurrentVideoPortrait()) return
+
+    if (isLandscape) {
+      waitForLandscapeBeforeAutoExit = false
+      if (!storeState.isFullscreen && !waitForPortraitBeforeAutoEnter) {
+        setFullscreen(true)
+      }
+      return
+    }
+
+    waitForPortraitBeforeAutoEnter = false
+    if (storeState.isFullscreen && !storeState.isPortraitFullscreen && !waitForLandscapeBeforeAutoExit) {
+      setFullscreen(false)
+    }
+  }
+
+  try {
+    const initial: Device.Orientation = Device.orientation
+    if (initial === "landscapeLeft" || initial === "landscapeRight") lastPhysicalOrientation = "landscape"
+    else if (initial === "portrait") lastPhysicalOrientation = "portrait"
+    Device.addOrientationListener(onOrientation)
+  } catch (error) {
+    reportError("player", "orientation.listen", error)
+  }
+
+  return (): void => {
+    try {
+      Device.removeOrientationListener(onOrientation)
+    } catch {
+    }
+  }
 }
 
 export function toggleFullscreen(): void {

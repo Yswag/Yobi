@@ -4,11 +4,20 @@ import {
   Tab,
   TabView,
   ZStack,
+  useCallback,
+  useEffect,
+  useMemo,
   useObservable,
 } from "scripting"
 import type { VirtualNode } from "scripting"
 import { disposeYoutubePageMinter, stopLocalProxy, warmYoutubePageMinter } from "./services/index"
-import { closePlayer, getPlayerStoreSnapshot, minimizeToMiniPlayer, usePlayerRootState } from "./state/playerStore"
+import {
+  closePlayer,
+  getPlayerStoreSnapshot,
+  minimizeToMiniPlayer,
+  startOrientationAutoFullscreen,
+  usePlayerRootState,
+} from "./state/playerStore"
 import { MINI_PLAYER_RESERVED_HEIGHT, PlayerHost } from "./components/PlayerHost"
 import { channelRoute, SETTINGS_ROUTE, TabStack } from "./components/TabStack"
 import type { OpenChannel } from "./components/TabStack"
@@ -31,37 +40,97 @@ function YobiRootView(): VirtualNode {
     useObservable<string[]>([]),
   ]
 
-  const push = (route: string): void => {
+  useEffect(() => {
+    return startOrientationAutoFullscreen()
+  }, [])
+
+  const push = useCallback((route: string): void => {
     const path: Observable<string[]> = paths[selection.value]
     if (path.value[path.value.length - 1] === route) return
     path.setValue([...path.value, route])
-  }
+  }, [])
 
-  const handleOpenChannel: OpenChannel = (provider, authorId, authorName, avatarUrl) => {
+  const handleOpenChannel: OpenChannel = useCallback((provider, authorId, authorName, avatarUrl) => {
     if (!authorId) return
     if (getPlayerStoreSnapshot().presentationMode === "expanded") minimizeToMiniPlayer()
     push(channelRoute({ provider, channelId: authorId, initialName: authorName, initialAvatar: avatarUrl }))
-  }
+  }, [push])
 
-  const openSettings = (): void => push(SETTINGS_ROUTE)
+  const openSettings = useCallback((): void => push(SETTINGS_ROUTE), [push])
+  const openSearch = useCallback((): void => selection.setValue(TAB.search), [])
 
-  const handleExitApp = (): void => {
+  const handleExitApp = useCallback((): void => {
     void closePlayer().finally(() => {
       stopLocalProxy()
       dismiss()
     })
-  }
+  }, [dismiss])
 
-  const stack = (tab: number, content: VirtualNode): VirtualNode => (
-    <TabStack
-      path={paths[tab]}
-      onOpenChannel={handleOpenChannel}
-      onExitApp={handleExitApp}
-      showsNavigationBar={tab === TAB.search}
-      bottomInset={root.hasItem ? MINI_PLAYER_RESERVED_HEIGHT : 0}
-    >
-      {content}
-    </TabStack>
+  const bottomInset: number = root.hasItem ? MINI_PLAYER_RESERVED_HEIGHT : 0
+
+  const playerOverlay = useMemo(
+    () => ({ alignment: "topLeading" as const, content: <PlayerHost onOpenChannel={handleOpenChannel} /> }),
+    [handleOpenChannel],
+  )
+
+  const homeTab = useMemo(
+    () => (
+      <TabStack
+        path={paths[TAB.home]}
+        onOpenChannel={handleOpenChannel}
+        onExitApp={handleExitApp}
+        showsNavigationBar={false}
+        bottomInset={bottomInset}
+      >
+        <HomeView onOpenChannel={handleOpenChannel} onOpenSettings={openSettings} />
+      </TabStack>
+    ),
+    [handleOpenChannel, handleExitApp, openSettings, bottomInset],
+  )
+
+  const subscriptionsTab = useMemo(
+    () => (
+      <TabStack
+        path={paths[TAB.subscriptions]}
+        onOpenChannel={handleOpenChannel}
+        onExitApp={handleExitApp}
+        showsNavigationBar={false}
+        bottomInset={bottomInset}
+      >
+        <SubscriptionsView onOpenChannel={handleOpenChannel} onOpenSearch={openSearch} />
+      </TabStack>
+    ),
+    [handleOpenChannel, handleExitApp, openSearch, bottomInset],
+  )
+
+  const libraryTab = useMemo(
+    () => (
+      <TabStack
+        path={paths[TAB.library]}
+        onOpenChannel={handleOpenChannel}
+        onExitApp={handleExitApp}
+        showsNavigationBar={false}
+        bottomInset={bottomInset}
+      >
+        <LibraryView onOpenChannel={handleOpenChannel} onOpenSettings={openSettings} />
+      </TabStack>
+    ),
+    [handleOpenChannel, handleExitApp, openSettings, bottomInset],
+  )
+
+  const searchTab = useMemo(
+    () => (
+      <TabStack
+        path={paths[TAB.search]}
+        onOpenChannel={handleOpenChannel}
+        onExitApp={handleExitApp}
+        showsNavigationBar
+        bottomInset={bottomInset}
+      >
+        <SearchView onOpenChannel={handleOpenChannel} />
+      </TabStack>
+    ),
+    [handleOpenChannel, handleExitApp, bottomInset],
   )
 
   return (
@@ -71,24 +140,19 @@ function YobiRootView(): VirtualNode {
         tint={palette.brand}
         tabBarMinimizeBehavior="never"
         tabViewSearchActivation="searchTabSelection"
-        overlay={{ alignment: "topLeading", content: <PlayerHost onOpenChannel={handleOpenChannel} /> }}
+        overlay={playerOverlay}
       >
         <Tab title="首頁" systemImage="house.fill" value={TAB.home}>
-          {stack(TAB.home, <HomeView onOpenChannel={handleOpenChannel} onOpenSettings={openSettings} />)}
+          {homeTab}
         </Tab>
         <Tab title="訂閱" systemImage="play.square.stack.fill" value={TAB.subscriptions}>
-          {stack(TAB.subscriptions, (
-            <SubscriptionsView
-              onOpenChannel={handleOpenChannel}
-              onOpenSearch={() => selection.setValue(TAB.search)}
-            />
-          ))}
+          {subscriptionsTab}
         </Tab>
         <Tab title="媒體庫" systemImage="books.vertical.fill" value={TAB.library}>
-          {stack(TAB.library, <LibraryView onOpenChannel={handleOpenChannel} onOpenSettings={openSettings} />)}
+          {libraryTab}
         </Tab>
         <Tab title="搜尋" systemImage="magnifyingglass" value={TAB.search} role="search">
-          {stack(TAB.search, <SearchView onOpenChannel={handleOpenChannel} />)}
+          {searchTab}
         </Tab>
       </TabView>
     </ZStack>
