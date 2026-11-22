@@ -32,6 +32,7 @@ import {
   providerFullName,
 } from "../utils/format"
 import {
+  getCommentsStoreSnapshot,
   getPlayerProgressSnapshot,
   loadCommentReplies,
   loadMoreComments,
@@ -42,6 +43,7 @@ import {
   setCommentsSort,
   setProgressUpdatesPaused,
   subscribePlayerProgress,
+  useCommentsStore,
   useLiveViewers,
   usePlayerStore,
 } from "../state/playerStore"
@@ -168,6 +170,32 @@ function ChaptersSection(props: { chapters: VideoChapter[] }): VirtualNode {
         </HStack>
       </ScrollView>
     </VStack>
+  )
+}
+
+function WatchCommentsSection(): VirtualNode {
+  const commentsStore = useCommentsStore()
+  return (
+    <CommentsSheet
+      comments={commentsStore.comments}
+      loading={commentsStore.loading}
+      loadingMore={commentsStore.loadingMore}
+      sort={commentsStore.sort}
+      hasMore={commentsStore.cursor !== null}
+      repliesLoading={commentsStore.repliesLoading}
+      onSort={(sort) => {
+        void setCommentsSort(sort)
+      }}
+      onLoadMore={() => {
+        void loadMoreComments()
+      }}
+      onLoadReplies={(commentId) => {
+        void loadCommentReplies(commentId)
+      }}
+      onRefresh={() => {
+        void reloadComments()
+      }}
+    />
   )
 }
 
@@ -466,29 +494,6 @@ export function WatchView(props: WatchViewProps): VirtualNode {
       </LazyVStack>
     )
 
-  const commentsList: VirtualNode = (
-    <CommentsSheet
-        comments={store.comments}
-        loading={store.commentsLoading}
-        loadingMore={store.commentsLoadingMore}
-        sort={store.commentsSort}
-        hasMore={store.commentsCursor !== null}
-        repliesLoading={store.repliesLoading}
-        onSort={(sort) => {
-          void setCommentsSort(sort)
-        }}
-        onLoadMore={() => {
-          void loadMoreComments()
-        }}
-        onLoadReplies={(commentId) => {
-          void loadCommentReplies(commentId)
-        }}
-        onRefresh={() => {
-          void reloadComments()
-        }}
-      />
-    )
-
   const handleScrollPhase = (next: ScrollPhase): void => {
     setProgressUpdatesPaused(String(next) !== "idle")
   }
@@ -502,8 +507,9 @@ export function WatchView(props: WatchViewProps): VirtualNode {
     if (String(next) !== "idle") return
     const geometry: ScrollGeometry = context.geometry
     if (geometry.containerSize.height <= 0) return
-    if (store.commentsCursor === null) return
-    if (store.commentsLoading || store.commentsLoadingMore) return
+    const commentsSnap = getCommentsStoreSnapshot()
+    if (commentsSnap.cursor === null) return
+    if (commentsSnap.loading || commentsSnap.loadingMore) return
     const remaining: number = geometry.contentSize.height - geometry.contentOffset.y - geometry.containerSize.height
     if (remaining > COMMENTS_AUTO_LOAD_PX) return
     void loadMoreComments()
@@ -579,7 +585,7 @@ export function WatchView(props: WatchViewProps): VirtualNode {
                 onScrollPhaseChange={handleCommentsPhase}
               >
                 <VStack spacing={0} frame={{ maxWidth: "infinity" }} padding={{ top: 10, bottom: 24 }}>
-                  {commentsList}
+                  <WatchCommentsSection />
                 </VStack>
               </ScrollView>
             )}

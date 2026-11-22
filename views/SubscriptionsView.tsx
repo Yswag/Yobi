@@ -186,7 +186,7 @@ export function SubscriptionsView(props: SubscriptionsViewProps): VirtualNode {
     setSubscriptions(getSubscriptions())
     return subscribeStorageChanges(() => {
       setSubscriptions(getSubscriptions())
-    })
+    }, ["subscriptions"])
   }, [])
 
   useEffect(() => {

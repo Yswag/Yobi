@@ -41,18 +41,35 @@ export const DEFAULT_SETTINGS: PlayerSettings = {
   biliLineSwitch: false,
 }
 
-const listeners = new Set<() => void>()
+export type StorageTopic =
+  | "settings"
+  | "subscriptions"
+  | "history"
+  | "watchLater"
+  | "playlists"
+  | "searchHistory"
+
+interface StorageSubscription {
+  listener: (topic?: StorageTopic) => void
+  topics: Set<StorageTopic> | null
+}
+
+const subscriptions = new Set<StorageSubscription>()
 let settingsCache: PlayerSettings | null = null
 
 let subscriptionsCache: SubscriptionChannel[] | null = null
 let historyCache: WatchHistoryEntry[] | null = null
+let watchLaterCache: UnifiedVideoItem[] | null = null
+let playlistsCache: CustomPlaylist[] | null = null
+let searchHistoryCache: string[] | null = null
 let positionById: Map<string, number> = new Map()
 let positionByIdCid: Map<string, number> = new Map()
 
-function notify(): void {
-  for (const listener of Array.from(listeners)) {
+function notify(topic?: StorageTopic): void {
+  for (const sub of Array.from(subscriptions)) {
+    if (topic !== undefined && sub.topics !== null && !sub.topics.has(topic)) continue
     try {
-      listener()
+      sub.listener(topic)
     } catch (error) {
       reportError("storage", "settings.listener", error)
     }
@@ -110,7 +127,7 @@ export function updateSettings(patch: Partial<PlayerSettings>): PlayerSettings {
   const next = normalizeSettings({ ...getSettings(), ...patch })
   settingsCache = next
   Storage.set(KEYS.settings, next)
-  notify()
+  notify("settings")
   return cloneSettings(next)
 }
 
@@ -138,12 +155,12 @@ export function toggleSubscription(channel: SubscriptionChannel): boolean {
   if (index >= 0) {
     list.splice(index, 1)
     saveSubscriptions(list)
-    notify()
+    notify("subscriptions")
     return false
   }
   list.unshift({ ...channel, subscribedAt: Date.now() })
   saveSubscriptions(list)
-  notify()
+  notify("subscriptions")
   return true
 }
 
@@ -194,7 +211,7 @@ export function recordWatchHistory(entry: WatchHistoryEntry): void {
     watchedAt: entry.watchedAt || Date.now(),
   })
   saveHistory(next)
-  notify()
+  notify("history")
 }
 
 export function getSavedPosition(id: string, cid?: number): number {
@@ -205,29 +222,39 @@ export function getSavedPosition(id: string, cid?: number): number {
 
 export function clearWatchHistory(): void {
   saveHistory([])
-  notify()
+  notify("history")
+}
+
+function loadWatchLater(): UnifiedVideoItem[] {
+  if (watchLaterCache === null) watchLaterCache = readArray<UnifiedVideoItem>(KEYS.watchLater)
+  return watchLaterCache
+}
+
+function saveWatchLater(list: UnifiedVideoItem[]): void {
+  writeArray(KEYS.watchLater, list)
+  watchLaterCache = list
 }
 
 export function getWatchLater(): UnifiedVideoItem[] {
-  return readArray<UnifiedVideoItem>(KEYS.watchLater)
+  return loadWatchLater()
 }
 
 export function isInWatchLater(id: string): boolean {
-  return getWatchLater().some(item => item.id === id)
+  return loadWatchLater().some(item => item.id === id)
 }
 
 export function toggleWatchLater(item: UnifiedVideoItem): boolean {
-  const list = getWatchLater()
+  const list = loadWatchLater().slice()
   const index = list.findIndex(entry => entry.id === item.id)
   if (index >= 0) {
     list.splice(index, 1)
-    writeArray(KEYS.watchLater, list)
-    notify()
+    saveWatchLater(list)
+    notify("watchLater")
     return false
   }
   list.unshift({ ...item })
-  writeArray(KEYS.watchLater, list)
-  notify()
+  saveWatchLater(list)
+  notify("watchLater")
   return true
 }
 
@@ -235,9 +262,23 @@ function makeId(prefix: string): string {
   return `${prefix}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`
 }
 
-export function getPlaylists(): CustomPlaylist[] {
-  const list = readArray<CustomPlaylist>(KEYS.playlists)
+function sortPlaylists(list: CustomPlaylist[]): CustomPlaylist[] {
   return list.slice().sort((a, b) => b.updatedAt - a.updatedAt)
+}
+
+function loadPlaylists(): CustomPlaylist[] {
+  if (playlistsCache === null) playlistsCache = sortPlaylists(readArray<CustomPlaylist>(KEYS.playlists))
+  return playlistsCache
+}
+
+function savePlaylists(list: CustomPlaylist[]): void {
+  const sorted: CustomPlaylist[] = sortPlaylists(list)
+  writeArray(KEYS.playlists, sorted)
+  playlistsCache = sorted
+}
+
+export function getPlaylists(): CustomPlaylist[] {
+  return loadPlaylists()
 }
 
 export function createPlaylist(name: string, description?: string): CustomPlaylist {
@@ -250,62 +291,91 @@ export function createPlaylist(name: string, description?: string): CustomPlayli
     updatedAt: now,
     items: [],
   }
-  const list = readArray<CustomPlaylist>(KEYS.playlists)
-  list.unshift(playlist)
-  writeArray(KEYS.playlists, list)
-  notify()
+  const next: CustomPlaylist[] = [playlist, ...loadPlaylists()]
+  savePlaylists(next)
+  notify("playlists")
   return playlist
 }
 
 export function deletePlaylist(id: string): void {
-  const list = readArray<CustomPlaylist>(KEYS.playlists)
+  const list = loadPlaylists()
   const next = list.filter(playlist => playlist.id !== id)
   if (next.length === list.length) return
-  writeArray(KEYS.playlists, next)
-  notify()
+  savePlaylists(next)
+  notify("playlists")
 }
 
 export function addVideoToPlaylist(playlistId: string, item: UnifiedVideoItem): void {
-  const list = readArray<CustomPlaylist>(KEYS.playlists)
-  const playlist = list.find(entry => entry.id === playlistId)
-  if (!playlist) return
-  playlist.items = playlist.items.filter(entry => entry.id !== item.id)
-  playlist.items.unshift({ ...item })
-  playlist.updatedAt = Date.now()
-  writeArray(KEYS.playlists, list)
-  notify()
+  const list = loadPlaylists()
+  let found: boolean = false
+  const next: CustomPlaylist[] = list.map((playlist: CustomPlaylist): CustomPlaylist => {
+    if (playlist.id !== playlistId) return playlist
+    found = true
+    return {
+      ...playlist,
+      items: [{ ...item }, ...playlist.items.filter(entry => entry.id !== item.id)],
+      updatedAt: Date.now(),
+    }
+  })
+  if (!found) return
+  savePlaylists(next)
+  notify("playlists")
 }
 
 export function removeVideoFromPlaylist(playlistId: string, videoId: string): void {
-  const list = readArray<CustomPlaylist>(KEYS.playlists)
-  const playlist = list.find(entry => entry.id === playlistId)
-  if (!playlist) return
-  const next = playlist.items.filter(entry => entry.id !== videoId)
-  if (next.length === playlist.items.length) return
-  playlist.items = next
-  playlist.updatedAt = Date.now()
-  writeArray(KEYS.playlists, list)
-  notify()
+  const list = loadPlaylists()
+  let changed: boolean = false
+  const next: CustomPlaylist[] = list.map((playlist: CustomPlaylist): CustomPlaylist => {
+    if (playlist.id !== playlistId) return playlist
+    const remaining: UnifiedVideoItem[] = playlist.items.filter(entry => entry.id !== videoId)
+    if (remaining.length === playlist.items.length) return playlist
+    changed = true
+    return {
+      ...playlist,
+      items: remaining,
+      updatedAt: Date.now(),
+    }
+  })
+  if (!changed) return
+  savePlaylists(next)
+  notify("playlists")
+}
+
+function normalizeSearchHistory(raw: unknown[]): string[] {
+  return raw
+    .filter((entry: unknown): entry is string => typeof entry === "string" && entry.length > 0)
+    .slice(0, SEARCH_HISTORY_LIMIT)
+}
+
+function loadSearchHistory(): string[] {
+  if (searchHistoryCache === null) {
+    searchHistoryCache = normalizeSearchHistory(readArray<unknown>(KEYS.searchHistory))
+  }
+  return searchHistoryCache
+}
+
+function saveSearchHistory(list: string[]): void {
+  const trimmed: string[] = list.slice(0, SEARCH_HISTORY_LIMIT)
+  writeArray(KEYS.searchHistory, trimmed)
+  searchHistoryCache = trimmed
 }
 
 export function getSearchHistory(): string[] {
-  return readArray<string>(KEYS.searchHistory).filter(
-    entry => typeof entry === "string" && entry.length > 0,
-  )
+  return loadSearchHistory()
 }
 
 export function addSearchHistory(query: string): void {
   const trimmed = query.trim()
   if (!trimmed) return
-  const next = getSearchHistory().filter(entry => entry !== trimmed)
+  const next = loadSearchHistory().filter(entry => entry !== trimmed)
   next.unshift(trimmed)
-  writeArray(KEYS.searchHistory, next.slice(0, SEARCH_HISTORY_LIMIT))
-  notify()
+  saveSearchHistory(next)
+  notify("searchHistory")
 }
 
 export function clearSearchHistory(): void {
-  writeArray(KEYS.searchHistory, [])
-  notify()
+  saveSearchHistory([])
+  notify("searchHistory")
 }
 
 export function exportAllData(): string {
@@ -348,18 +418,13 @@ export function importAllData(jsonText: string): boolean {
       saveHistory(parsed.watchHistory)
     }
     if (Array.isArray(parsed.watchLater)) {
-      writeArray(KEYS.watchLater, parsed.watchLater)
+      saveWatchLater(parsed.watchLater)
     }
     if (Array.isArray(parsed.playlists)) {
-      writeArray(KEYS.playlists, parsed.playlists)
+      savePlaylists(parsed.playlists)
     }
     if (Array.isArray(parsed.searchHistory)) {
-      writeArray(
-        KEYS.searchHistory,
-        parsed.searchHistory
-          .filter((entry: unknown) => typeof entry === "string" && entry.length > 0)
-          .slice(0, SEARCH_HISTORY_LIMIT),
-      )
+      saveSearchHistory(normalizeSearchHistory(parsed.searchHistory))
     }
     notify()
     return true
@@ -369,9 +434,16 @@ export function importAllData(jsonText: string): boolean {
   }
 }
 
-export function subscribeStorageChanges(listener: () => void): () => void {
-  listeners.add(listener)
+export function subscribeStorageChanges(
+  listener: (topic?: StorageTopic) => void,
+  topics?: readonly StorageTopic[],
+): () => void {
+  const sub: StorageSubscription = {
+    listener,
+    topics: topics && topics.length > 0 ? new Set(topics) : null,
+  }
+  subscriptions.add(sub)
   return () => {
-    listeners.delete(listener)
+    subscriptions.delete(sub)
   }
 }

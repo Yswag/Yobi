@@ -8,7 +8,7 @@ import {
 } from "scripting"
 import type { VirtualNode } from "scripting"
 import { disposeYoutubePageMinter, stopLocalProxy, warmYoutubePageMinter } from "./services/index"
-import { closePlayer, getPlayerStoreSnapshot, minimizeToMiniPlayer, usePlayerStore } from "./state/playerStore"
+import { closePlayer, getPlayerStoreSnapshot, minimizeToMiniPlayer, usePlayerRootState } from "./state/playerStore"
 import { MINI_PLAYER_RESERVED_HEIGHT, PlayerHost } from "./components/PlayerHost"
 import { channelRoute, SETTINGS_ROUTE, TabStack } from "./components/TabStack"
 import type { OpenChannel } from "./components/TabStack"
@@ -22,7 +22,7 @@ const TAB = { home: 0, subscriptions: 1, library: 2, search: 3 }
 
 function YobiRootView(): VirtualNode {
   const dismiss = Navigation.useDismiss()
-  const store = usePlayerStore()
+  const root = usePlayerRootState()
   const selection = useObservable<number>(TAB.home)
   const paths: Observable<string[]>[] = [
     useObservable<string[]>([]),
@@ -58,14 +58,14 @@ function YobiRootView(): VirtualNode {
       onOpenChannel={handleOpenChannel}
       onExitApp={handleExitApp}
       showsNavigationBar={tab === TAB.search}
-      bottomInset={store.currentItem ? MINI_PLAYER_RESERVED_HEIGHT : 0}
+      bottomInset={root.hasItem ? MINI_PLAYER_RESERVED_HEIGHT : 0}
     >
       {content}
     </TabStack>
   )
 
   return (
-    <ZStack alignment="topLeading" statusBarHidden={store.isFullscreen}>
+    <ZStack alignment="topLeading" statusBarHidden={root.isFullscreen}>
       <TabView
         selection={selection}
         tint={palette.brand}

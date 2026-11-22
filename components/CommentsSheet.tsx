@@ -1,7 +1,8 @@
-import { FlowLayout, HStack, Image, ProgressView, Text, VStack, useState } from "scripting"
+import { FlowLayout, HStack, Image, ProgressView, Text, VStack, useCallback, useRef, useState } from "scripting"
 import type { VirtualNode } from "scripting"
 import type { CommentItem, CommentRun, CommentSort } from "../types"
 import { formatCount } from "../utils/format"
+import { emojiImageUrl } from "../utils/image"
 import { Avatar, ChipBar, EmptyState, PillButton, Skeleton } from "../ui/primitives"
 import { palette, space, type } from "../ui/theme"
 
@@ -14,21 +15,39 @@ const EMOJI_SIZE: number = 18
 const EMOJI_LARGE: number = 28
 const EMOJI_GAP: number = 3
 const WIDE_CHAR: RegExp = /[\u1100-\u11ff\u2e80-\u303f\u3040-\u9fff\uac00-\ud7af\uf900-\ufaff\ufe30-\ufe4f\uff00-\uff60\uffe0-\uffe6]/
+const WIDE_BREAK: RegExp = /[，。！？、；：）」』】》—…]/
+const WIDE_CHUNK_SIZE: number = 3
 
 function textChunks(text: string): string[] {
   const chunks: string[] = []
   let buffer: string = ""
+  let wideCount: number = 0
   const flush = (): void => {
     if (!buffer) return
     chunks.push(buffer)
     buffer = ""
+    wideCount = 0
   }
   for (const char of text) {
-    if (WIDE_CHAR.test(char)) {
-      flush()
-      chunks.push(char)
+    if (WIDE_BREAK.test(char)) {
+      if (buffer) {
+        buffer += char
+        flush()
+      } else if (chunks.length > 0) {
+        chunks[chunks.length - 1] += char
+      } else {
+        chunks.push(char)
+      }
       continue
     }
+    if (WIDE_CHAR.test(char)) {
+      if (buffer && wideCount === 0) flush()
+      buffer += char
+      wideCount++
+      if (wideCount >= WIDE_CHUNK_SIZE) flush()
+      continue
+    }
+    if (wideCount > 0) flush()
     buffer += char
     if (char === " ") flush()
   }
@@ -84,10 +103,11 @@ function lineNodes(line: CommentRun[]): VirtualNode[] {
     if (previous && (previous.imageUrl || item.imageUrl)) nodes.push(gapNode(`gap-${index}`))
     if (item.imageUrl) {
       const size: number = (item.scale ?? 1) > 1 ? EMOJI_LARGE : EMOJI_SIZE
+      const sizedUrl: string = emojiImageUrl(item.imageUrl, size) ?? item.imageUrl
       nodes.push(
         <Image
           key={item.key}
-          imageUrl={item.imageUrl}
+          imageUrl={sizedUrl}
           resizable
           scaleToFit
           frame={{ width: size, height: size }}
@@ -129,17 +149,35 @@ function CommentText(props: { comment: CommentItem }): VirtualNode {
   const lines: CommentRun[][] = splitLines(runs)
   return (
     <VStack alignment="leading" spacing={3} frame={{ maxWidth: "infinity", alignment: "leading" }}>
-      {lines.map((line: CommentRun[], lineIndex: number) => (
-        <FlowLayout
-          key={`line-${lineIndex}`}
-          spacing={0}
-          horizontalSpacing={0}
-          verticalSpacing={3}
-          frame={{ maxWidth: "infinity", alignment: "leading" }}
-        >
-          {lineNodes(line)}
-        </FlowLayout>
-      ))}
+      {lines.map((line: CommentRun[], lineIndex: number) => {
+        const lineHasImage: boolean = line.some((run: CommentRun): boolean => Boolean(run.imageUrl))
+        if (!lineHasImage) {
+          const text: string = line.map((run: CommentRun): string => run.text ?? "").join("")
+          return (
+            <Text
+              key={`line-${lineIndex}`}
+              font={type.cardTitle}
+              foregroundStyle="label"
+              lineSpacing={3}
+              multilineTextAlignment="leading"
+              frame={{ maxWidth: "infinity", alignment: "leading" }}
+            >
+              {text}
+            </Text>
+          )
+        }
+        return (
+          <FlowLayout
+            key={`line-${lineIndex}`}
+            spacing={0}
+            horizontalSpacing={0}
+            verticalSpacing={3}
+            frame={{ maxWidth: "infinity", alignment: "leading" }}
+          >
+            {lineNodes(line)}
+          </FlowLayout>
+        )
+      })}
     </VStack>
   )
 }
@@ -190,8 +228,8 @@ function CommentThread(props: {
   comment: CommentItem
   expanded: boolean
   loading: boolean
-  onToggle: () => void
-  onLoadMore: () => void
+  onToggle: (comment: CommentItem) => void
+  onLoadMore: (commentId: string) => void
 }): VirtualNode {
   const comment: CommentItem = props.comment
   const replies: CommentItem[] = comment.replies ?? []
@@ -200,7 +238,7 @@ function CommentThread(props: {
 
   const trigger: VirtualNode | undefined = total > 0
     ? (
-      <HStack spacing={4} contentShape="rect" onTapGesture={props.onToggle}>
+      <HStack spacing={4} contentShape="rect" onTapGesture={() => props.onToggle(comment)}>
         <Text font={type.meta + 1} fontWeight="semibold" foregroundStyle={palette.brand}>
           {`${total} 則回覆`}
         </Text>
@@ -229,7 +267,7 @@ function CommentThread(props: {
             <CommentBody key={reply.id} comment={reply} avatarSize={24} />
           ))}
           {hasMore ? (
-            <HStack spacing={4} contentShape="rect" onTapGesture={props.onLoadMore}>
+            <HStack spacing={4} contentShape="rect" onTapGesture={() => props.onLoadMore(comment.id)}>
               <Text font={type.meta + 1} fontWeight="semibold" foregroundStyle="secondaryLabel">
                 {props.loading ? "載入中…" : "載入更多回覆"}
               </Text>
@@ -263,6 +301,23 @@ function CommentsSkeleton(): VirtualNode {
 
 export function CommentsSheet(props: CommentsSheetProps): VirtualNode {
   const [expandedIds, setExpandedIds] = useState<Record<string, boolean>>({})
+  const expandedIdsRef = useRef<Record<string, boolean>>(expandedIds)
+  expandedIdsRef.current = expandedIds
+  const onLoadRepliesRef = useRef(props.onLoadReplies)
+  onLoadRepliesRef.current = props.onLoadReplies
+
+  const handleToggle = useCallback((comment: CommentItem): void => {
+    const willExpand: boolean = expandedIdsRef.current[comment.id] !== true
+    const next: Record<string, boolean> = { ...expandedIdsRef.current, [comment.id]: willExpand }
+    expandedIdsRef.current = next
+    setExpandedIds(next)
+    const loaded: number = (comment.replies ?? []).length
+    if (willExpand && loaded === 0 && comment.replyCursor) onLoadRepliesRef.current(comment.id)
+  }, [])
+
+  const handleLoadReplies = useCallback((commentId: string): void => {
+    onLoadRepliesRef.current(commentId)
+  }, [])
 
   const sortBar: VirtualNode = (
     <ChipBar
@@ -297,13 +352,6 @@ export function CommentsSheet(props: CommentsSheetProps): VirtualNode {
     )
   }
 
-  const toggle = (comment: CommentItem): void => {
-    const willExpand: boolean = expandedIds[comment.id] !== true
-    setExpandedIds({ ...expandedIds, [comment.id]: willExpand })
-    const loaded: number = (comment.replies ?? []).length
-    if (willExpand && loaded === 0 && comment.replyCursor) props.onLoadReplies(comment.id)
-  }
-
   const footer: VirtualNode = (
     <VStack
       padding={{ horizontal: space.page, vertical: 14 }}
@@ -329,8 +377,8 @@ export function CommentsSheet(props: CommentsSheetProps): VirtualNode {
             comment={comment}
             expanded={expandedIds[comment.id] === true}
             loading={props.repliesLoading[comment.id] === true}
-            onToggle={() => toggle(comment)}
-            onLoadMore={() => props.onLoadReplies(comment.id)}
+            onToggle={handleToggle}
+            onLoadMore={handleLoadReplies}
           />
         ))}
         {footer}

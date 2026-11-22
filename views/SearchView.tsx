@@ -231,7 +231,7 @@ export function SearchView(props: SearchViewProps): VirtualNode {
     setHistory(getSearchHistory())
     return subscribeStorageChanges(() => {
       setHistory(getSearchHistory())
-    })
+    }, ["searchHistory"])
   }, [])
 
   useEffect(() => {

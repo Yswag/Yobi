@@ -18,6 +18,7 @@ import type { DragGestureDetails, Point, VirtualNode } from "scripting"
 import type { PlayerProgressSnapshot, PlayerStoreSnapshot } from "../state/playerStore"
 import {
   dismissActiveSponsorSegment,
+  getPlayerProgressSnapshot,
   minimizeToMiniPlayer,
   openVideo,
   seekBy,
@@ -26,10 +27,10 @@ import {
   selectSubtitle,
   setPlaybackRate,
   skipActiveSponsorSegment,
+  subscribePlayerProgress,
   toggleDanmaku,
   toggleFullscreen,
   togglePlayPause,
-  usePlayerProgress,
   usePlayerStore,
 } from "../state/playerStore"
 import type { SponsorSegment, SubtitleTrackInfo } from "../types"
@@ -121,6 +122,7 @@ export interface ScrubPreview {
 }
 
 function ProgressBar(props: {
+  active: boolean
   trackWidth: number
   barWidth: number
   edgeInset: number
@@ -131,7 +133,13 @@ function ProgressBar(props: {
   onTapChrome: () => void
 }): VirtualNode {
   const store: PlayerStoreSnapshot = usePlayerStore()
-  const progress: PlayerProgressSnapshot = usePlayerProgress()
+  const [progress, setProgress] = useState<PlayerProgressSnapshot>(() => getPlayerProgressSnapshot())
+  useEffect(() => {
+    if (!props.active) return
+    const sync = (): void => setProgress(getPlayerProgressSnapshot())
+    sync()
+    return subscribePlayerProgress(sync)
+  }, [props.active])
   const duration: number = progress.duration || 0
   const live: boolean = store.currentItem?.isLive === true
   const scrubWidthRef = useRef<number>(1)
@@ -548,6 +556,7 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
           <Spacer />
 
           <ProgressBar
+            active={controlsVisible}
             trackWidth={trackWidth}
             barWidth={barWidth}
             edgeInset={edgeInset}

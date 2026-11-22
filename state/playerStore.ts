@@ -55,12 +55,6 @@ export interface PlayerStoreSnapshot {
   currentItem: UnifiedVideoItem | null
   detail: VideoDetail | null
   manifest: StreamManifest | null
-  comments: CommentItem[]
-  commentsLoading: boolean
-  commentsSort: CommentSort
-  commentsCursor: string | null
-  commentsLoadingMore: boolean
-  repliesLoading: Record<string, boolean>
   sponsorSegments: SponsorSegment[]
   activeSponsorPrompt: SponsorSegment | null
   skippedToast: string | null
@@ -85,6 +79,20 @@ export interface PlayerStoreSnapshot {
   settings: PlayerSettings
 }
 
+export interface CommentsStoreSnapshot {
+  comments: CommentItem[]
+  loading: boolean
+  sort: CommentSort
+  cursor: string | null
+  loadingMore: boolean
+  repliesLoading: Record<string, boolean>
+}
+
+export interface PlayerRootSnapshot {
+  isFullscreen: boolean
+  hasItem: boolean
+}
+
 export interface PlayerProgressSnapshot {
   position: number
   duration: number
@@ -104,6 +112,7 @@ let toastTimer: number | null = null
 let savedRateBeforeBoost: number = 1
 let savedOrientations: typeof Device.supportedInterfaceOrientations | null = null
 let liveViewerTimer: number | null = null
+const HISTORY_SAVE_INTERVAL_MS: number = 15_000
 const LIVE_VIEWER_TICK_MS: number = 60_000
 export interface LiveViewerSnapshot {
   videoId: string
@@ -115,18 +124,13 @@ const liveViewerListeners: Set<() => void> = new Set()
 
 const storeListeners: Set<() => void> = new Set()
 const progressListeners: Set<() => void> = new Set()
+const commentsListeners: Set<() => void> = new Set()
 
 let storeState: PlayerStoreSnapshot = {
   presentationMode: "hidden",
   currentItem: null,
   detail: null,
   manifest: null,
-  comments: [],
-  commentsLoading: false,
-  commentsSort: "top",
-  commentsCursor: null,
-  commentsLoadingMore: false,
-  repliesLoading: {},
   sponsorSegments: [],
   activeSponsorPrompt: null,
   skippedToast: null,
@@ -149,6 +153,15 @@ let storeState: PlayerStoreSnapshot = {
   queue: [],
   queueIndex: -1,
   settings: getSettings(),
+}
+
+let commentsState: CommentsStoreSnapshot = {
+  comments: [],
+  loading: false,
+  sort: "top",
+  cursor: null,
+  loadingMore: false,
+  repliesLoading: {},
 }
 
 let progressState: PlayerProgressSnapshot = {
@@ -199,6 +212,7 @@ function startLiveViewerRefresh(item: UnifiedVideoItem): void {
 
 let lastEmittedStore: PlayerStoreSnapshot | null = null
 let lastEmittedProgress: PlayerProgressSnapshot | null = null
+let lastEmittedComments: CommentsStoreSnapshot | null = null
 let progressPaused: boolean = false
 
 function sameProgress(next: PlayerProgressSnapshot, previous: PlayerProgressSnapshot | null): boolean {
@@ -211,9 +225,9 @@ function sameProgress(next: PlayerProgressSnapshot, previous: PlayerProgressSnap
   )
 }
 
-function sameSnapshot(next: PlayerStoreSnapshot, previous: PlayerStoreSnapshot | null): boolean {
+function sameObject<T extends object>(next: T, previous: T | null): boolean {
   if (previous === null) return false
-  const keys: (keyof PlayerStoreSnapshot)[] = Object.keys(next) as (keyof PlayerStoreSnapshot)[]
+  const keys: (keyof T)[] = Object.keys(next) as (keyof T)[]
   if (keys.length !== Object.keys(previous).length) return false
   for (const key of keys) {
     if (!Object.is(next[key], previous[key])) return false
@@ -223,7 +237,7 @@ function sameSnapshot(next: PlayerStoreSnapshot, previous: PlayerStoreSnapshot |
 
 function emitStore(): void {
   const next: PlayerStoreSnapshot = { ...storeState }
-  if (sameSnapshot(next, lastEmittedStore)) return
+  if (sameObject(next, lastEmittedStore)) return
   lastEmittedStore = next
   storeState = { ...next }
   for (const listener of Array.from(storeListeners)) {
@@ -233,6 +247,39 @@ function emitStore(): void {
       reportError("player", "store.listener", error)
     }
   }
+}
+
+function emitComments(): void {
+  const next: CommentsStoreSnapshot = { ...commentsState }
+  if (sameObject(next, lastEmittedComments)) return
+  lastEmittedComments = next
+  commentsState = { ...next }
+  for (const listener of Array.from(commentsListeners)) {
+    try {
+      listener()
+    } catch (error) {
+      reportError("player", "comments.listener", error)
+    }
+  }
+}
+
+function saveCurrentHistory(force: boolean = false): void {
+  const item: UnifiedVideoItem | null = storeState.currentItem
+  if (!item || streamSwitchPending) return
+  if (!force && (progressPaused || storeState.status !== "playing")) return
+  const pos: number = progressState.position
+  if (pos <= 1) return
+  const now: number = Date.now()
+  if (!force && now - lastHistorySaveAt < HISTORY_SAVE_INTERVAL_MS) return
+  lastHistorySaveAt = now
+  recordWatchHistory({
+    item,
+    position: item.isLive ? 0 : pos,
+    duration: progressState.duration || storeState.manifest?.duration || item.duration || 0,
+    watchedAt: now,
+    cid: storeState.activeCid,
+    page: storeState.activePage,
+  })
 }
 
 function emitProgress(): void {
@@ -398,6 +445,7 @@ export function getPlayerController(): VideoPlaybackController {
   ctrl.on("state", (snap: VideoPlaybackSnapshot) => {
     if (streamSwitchPending) return
     const mapped: PlaybackStatus = mapControllerState(snap.state)
+    if (mapped === "paused" || mapped === "ended") saveCurrentHistory(true)
     if (storeState.status !== mapped) {
       storeState.status = mapped
       emitStore()
@@ -406,6 +454,7 @@ export function getPlayerController(): VideoPlaybackController {
 
   AppEvents.scenePhase.addListener((phase: ScenePhase) => {
     if (phase !== "background") return
+    saveCurrentHistory(true)
     if (storeState.status !== "playing" || !storeState.currentItem) return
     if (!storeState.pipAvailable) return
     void ctrl.startPictureInPicture().catch(() => {})
@@ -432,19 +481,7 @@ export function getPlayerController(): VideoPlaybackController {
     progressState.bufferedUntil = Number.isFinite(snap.bufferedUntil) ? snap.bufferedUntil : 0
     progressState.activeChapter = findChapterAt(storeState.detail?.chapters, pos)
     emitProgress()
-
-    const now: number = Date.now()
-    if (storeState.currentItem && pos > 1 && now - lastHistorySaveAt >= 4500) {
-      lastHistorySaveAt = now
-      recordWatchHistory({
-        item: storeState.currentItem,
-        position: storeState.currentItem.isLive ? 0 : pos,
-        duration: dur,
-        watchedAt: now,
-        cid: storeState.activeCid,
-        page: storeState.activePage,
-      })
-    }
+    saveCurrentHistory(false)
 
     if (storeState.settings.sponsorBlockEnabled && storeState.sponsorSegments.length > 0) {
       const seg: SponsorSegment | null = findActiveSponsorSegment(storeState.sponsorSegments, pos)
@@ -513,6 +550,10 @@ export function getPlayerProgressSnapshot(): PlayerProgressSnapshot {
   return progressState
 }
 
+export function getCommentsStoreSnapshot(): CommentsStoreSnapshot {
+  return commentsState
+}
+
 export function subscribePlayerStore(listener: () => void): () => void {
   storeListeners.add(listener)
   return () => {
@@ -527,12 +568,52 @@ export function subscribePlayerProgress(listener: () => void): () => void {
   }
 }
 
+export function subscribeCommentsStore(listener: () => void): () => void {
+  commentsListeners.add(listener)
+  return () => {
+    commentsListeners.delete(listener)
+  }
+}
+
 export function usePlayerStore(): PlayerStoreSnapshot {
   const [snap, setSnap] = useState<PlayerStoreSnapshot>(() => getPlayerStoreSnapshot())
   useEffect(() => {
     setSnap(getPlayerStoreSnapshot())
     return subscribePlayerStore(() => {
       setSnap(getPlayerStoreSnapshot())
+    })
+  }, [])
+  return snap
+}
+
+function readPlayerRootSnapshot(): PlayerRootSnapshot {
+  return {
+    isFullscreen: storeState.isFullscreen,
+    hasItem: storeState.currentItem !== null,
+  }
+}
+
+export function usePlayerRootState(): PlayerRootSnapshot {
+  const [snap, setSnap] = useState<PlayerRootSnapshot>(() => readPlayerRootSnapshot())
+  useEffect(() => {
+    const sync = (): void => {
+      const next: PlayerRootSnapshot = readPlayerRootSnapshot()
+      setSnap((previous: PlayerRootSnapshot): PlayerRootSnapshot =>
+        previous.isFullscreen === next.isFullscreen && previous.hasItem === next.hasItem ? previous : next,
+      )
+    }
+    sync()
+    return subscribePlayerStore(sync)
+  }, [])
+  return snap
+}
+
+export function useCommentsStore(): CommentsStoreSnapshot {
+  const [snap, setSnap] = useState<CommentsStoreSnapshot>(() => getCommentsStoreSnapshot())
+  useEffect(() => {
+    setSnap(getCommentsStoreSnapshot())
+    return subscribeCommentsStore(() => {
+      setSnap(getCommentsStoreSnapshot())
     })
   }, [])
   return snap
@@ -690,13 +771,14 @@ subscribeStorageChanges(() => {
     .catch((error: unknown) => {
       reportError("player", "sponsor.reload", error)
     })
-})
+}, ["settings"])
 
 export async function openVideo(item: UnifiedVideoItem, options: OpenVideoOptions = {}): Promise<void> {
   const requestId: number = ++openRequestSeq
   const ctrl: VideoPlaybackController = getPlayerController()
   const settings: PlayerSettings = getSettings()
   streamSwitchPending = true
+  saveCurrentHistory(true)
   try {
     ctrl.pause()
   } catch (error) {
@@ -730,12 +812,6 @@ export async function openVideo(item: UnifiedVideoItem, options: OpenVideoOption
     currentItem: item,
     detail: null,
     manifest: null,
-    comments: [],
-    commentsLoading: true,
-    commentsSort: "top",
-    commentsCursor: null,
-    commentsLoadingMore: false,
-    repliesLoading: {},
     sponsorSegments: [],
     activeSponsorPrompt: null,
     skippedToast: null,
@@ -755,7 +831,16 @@ export async function openVideo(item: UnifiedVideoItem, options: OpenVideoOption
     settings,
   }
   sponsorConfig = sponsorConfigSignature(settings)
+  commentsState = {
+    comments: [],
+    loading: !item.isLive,
+    sort: "top",
+    cursor: null,
+    loadingMore: false,
+    repliesLoading: {},
+  }
   emitStore()
+  emitComments()
 
   if (item.provider === "yt" && item.isLive) {
     startLiveViewerRefresh(item)
@@ -806,22 +891,20 @@ export async function openVideo(item: UnifiedVideoItem, options: OpenVideoOption
     })
 
   if (!item.isLive) {
-    void getCommentPage(item.provider, item.rawId, { sort: storeState.commentsSort })
+    void getCommentPage(item.provider, item.rawId, { sort: commentsState.sort })
       .then((page: CommentPage) => {
         if (requestId !== openRequestSeq) return
-        storeState.comments = page.comments
-        storeState.commentsCursor = page.cursor
-        storeState.commentsLoading = false
-        emitStore()
+        commentsState.comments = page.comments
+        commentsState.cursor = page.cursor
+        commentsState.loading = false
+        emitComments()
       })
       .catch((error: unknown) => {
         if (requestId !== openRequestSeq) return
         reportError("player", "comments.load", error)
-        storeState.commentsLoading = false
-        emitStore()
+        commentsState.loading = false
+        emitComments()
       })
-  } else {
-    storeState.commentsLoading = false
   }
 
   if (settings.sponsorBlockEnabled) {
@@ -1265,6 +1348,7 @@ function applyOverlayVisibility(visible: boolean): void {
 }
 
 export function minimizeToMiniPlayer(): void {
+  saveCurrentHistory(true)
   if (storeState.isFullscreen) {
     setFullscreen(false)
   }
@@ -1282,6 +1366,7 @@ export function expandFromMiniPlayer(): void {
 }
 
 export async function closePlayer(): Promise<void> {
+  saveCurrentHistory(true)
   if (storeState.isFullscreen) {
     setFullscreen(false)
   }
@@ -1302,7 +1387,16 @@ export async function closePlayer(): Promise<void> {
   storeState.manifest = null
   storeState.activeSponsorPrompt = null
   storeState.status = "idle"
+  commentsState = {
+    comments: [],
+    loading: false,
+    sort: "top",
+    cursor: null,
+    loadingMore: false,
+    repliesLoading: {},
+  }
   emitStore()
+  emitComments()
 }
 
 export async function startPiP(): Promise<void> {
@@ -1347,69 +1441,69 @@ export async function playPrevious(): Promise<void> {
 export async function reloadComments(): Promise<void> {
   const item: UnifiedVideoItem | null = storeState.currentItem
   if (!item) return
-  const sort: CommentSort = storeState.commentsSort
-  storeState.commentsLoading = true
-  storeState.commentsCursor = null
-  emitStore()
+  const sort: CommentSort = commentsState.sort
+  commentsState.loading = true
+  commentsState.cursor = null
+  emitComments()
   try {
     const page: CommentPage = await getCommentPage(item.provider, item.rawId, { sort })
-    if (storeState.currentItem?.id !== item.id || storeState.commentsSort !== sort) return
-    storeState.comments = page.comments
-    storeState.commentsCursor = page.cursor
+    if (storeState.currentItem?.id !== item.id || commentsState.sort !== sort) return
+    commentsState.comments = page.comments
+    commentsState.cursor = page.cursor
   } catch (error) {
     reportError("player", "comments.reload", error)
   } finally {
     if (storeState.currentItem?.id === item.id) {
-      storeState.commentsLoading = false
-      emitStore()
+      commentsState.loading = false
+      emitComments()
     }
   }
 }
 
 export async function setCommentsSort(sort: CommentSort): Promise<void> {
-  if (storeState.commentsSort === sort) return
-  storeState.commentsSort = sort
+  if (commentsState.sort === sort) return
+  commentsState.sort = sort
   await reloadComments()
 }
 
 export async function loadMoreComments(): Promise<void> {
   const item: UnifiedVideoItem | null = storeState.currentItem
-  const cursor: string | null = storeState.commentsCursor
-  if (!item || !cursor || storeState.commentsLoading || storeState.commentsLoadingMore) return
+  const cursor: string | null = commentsState.cursor
+  if (!item || !cursor || commentsState.loading || commentsState.loadingMore) return
 
-  const sort: CommentSort = storeState.commentsSort
-  storeState.commentsLoadingMore = true
-  emitStore()
+  const sort: CommentSort = commentsState.sort
+  commentsState.loadingMore = true
+  emitComments()
   try {
     const page: CommentPage = await getCommentPage(item.provider, item.rawId, { sort, cursor })
-    if (storeState.currentItem?.id !== item.id || storeState.commentsSort !== sort) return
-    const seen: Set<string> = new Set(storeState.comments.map((comment: CommentItem): string => comment.id))
+    if (storeState.currentItem?.id !== item.id || commentsState.sort !== sort) return
+    const seen: Set<string> = new Set(commentsState.comments.map((comment: CommentItem): string => comment.id))
     const fresh: CommentItem[] = page.comments.filter((comment: CommentItem): boolean => !seen.has(comment.id))
-    storeState.comments = fresh.length > 0 ? [...storeState.comments, ...fresh] : storeState.comments
-    storeState.commentsCursor = page.cursor
+    commentsState.comments = fresh.length > 0 ? [...commentsState.comments, ...fresh] : commentsState.comments
+    commentsState.cursor = page.cursor
   } catch (error) {
     reportError("player", "comments.more", error)
   } finally {
-    storeState.commentsLoadingMore = false
-    emitStore()
+    commentsState.loadingMore = false
+    emitComments()
   }
 }
 
 export async function loadCommentReplies(commentId: string): Promise<void> {
   const item: UnifiedVideoItem | null = storeState.currentItem
-  const target: CommentItem | undefined = storeState.comments.find(
+  const target: CommentItem | undefined = commentsState.comments.find(
     (comment: CommentItem): boolean => comment.id === commentId,
   )
   const cursor: string | null | undefined = target?.replyCursor
   if (!item || !target || !cursor) return
-  if (storeState.repliesLoading[commentId] === true) return
+  if (commentsState.repliesLoading[commentId] === true) return
 
-  storeState.repliesLoading = { ...storeState.repliesLoading, [commentId]: true }
-  emitStore()
+  commentsState.repliesLoading = { ...commentsState.repliesLoading, [commentId]: true }
+  emitComments()
   try {
     const page: CommentPage = await getCommentReplies(item.provider, item.rawId, commentId, cursor)
     if (storeState.currentItem?.id !== item.id) return
-    storeState.comments = storeState.comments.map((comment: CommentItem): CommentItem => {
+    commentsState.comments = commentsState.comments.map((comment: CommentItem): CommentItem => {
       if (comment.id !== commentId) return comment
       const existing: CommentItem[] = comment.replies ?? []
       const seen: Set<string> = new Set(existing.map((reply: CommentItem): string => reply.id))
@@ -1419,7 +1513,7 @@ export async function loadCommentReplies(commentId: string): Promise<void> {
   } catch (error) {
     reportError("player", "comments.replies", error)
   } finally {
-    storeState.repliesLoading = { ...storeState.repliesLoading, [commentId]: false }
-    emitStore()
+    commentsState.repliesLoading = { ...commentsState.repliesLoading, [commentId]: false }
+    emitComments()
   }
 }

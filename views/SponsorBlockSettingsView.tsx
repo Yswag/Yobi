@@ -31,7 +31,7 @@ export function SponsorBlockSettingsView(): VirtualNode {
   useEffect(() => {
     return subscribeStorageChanges(() => {
       setSettings(getSettings())
-    })
+    }, ["settings"])
   }, [])
 
   const patchSettings = (patch: Partial<PlayerSettings>): void => {

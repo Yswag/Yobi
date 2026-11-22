@@ -216,7 +216,7 @@ export function SettingsView(props: SettingsViewProps): VirtualNode {
   useEffect(() => {
     return subscribeStorageChanges(() => {
       refreshAll()
-    })
+    }, ["settings", "subscriptions", "history", "watchLater", "playlists"])
   }, [])
 
   const showToast = (msg: string): void => {

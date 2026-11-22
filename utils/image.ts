@@ -46,3 +46,17 @@ export function avatarUrl(url: string | undefined, sizePoints: number): string |
   const sized: string = youtubeAvatar(url, pixels)
   return sized === url ? biliImage(url, pixels, 1) : sized
 }
+
+function biliEmoji(url: string, pixels: number): string {
+  if (!/^https?:\/\/[^/]*(hdslb|bilivideo)\.com\//.test(url)) return url
+  const base: string = url.split("@")[0]
+  if (/\.gif(\?|$)/i.test(base)) return url
+  return `${base}@${pixels}w.webp`
+}
+
+export function emojiImageUrl(url: string | undefined, sizePoints: number): string | undefined {
+  if (!url) return url
+  const pixels: number = Math.min(128, Math.max(48, Math.round(sizePoints * 3)))
+  const sized: string = youtubeAvatar(url, pixels)
+  return sized === url ? biliEmoji(url, pixels) : sized
+}

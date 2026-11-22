@@ -119,7 +119,7 @@ export function ChannelView(props: ChannelViewProps): VirtualNode {
     setSubscribed(isSubscribed(subscriptionId))
     return subscribeStorageChanges(() => {
       setSubscribed(isSubscribed(subscriptionId))
-    })
+    }, ["subscriptions"])
   }, [subscriptionId])
 
   const currentName: string = detail?.name || props.initialName || props.channelId

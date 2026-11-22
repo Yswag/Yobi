@@ -188,7 +188,7 @@ export function HomeView(props: HomeViewProps): VirtualNode {
       setContinueEntries(next)
     }
     sync()
-    return subscribeStorageChanges(sync)
+    return subscribeStorageChanges(sync, ["history"])
   }, [])
 
   const handleSelect = (item: UnifiedVideoItem): void => {

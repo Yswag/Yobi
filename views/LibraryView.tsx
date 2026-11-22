@@ -16,6 +16,7 @@ import type { VirtualNode } from "scripting"
 import type { CustomPlaylist, Provider, UnifiedVideoItem, WatchHistoryEntry } from "../types"
 import { VideoCard } from "../components/VideoCard"
 import type { CardAction } from "../components/VideoCard"
+import type { StorageTopic } from "../services"
 import {
   clearWatchHistory,
   createPlaylist,
@@ -169,15 +170,15 @@ export function LibraryView(props: LibraryViewProps): VirtualNode {
   const [query, setQuery] = useState<string>("")
   const [selectedPlaylistId, setSelectedPlaylistId] = useState<string | null>(null)
 
-  const refresh = (): void => {
-    setHistory(getWatchHistory())
-    setWatchLater(getWatchLater())
-    setPlaylists(getPlaylists())
+  const refresh = (topic?: StorageTopic): void => {
+    if (!topic || topic === "history") setHistory(getWatchHistory())
+    if (!topic || topic === "watchLater") setWatchLater(getWatchLater())
+    if (!topic || topic === "playlists") setPlaylists(getPlaylists())
   }
 
   useEffect(() => {
     refresh()
-    return subscribeStorageChanges(refresh)
+    return subscribeStorageChanges(refresh, ["history", "watchLater", "playlists"])
   }, [])
 
   const keyword: string = query.trim().toLowerCase()
