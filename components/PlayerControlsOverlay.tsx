@@ -52,6 +52,8 @@ export interface PlayerControlsOverlayProps {
   onOpenDanmakuSheet?: () => void
   onMinimizeDragChanged?: (dy: number, dx: number) => void
   onMinimizeDragEnded?: (dy: number, dx: number, predictedDy: number) => void
+  onFullscreenDragChanged?: (direction: "enter" | "exit", translationY: number) => void
+  onFullscreenDragEnded?: (direction: "enter" | "exit", translationY: number, predictedY: number) => void
 }
 
 const AUTO_HIDE_MS: number = 4000
@@ -281,6 +283,7 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
   const [tapHint, setTapHint] = useState<"left" | "right" | null>(null)
 
   const lastTapAtRef = useRef<number | null>(null)
+  const dragModeRef = useRef<"none" | "minimize" | "enterFullscreen" | "exitFullscreen" | "ignore">("none")
   const hideTimerRef = useRef<number | null>(null)
   const hintTimerRef = useRef<number | null>(null)
   const statusRef = useRef<string>(store.status)
@@ -378,18 +381,53 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
     else showControls()
   }
 
+  function resolveDragMode(d: DragGestureDetails): "none" | "minimize" | "enterFullscreen" | "exitFullscreen" | "ignore" {
+    const dy: number = d.translation.height
+    const dx: number = d.translation.width
+    const absY: number = Math.abs(dy)
+    const absX: number = Math.abs(dx)
+    if (store.isFullscreen) {
+      const topGuard: number = portraitFullscreen ? 44 : 28
+      if (d.startLocation.y < topGuard) return "ignore"
+      if (absY < 8 && absX < 8) return "none"
+      return dy > 0 && absY > absX * 1.15 ? "exitFullscreen" : "ignore"
+    }
+    if (absY < 8 && absX < 8) return "none"
+    if (absY <= absX * 1.15) return "ignore"
+    return dy > 0 ? "minimize" : "enterFullscreen"
+  }
+
   function handleDragChanged(d: DragGestureDetails): void {
-    if (store.isFullscreen) return
-    props.onMinimizeDragChanged?.(d.translation.height, d.translation.width)
+    if (dragModeRef.current === "none") {
+      dragModeRef.current = resolveDragMode(d)
+    }
+    const mode = dragModeRef.current
+    if (mode === "minimize") {
+      props.onMinimizeDragChanged?.(d.translation.height, d.translation.width)
+    } else if (mode === "enterFullscreen") {
+      props.onFullscreenDragChanged?.("enter", d.translation.height)
+    } else if (mode === "exitFullscreen") {
+      props.onFullscreenDragChanged?.("exit", d.translation.height)
+    }
   }
 
   function handleDragEnded(d: DragGestureDetails): void {
-    if (store.isFullscreen) return
-    props.onMinimizeDragEnded?.(
-      d.translation.height,
-      d.translation.width,
-      d.predictedEndTranslation.height,
-    )
+    let mode = dragModeRef.current
+    dragModeRef.current = "none"
+    if (mode === "none") {
+      mode = resolveDragMode(d)
+    }
+    if (mode === "minimize") {
+      props.onMinimizeDragEnded?.(
+        d.translation.height,
+        d.translation.width,
+        d.predictedEndTranslation.height,
+      )
+    } else if (mode === "enterFullscreen") {
+      props.onFullscreenDragEnded?.("enter", d.translation.height, d.predictedEndTranslation.height)
+    } else if (mode === "exitFullscreen") {
+      props.onFullscreenDragEnded?.("exit", d.translation.height, d.predictedEndTranslation.height)
+    }
   }
 
   function handleBack(): void {

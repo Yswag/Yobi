@@ -18,6 +18,7 @@ import {
   expandFromMiniPlayer,
   getPlayerController,
   minimizeToMiniPlayer,
+  setFullscreen,
   usePlayerStore,
 } from "../state/playerStore"
 import { MINI_BUTTON_SIZE, MiniPlayerBar } from "./MiniPlayerBar"
@@ -39,6 +40,12 @@ const FADE_OUT_SECONDS: number = motion.duration.exit
 const FADE_IN_SECONDS: number = motion.duration.enter
 const PLAYER_DRAG_SPACE: string = "playerRoot"
 const MINIMIZE_DRAG_RATIO: number = 0.45
+const ENTER_FULLSCREEN_MIN_DY: number = 48
+const ENTER_FULLSCREEN_PREDICTED_DY: number = 90
+const ENTER_FULLSCREEN_FLICK_DY: number = 24
+const EXIT_FULLSCREEN_MIN_DY: number = 56
+const EXIT_FULLSCREEN_PREDICTED_DY: number = 110
+const EXIT_FULLSCREEN_FLICK_DY: number = 28
 
 function clamp01(value: number): number {
   return Math.max(0, Math.min(1, value))
@@ -92,7 +99,9 @@ export function PlayerHost(props: {
   const [showQualitySheet, setShowQualitySheet] = useState<boolean>(false)
   const [showDanmakuSheet, setShowDanmakuSheet] = useState<boolean>(false)
   const [dragTranslation, setDragTranslation] = useState<number | null>(null)
+  const [fullscreenGesture, setFullscreenGesture] = useState<{ direction: "enter" | "exit"; distance: number } | null>(null)
   const dragTravelRef = useRef<number>(1)
+  const thresholdCrossedRef = useRef<boolean>(false)
 
   const onOpenChannelRef = useRef(props.onOpenChannel)
   onOpenChannelRef.current = props.onOpenChannel
@@ -114,6 +123,36 @@ export function PlayerHost(props: {
     if (projected > travel * MINIMIZE_DRAG_RATIO && dy > Math.abs(dx)) minimizeToMiniPlayer()
     setDragTranslation(null)
   }, [])
+  const handleFullscreenDragChanged = useCallback((direction: "enter" | "exit", translationY: number): void => {
+    const distance: number = Math.max(0, direction === "enter" ? -translationY : translationY)
+    const threshold: number = direction === "enter" ? ENTER_FULLSCREEN_MIN_DY : EXIT_FULLSCREEN_MIN_DY
+    const crossed: boolean = distance >= threshold
+    if (crossed !== thresholdCrossedRef.current) {
+      thresholdCrossedRef.current = crossed
+      if (crossed) HapticFeedback.lightImpact()
+    }
+    setFullscreenGesture({ direction, distance })
+  }, [])
+  const handleFullscreenDragEnded = useCallback(
+    (direction: "enter" | "exit", translationY: number, predictedY: number): void => {
+      thresholdCrossedRef.current = false
+      if (direction === "enter") {
+        const dy: number = -translationY
+        const pred: number = -predictedY
+        if (dy >= ENTER_FULLSCREEN_MIN_DY || (pred >= ENTER_FULLSCREEN_PREDICTED_DY && dy >= ENTER_FULLSCREEN_FLICK_DY)) {
+          setFullscreen(true)
+        }
+      } else {
+        const dy: number = translationY
+        const pred: number = predictedY
+        if (dy >= EXIT_FULLSCREEN_MIN_DY || (pred >= EXIT_FULLSCREEN_PREDICTED_DY && dy >= EXIT_FULLSCREEN_FLICK_DY)) {
+          setFullscreen(false)
+        }
+      }
+      setFullscreenGesture(null)
+    },
+    [],
+  )
 
   const lastItemRef = useRef<UnifiedVideoItem | null>(null)
   if (store.currentItem) lastItemRef.current = store.currentItem
@@ -191,10 +230,29 @@ export function PlayerHost(props: {
     : null
   const geometry: CardGeometry = drag === null ? settled : blendGeometry(expanded, mini, drag)
   const morph: number = drag !== null ? drag : isMini ? 1 : 0
+  const enterZooming: boolean = isExpanded && !fullscreen && fullscreenGesture?.direction === "enter"
+  const exitShifting: boolean = fullscreen && fullscreenGesture?.direction === "exit"
+  const enterProgress: number = enterZooming && fullscreenGesture ? clamp01(fullscreenGesture.distance / 120) : 0
+  const exitProgress: number = exitShifting && fullscreenGesture ? clamp01(fullscreenGesture.distance / 120) : 0
   const watchOpacity: number = isExpanded ? clamp01(1 - morph / 0.3) : 0
-  const controlsOpacity: number = 1 - clamp01(morph / 0.3)
+  const watchZoomOpacity: number = 1 - enterProgress * 0.55
+  const controlsOpacity: number = (1 - clamp01(morph / 0.3)) * (1 - clamp01(exitProgress / 0.35))
   const surfaceOpacity: number = 1 - clamp01((morph - 0.35) / 0.65)
   const miniBarOpacity: number = clamp01((morph - 0.5) / 0.5)
+  const videoScale: number = enterZooming && fullscreenGesture
+    ? 1 + (fullscreenGesture.distance / (fullscreenGesture.distance + 120)) * 0.14
+    : exitShifting
+      ? 1 - exitProgress * 0.06
+      : 1
+  const videoCornerRadius: number = exitShifting ? exitProgress * 16 : geometry.videoRadius
+  const videoOffsetY: number = exitShifting && fullscreenGesture
+    ? Math.min(
+        140,
+        fullscreenGesture.distance <= 60
+          ? fullscreenGesture.distance * 0.85
+          : 51 + (fullscreenGesture.distance - 60) * 0.45,
+      )
+    : 0
   const watchNode: VirtualNode = useMemo(
     () => (
       <WatchView
@@ -274,11 +332,18 @@ export function PlayerHost(props: {
               spacing={0}
               padding={{ leading: geometry.videoInset }}
               frame={{ width: geometry.width, height: geometry.rowHeight, alignment: "leading" }}
+              zIndex={enterZooming ? 1 : 0}
             >
               <ZStack
                 frame={{ width: geometry.videoWidth, height: geometry.videoHeight }}
                 background="black"
-                clipShape={{ type: "rect", cornerRadius: geometry.videoRadius, style: "continuous" }}
+                clipShape={{ type: "rect", cornerRadius: videoCornerRadius, style: "continuous" }}
+                scaleEffect={{ x: videoScale, y: videoScale, anchor: enterZooming ? "top" : "center" }}
+                offset={{ x: 0, y: videoOffsetY }}
+                animation={{
+                  animation: motion.morph,
+                  value: fullscreenGesture ? "drag" : "settled",
+                }}
                 sheet={{
                   isPresented: showDanmakuSheet,
                   onChanged: setShowDanmakuSheet,
@@ -313,6 +378,8 @@ export function PlayerHost(props: {
                       onOpenDanmakuSheet={() => setShowDanmakuSheet(true)}
                       onMinimizeDragChanged={handleMinimizeDragChanged}
                       onMinimizeDragEnded={handleMinimizeDragEnded}
+                      onFullscreenDragChanged={handleFullscreenDragChanged}
+                      onFullscreenDragEnded={handleFullscreenDragEnded}
                     />
                   </ZStack>
                 ) : (
@@ -357,7 +424,13 @@ export function PlayerHost(props: {
                   opacity={watchOpacity}
                   animation={{ animation: isExpanded ? fadeInLate : fadeOut, value: isExpanded }}
                 >
-                  {watchNode}
+                  <ZStack
+                    frame={{ width: expanded.width, height: watchHeight, alignment: "top" }}
+                    opacity={watchZoomOpacity}
+                    animation={{ animation: motion.morph, value: enterZooming ? "drag" : "settled" }}
+                  >
+                    {watchNode}
+                  </ZStack>
                 </ZStack>
               </ZStack>
             )}
