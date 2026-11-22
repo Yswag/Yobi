@@ -1,5 +1,16 @@
 export type Provider = "yt" | "bili"
 
+export type ProviderFilter = "all" | Provider
+
+export type LayoutMode = "grid" | "row"
+
+export type OpenChannel = (
+  provider: Provider,
+  authorId: string,
+  authorName: string,
+  avatarUrl?: string,
+) => void
+
 export type YoutubeStreamPreference = "auto" | "hls" | "sabr"
 
 export interface UnifiedVideoItem {

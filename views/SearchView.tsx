@@ -1,137 +1,48 @@
 import {
-  Button,
   HStack,
-  Image,
   LazyVStack,
-  Menu,
-  ProgressView,
   ScrollView,
-  Text,
   VStack,
   useEffect,
   useObservable,
+  useRef,
   useState,
 } from "scripting"
 import type { VirtualNode } from "scripting"
-import type { Provider, UnifiedVideoItem } from "../types"
+import type { LayoutMode, OpenChannel, UnifiedVideoItem } from "../types/index"
 import { VideoCard, VideoCardSkeleton } from "../components/VideoCard"
+import {
+  DirectLinkCard,
+  QueryRow,
+  SortMenu,
+  sortResults,
+  type SearchSortBy,
+} from "../components/search/SearchParts"
 import {
   addSearchHistory,
   clearSearchHistory,
-  detectInputLink,
   getSavedPosition,
   getSearchHistory,
   getSearchSuggestions,
-  getVideoDetail,
-  resolveBiliShortUrl,
   searchVideos,
   subscribeStorageChanges,
-} from "../services"
-import type { FeedFilter } from "../services"
-import { providerFullName } from "../utils/format"
+} from "../services/index"
+import type { FeedFilter } from "../services/index"
+import { detectDirectLink, openDirectLinkTarget } from "../actions/index"
+import type { DirectLinkTarget } from "../actions/index"
 import { openVideo } from "../state/playerStore"
 import {
   ChipBar,
   EmptyState,
   LayoutToggle,
   PROVIDER_FILTERS,
-  ProviderTag,
   SectionHeader,
 } from "../ui/primitives"
-import { palette, radius, space, type } from "../ui/theme"
+import { space } from "../ui/theme"
 
 export interface SearchViewProps {
   initialQuery?: string
-  onOpenChannel?: (provider: Provider, authorId: string, authorName: string, avatarUrl?: string) => void
-}
-
-type SortBy = "default" | "views" | "recent"
-type ResultLayout = "row" | "grid"
-
-const SORT_OPTIONS: { label: string; value: SortBy; icon: string }[] = [
-  { label: "綜合", value: "default", icon: "sparkles" },
-  { label: "觀看數最多", value: "views", icon: "eye" },
-  { label: "最新發布", value: "recent", icon: "clock" },
-]
-
-interface DirectLinkTarget {
-  provider: Provider
-  rawId: string
-  label: string
-}
-
-let searchSeq: number = 0
-
-function detectDirectLink(input: string): DirectLinkTarget | null {
-  const trimmed: string = input.trim()
-  if (!trimmed) return null
-
-  if (/b23\.tv\/[0-9A-Za-z]+/i.test(trimmed)) {
-    return { provider: "bili", rawId: trimmed, label: "BiliBili 短連結" }
-  }
-
-  const detected: { provider: Provider; rawId: string } | null = detectInputLink(trimmed)
-  if (!detected) return null
-  return {
-    provider: detected.provider,
-    rawId: detected.rawId,
-    label: `${providerFullName(detected.provider)} · ${detected.rawId}`,
-  }
-}
-
-function sortResults(items: UnifiedVideoItem[], sortBy: SortBy): UnifiedVideoItem[] {
-  if (sortBy === "default") return items
-  const list: UnifiedVideoItem[] = items.slice()
-  if (sortBy === "views") {
-    list.sort((a: UnifiedVideoItem, b: UnifiedVideoItem): number => (b.viewCount ?? 0) - (a.viewCount ?? 0))
-  } else {
-    list.sort((a: UnifiedVideoItem, b: UnifiedVideoItem): number => (b.publishedAt ?? 0) - (a.publishedAt ?? 0))
-  }
-  return list
-}
-
-function QueryRow(props: { icon: string; text: string; onTap: () => void }): VirtualNode {
-  return (
-    <HStack
-      spacing={14}
-      padding={{ horizontal: space.page, vertical: 12 }}
-      frame={{ maxWidth: "infinity" }}
-      contentShape="rect"
-      onTapGesture={props.onTap}
-    >
-      <Image systemName={props.icon} font={15} foregroundStyle="tertiaryLabel" frame={{ width: 20 }} />
-      <Text font={16} foregroundStyle="label" lineLimit={1} frame={{ maxWidth: "infinity", alignment: "leading" }}>
-        {props.text}
-      </Text>
-      <Image systemName="arrow.up.left" font={13} foregroundStyle="tertiaryLabel" />
-    </HStack>
-  )
-}
-
-function SortMenu(props: { value: SortBy; onChange: (value: SortBy) => void }): VirtualNode {
-  return (
-    <Menu
-      label={
-        <HStack spacing={0} frame={{ width: 34, height: 34 }} contentShape="rect">
-          <Image
-            systemName="arrow.up.arrow.down"
-            font={15}
-            fontWeight="semibold"
-            foregroundStyle={props.value === "default" ? "secondaryLabel" : palette.brand}
-          />
-        </HStack>
-      }
-    >
-      {SORT_OPTIONS.map(option => (
-        <Button
-          key={`sort-${option.value}`}
-          title={option.label}
-          systemImage={props.value === option.value ? "checkmark" : option.icon}
-          action={() => props.onChange(option.value)}
-        />
-      ))}
-    </Menu>
-  )
+  onOpenChannel?: OpenChannel
 }
 
 export function SearchView(props: SearchViewProps): VirtualNode {
@@ -141,27 +52,28 @@ export function SearchView(props: SearchViewProps): VirtualNode {
   const [results, setResults] = useState<UnifiedVideoItem[]>([])
   const [loading, setLoading] = useState<boolean>(false)
   const [filter, setFilter] = useState<FeedFilter>("all")
-  const [sortBy, setSortBy] = useState<SortBy>("default")
-  const [layout, setLayout] = useState<ResultLayout>("row")
+  const [sortBy, setSortBy] = useState<SearchSortBy>("default")
+  const [layout, setLayout] = useState<LayoutMode>("row")
   const [suggestions, setSuggestions] = useState<string[]>([])
   const [history, setHistory] = useState<string[]>(getSearchHistory())
   const [linkLoading, setLinkLoading] = useState<boolean>(false)
   const [linkError, setLinkError] = useState<string | null>(null)
   const searchPresented = useObservable<boolean>(false)
+  const searchSeqRef = useRef<number>(0)
 
   const loadResults = async (keyword: string, nextFilter: FeedFilter): Promise<void> => {
-    const seq: number = ++searchSeq
+    const seq: number = ++searchSeqRef.current
     setLoading(true)
     setResults([])
     try {
       const found: UnifiedVideoItem[] = await searchVideos(keyword, nextFilter)
-      if (seq !== searchSeq) return
+      if (seq !== searchSeqRef.current) return
       setResults(found)
     } catch {
-      if (seq !== searchSeq) return
+      if (seq !== searchSeqRef.current) return
       setResults([])
     } finally {
-      if (seq === searchSeq) setLoading(false)
+      if (seq === searchSeqRef.current) setLoading(false)
     }
   }
 
@@ -184,7 +96,7 @@ export function SearchView(props: SearchViewProps): VirtualNode {
     setSuggestions([])
     setLoading(false)
     setLinkError(null)
-    searchSeq++
+    searchSeqRef.current++
   }
 
   const handleQueryChange = (value: string): void => {
@@ -211,15 +123,7 @@ export function SearchView(props: SearchViewProps): VirtualNode {
     setLinkLoading(true)
     setLinkError(null)
     try {
-      let rawId: string = target.rawId
-      if (/b23\.tv/i.test(rawId)) {
-        const ids: { bvid?: string; aid?: number } | null = await resolveBiliShortUrl(rawId)
-        if (!ids) throw new Error("無法展開短連結")
-        rawId = ids.bvid ? ids.bvid : `av${ids.aid}`
-      }
-      const detail: UnifiedVideoItem = await getVideoDetail(target.provider, rawId)
-      addSearchHistory(detail.rawId)
-      void openVideo(detail, { queue: [detail] })
+      await openDirectLinkTarget(target, { recordHistory: true })
     } catch {
       setLinkError("無法解析這個連結")
     } finally {
@@ -278,39 +182,6 @@ export function SearchView(props: SearchViewProps): VirtualNode {
 
   const directLink: DirectLinkTarget | null = detectDirectLink(query)
   const sortedResults: UnifiedVideoItem[] = sortResults(results, sortBy)
-
-  const directCard: VirtualNode | null = directLink
-    ? (
-      <HStack
-        spacing={12}
-        padding={14}
-        frame={{ maxWidth: "infinity" }}
-        background={{ style: "secondarySystemFill", shape: { type: "rect", cornerRadius: radius.lg, style: "continuous" } }}
-      >
-        <VStack alignment="leading" spacing={6} frame={{ maxWidth: "infinity", alignment: "leading" }}>
-          <ProviderTag provider={directLink.provider} />
-          <Text font={type.cardTitle} fontWeight="semibold" foregroundStyle="label" lineLimit={1}>
-            {directLink.label}
-          </Text>
-          <Text font={type.meta} foregroundStyle={linkError ? palette.danger : "secondaryLabel"} lineLimit={1}>
-            {linkError ?? "直接解析播放"}
-          </Text>
-        </VStack>
-        {linkLoading ? (
-          <ProgressView controlSize="small" frame={{ width: 44, height: 44 }} />
-        ) : (
-          <Button action={() => void handleDirectPlay(directLink)} buttonStyle="plain">
-            <VStack
-              frame={{ width: 44, height: 44 }}
-              background={{ style: palette.brand, shape: { type: "rect", cornerRadius: 22 } }}
-            >
-              <Image systemName="play.fill" font={17} foregroundStyle="white" />
-            </VStack>
-          </Button>
-        )}
-      </HStack>
-    )
-    : null
 
   let content: VirtualNode
   if (hasSearched) {
@@ -405,9 +276,14 @@ export function SearchView(props: SearchViewProps): VirtualNode {
       onSubmit={{ triggers: "search", action: () => runSearch(query) }}
     >
       <VStack spacing={16} frame={{ maxWidth: "infinity" }} padding={{ top: 8, bottom: 16 }}>
-        {directCard ? (
+        {directLink ? (
           <VStack padding={{ horizontal: space.page }} frame={{ maxWidth: "infinity" }}>
-            {directCard}
+            <DirectLinkCard
+              target={directLink}
+              loading={linkLoading}
+              error={linkError}
+              onPlay={() => void handleDirectPlay(directLink)}
+            />
           </VStack>
         ) : null}
         {content}

@@ -1,15 +1,12 @@
 import { Button, HStack, Image, Menu, Text, VStack } from "scripting"
 import type { ScrollVisibilityChangeOptions, VirtualNode } from "scripting"
-import type { Provider, UnifiedVideoItem } from "../types"
-import {
-  addVideoToPlaylist,
-  createPlaylist,
-  getPlaylists,
-  toggleWatchLater,
-} from "../services"
-import { formatCount, getVideoShareUrl } from "../utils/format"
+import type { OpenChannel, UnifiedVideoItem } from "../types/index"
+import { addToPlaylistFlow, copyVideoLink, toggleWatchLaterAction } from "../actions/index"
+import { formatCount } from "../utils/format"
 import { Avatar, Skeleton, Thumbnail } from "../ui/primitives"
 import { pageContentWidth, radius, space, thumbHeight, type } from "../ui/theme"
+
+export { addToPlaylistFlow } from "../actions/index"
 
 export interface CardAction {
   label: string
@@ -26,37 +23,10 @@ export interface VideoCardProps {
   actions?: CardAction[]
   scrollVisibility?: ScrollVisibilityChangeOptions
   onSelect: (item: UnifiedVideoItem) => void
-  onOpenChannel?: (provider: Provider, authorId: string, authorName: string, avatarUrl?: string) => void
+  onOpenChannel?: OpenChannel
 }
 
 const ROW_THUMB_WIDTH: number = 164
-
-export async function addToPlaylistFlow(item: UnifiedVideoItem): Promise<void> {
-  const playlists = getPlaylists()
-  const labels: string[] = playlists.map(playlist => playlist.name)
-  labels.push("＋ 新增播放清單")
-
-  const index: number | null | undefined = await Dialog.actionSheet({
-    title: "加入播放清單",
-    actions: labels.map((label: string) => ({ label })),
-  })
-  if (typeof index !== "number") return
-
-  if (index < playlists.length) {
-    addVideoToPlaylist(playlists[index].id, item)
-    return
-  }
-
-  const name: string | null = await Dialog.prompt({
-    title: "新增播放清單",
-    message: "輸入清單名稱",
-    confirmLabel: "建立",
-  })
-  const trimmed: string = (name ?? "").trim()
-  if (!trimmed) return
-  const created = createPlaylist(trimmed)
-  addVideoToPlaylist(created.id, item)
-}
 
 function watchedRatio(item: UnifiedVideoItem, progressSeconds?: number): number {
   if (!progressSeconds || progressSeconds <= 0 || item.duration <= 0) return 0
@@ -76,7 +46,7 @@ function cardMenu(item: UnifiedVideoItem, actions?: CardAction[]): VirtualNode {
         title="加入稍後觀看"
         systemImage="bookmark"
         action={() => {
-          toggleWatchLater(item)
+          toggleWatchLaterAction(item)
         }}
       />
       <Button
@@ -90,7 +60,7 @@ function cardMenu(item: UnifiedVideoItem, actions?: CardAction[]): VirtualNode {
         title="複製連結"
         systemImage="link"
         action={() => {
-          void Pasteboard.setString(getVideoShareUrl(item))
+          void copyVideoLink(item)
         }}
       />
       {(actions ?? []).map((action: CardAction) => (

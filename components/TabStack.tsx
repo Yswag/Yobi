@@ -1,18 +1,19 @@
 import { Group, NavigationDestination, NavigationStack } from "scripting"
 import type { VirtualNode } from "scripting"
-import type { Provider } from "../types"
-import { ChannelView } from "../views/ChannelView"
-import { PlaybackSettingsView } from "../views/PlaybackSettingsView"
-import { SettingsView } from "../views/SettingsView"
-import { SponsorBlockSettingsView } from "../views/SponsorBlockSettingsView"
+import type { OpenChannel, Provider } from "../types/index"
 
-export type OpenChannel = (provider: Provider, authorId: string, authorName: string, avatarUrl?: string) => void
+export type { OpenChannel }
 
 export interface ChannelTarget {
   provider: Provider
   channelId: string
   initialName?: string
   initialAvatar?: string
+}
+
+export interface TabStackNav {
+  push: (route: string) => void
+  pop: () => void
 }
 
 export const SETTINGS_ROUTE: string = "settings"
@@ -24,50 +25,26 @@ export function channelRoute(target: ChannelTarget): string {
   return `${CHANNEL_ROUTE_PREFIX}${JSON.stringify(target)}`
 }
 
+export function parseChannelRoute(route: string): ChannelTarget | null {
+  if (!route.startsWith(CHANNEL_ROUTE_PREFIX)) return null
+  return JSON.parse(route.slice(CHANNEL_ROUTE_PREFIX.length)) as ChannelTarget
+}
+
 export function TabStack(props: {
   path: Observable<string[]>
-  onOpenChannel: OpenChannel
-  onExitApp: () => void
+  renderRoute: (route: string, nav: TabStackNav) => VirtualNode
   showsNavigationBar?: boolean
   bottomInset?: number
   children: VirtualNode
 }): VirtualNode {
-  const pop = (): void => {
-    props.path.setValue(props.path.value.slice(0, -1))
-  }
-
-  const push = (route: string): void => {
-    if (props.path.value[props.path.value.length - 1] === route) return
-    props.path.setValue([...props.path.value, route])
-  }
-
-  const renderRoute = (route: string): VirtualNode => {
-    if (route.startsWith(CHANNEL_ROUTE_PREFIX)) {
-      const target: ChannelTarget = JSON.parse(route.slice(CHANNEL_ROUTE_PREFIX.length))
-      return (
-        <ChannelView
-          provider={target.provider}
-          channelId={target.channelId}
-          initialName={target.initialName}
-          initialAvatar={target.initialAvatar}
-          onClose={pop}
-          onOpenChannel={props.onOpenChannel}
-        />
-      )
-    }
-    if (route === SPONSORBLOCK_ROUTE) {
-      return <SponsorBlockSettingsView />
-    }
-    if (route === PLAYBACK_ROUTE) {
-      return <PlaybackSettingsView />
-    }
-    return (
-      <SettingsView
-        onExitApp={props.onExitApp}
-        onOpenPlayback={() => push(PLAYBACK_ROUTE)}
-        onOpenSponsorBlock={() => push(SPONSORBLOCK_ROUTE)}
-      />
-    )
+  const nav: TabStackNav = {
+    pop: (): void => {
+      props.path.setValue(props.path.value.slice(0, -1))
+    },
+    push: (route: string): void => {
+      if (props.path.value[props.path.value.length - 1] === route) return
+      props.path.setValue([...props.path.value, route])
+    },
   }
 
   const bottomPadding = { bottom: props.bottomInset ?? 0 }
@@ -81,7 +58,7 @@ export function TabStack(props: {
           <NavigationDestination>
             {(route: string) => (
               <Group toolbarVisibility="automatic" safeAreaPadding={bottomPadding}>
-                {renderRoute(route)}
+                {props.renderRoute(route, nav)}
               </Group>
             )}
           </NavigationDestination>

@@ -1,28 +1,17 @@
 import {
   Button,
   Form,
-  HStack,
   Image,
   LabeledContent,
-  Menu,
-  Picker,
-  Script,
   Section,
-  Spacer,
+  Script,
   Text,
-  Toggle,
-  VStack,
   useEffect,
   useState,
 } from "scripting"
-import type { Color, VirtualNode } from "scripting"
-import type {
-  PlayerSettings,
-  Provider,
-  ProviderAuthState,
-} from "../types/index"
+import type { VirtualNode } from "scripting"
+import type { PlayerSettings, Provider, ProviderAuthState } from "../types/index"
 import {
-  clearAuth,
   clearSearchHistory,
   clearWatchHistory,
   exportAllData,
@@ -33,155 +22,30 @@ import {
   getWatchHistory,
   getWatchLater,
   importAllData,
-  invalidateYoutubeAuthCache,
-  isAuthPersistenceAvailable,
-  loginWithWebView,
-  setAuthCookies,
   subscribeStorageChanges,
   updateSettings,
 } from "../services/index"
-import { providerBadgeLabel, providerFullName } from "../utils/format"
-import { palette, providerColor } from "../ui/theme"
-import { BACKEND_OPTIONS, QUALITY_OPTIONS, RATE_OPTIONS, labelOf, nearest } from "./PlaybackSettingsView"
+import type { AccountActionResult } from "../actions/index"
+import { runLogoutFlow, runPasteCookiesFlow, runWebLoginFlow } from "../actions/index"
+import {
+  BACKEND_OPTIONS,
+  QUALITY_OPTIONS,
+  RATE_OPTIONS,
+  nearestOption,
+  optionLabelOf,
+} from "../utils/playbackOptions"
+import { AccountRow, LinkRow } from "../components/settings/SettingsRows"
+import {
+  DanmakuBlockedWordsSection,
+  DanmakuSettingsSection,
+} from "../components/settings/DanmakuSettingsSection"
+import { palette } from "../ui/theme"
+import { useToast } from "../ui/useToast"
 
 export interface SettingsViewProps {
   onExitApp?: () => void
   onOpenPlayback?: () => void
   onOpenSponsorBlock?: () => void
-}
-
-interface Option<T> {
-  label: string
-  value: T
-}
-
-const AREA_OPTIONS: Option<number>[] = [
-  { label: "1/4 螢幕", value: 0.25 },
-  { label: "半螢幕", value: 0.5 },
-  { label: "3/4 螢幕", value: 0.75 },
-  { label: "全螢幕", value: 1.0 },
-]
-
-const OPACITY_OPTIONS: Option<number>[] = [
-  { label: "50%", value: 0.5 },
-  { label: "70%", value: 0.7 },
-  { label: "90%", value: 0.9 },
-  { label: "100%", value: 1.0 },
-]
-
-const SPEED_OPTIONS: Option<number>[] = [
-  { label: "慢", value: 0.75 },
-  { label: "標準", value: 1.0 },
-  { label: "快", value: 1.25 },
-  { label: "極快", value: 1.5 },
-]
-
-function parseCookieString(raw: string): Record<string, string> {
-  const result: Record<string, string> = {}
-  const parts: string[] = raw.split(/[;\n]+/)
-  for (const part of parts) {
-    const trimmed: string = part.trim()
-    if (!trimmed) continue
-    const eqIndex: number = trimmed.indexOf("=")
-    if (eqIndex <= 0) continue
-    const key: string = trimmed.slice(0, eqIndex).trim()
-    const value: string = trimmed.slice(eqIndex + 1).trim()
-    if (key && value) {
-      result[key] = value
-    }
-  }
-  return result
-}
-
-function LinkRow(props: {
-  icon: string
-  color: Color
-  title: string
-  summary: string
-  onTap?: () => void
-}): VirtualNode {
-  return (
-    <Button buttonStyle="plain" action={() => props.onTap?.()}>
-      <HStack spacing={12} frame={{ maxWidth: "infinity" }} contentShape="rect">
-        <VStack
-          frame={{ width: 32, height: 32 }}
-          background={{ style: props.color, shape: { type: "rect", cornerRadius: 8 } }}
-        >
-          <Image systemName={props.icon} font={15} foregroundStyle="white" />
-        </VStack>
-        <VStack alignment="leading" spacing={2}>
-          <Text font={16} foregroundStyle="label">{props.title}</Text>
-          <Text font={12} foregroundStyle="secondaryLabel">{props.summary}</Text>
-        </VStack>
-        <Spacer />
-        <Image systemName="chevron.right" font={13} fontWeight="semibold" foregroundStyle="tertiaryLabel" />
-      </HStack>
-    </Button>
-  )
-}
-
-function NumberPicker(props: {
-  title: string
-  options: Option<number>[]
-  value: number
-  onChange: (value: number) => void
-}): VirtualNode {
-  return (
-    <Picker
-      title={props.title}
-      value={nearest(props.options, props.value)}
-      onChanged={props.onChange}
-      pickerStyle="menu"
-    >
-      {props.options.map((option: Option<number>) => (
-        <Text key={`${props.title}-${option.value}`} tag={option.value}>{option.label}</Text>
-      ))}
-    </Picker>
-  )
-}
-
-function AccountRow(props: {
-  provider: Provider
-  state: ProviderAuthState
-  onWebLogin: () => void
-  onPasteCookies: () => void
-  onLogout: () => void
-}): VirtualNode {
-  const cookieCount: number = Object.keys(props.state.cookies).length
-  const statusText: string = props.state.loggedIn
-    ? props.state.username ? props.state.username : "已登入"
-    : cookieCount > 0 ? `已儲存 ${cookieCount} 個 Cookie` : "未登入"
-
-  return (
-    <Menu
-      label={
-        <HStack spacing={12} frame={{ maxWidth: "infinity" }} contentShape="rect">
-          <VStack
-            frame={{ width: 36, height: 36 }}
-            background={{ style: providerColor(props.provider), shape: { type: "rect", cornerRadius: 18 } }}
-          >
-            <Text font={11} fontWeight="heavy" foregroundStyle={palette.onMedia}>
-              {providerBadgeLabel(props.provider)}
-            </Text>
-          </VStack>
-          <VStack alignment="leading" spacing={2}>
-            <Text font={16} foregroundStyle="label">{providerFullName(props.provider)}</Text>
-            <Text font={13} foregroundStyle={props.state.loggedIn ? palette.success : "secondaryLabel"}>
-              {statusText}
-            </Text>
-          </VStack>
-          <Spacer />
-          <Image systemName="chevron.up.chevron.down" font={13} fontWeight="semibold" foregroundStyle="tertiaryLabel" />
-        </HStack>
-      }
-    >
-      <Button title="網頁登入" systemImage="globe" action={props.onWebLogin} />
-      <Button title="貼上 Cookie" systemImage="doc.on.clipboard" action={props.onPasteCookies} />
-      {cookieCount > 0 ? (
-        <Button title="清除 Cookie" systemImage="trash" role="destructive" action={props.onLogout} />
-      ) : null}
-    </Menu>
-  )
 }
 
 export function SettingsView(props: SettingsViewProps): VirtualNode {
@@ -199,7 +63,7 @@ export function SettingsView(props: SettingsViewProps): VirtualNode {
     watchLater: getWatchLater().length,
     playlists: getPlaylists().length,
   }))
-  const [statusMessage, setStatusMessage] = useState<string | null>(null)
+  const toast = useToast()
 
   const refreshAll = (): void => {
     setSettings(getSettings())
@@ -219,10 +83,6 @@ export function SettingsView(props: SettingsViewProps): VirtualNode {
     }, ["settings", "subscriptions", "history", "watchLater", "playlists"])
   }, [])
 
-  const showToast = (msg: string): void => {
-    setStatusMessage(msg)
-  }
-
   const patchSettings = (patch: Partial<PlayerSettings>): void => {
     const next: PlayerSettings = updateSettings(patch)
     setSettings(next)
@@ -237,95 +97,27 @@ export function SettingsView(props: SettingsViewProps): VirtualNode {
   }
 
   const handleWebLogin = async (provider: Provider): Promise<void> => {
-    try {
-      const next: ProviderAuthState = await loginWithWebView(provider)
-      setAuth(provider, next)
-      if (provider === "yt") invalidateYoutubeAuthCache()
-      const count: number = Object.keys(next.cookies).length
-      if (!isAuthPersistenceAvailable()) {
-        showToast("登入只在本次有效：無法寫入 Keychain")
-        return
-      }
-      showToast(
-        next.loggedIn
-          ? `${providerFullName(provider)} 登入成功${next.username ? `：${next.username}` : ""}`
-          : count > 0
-            ? `已更新 ${providerFullName(provider)} Cookie（${count} 項）`
-            : "登入未完成",
-      )
-    } catch (err: unknown) {
-      showToast(err instanceof Error ? err.message : "網頁登入失敗")
-    }
+    const result: AccountActionResult = await runWebLoginFlow(provider)
+    if (result.auth) setAuth(provider, result.auth)
+    if (result.message) toast.showToast(result.message)
   }
 
   const handlePasteCookies = async (provider: Provider): Promise<void> => {
-    const clipboard: string = (await Pasteboard.getString()) ?? ""
-    const input: string | null = await Dialog.prompt({
-      title: `貼上 ${providerFullName(provider)} Cookie`,
-      message:
-        provider === "bili"
-          ? "輸入包含 SESSDATA 與 bili_jct 的 Cookie 字串"
-          : "輸入包含 SAPISID / SID 的 Cookie 字串",
-      defaultValue: clipboard.includes("=") ? clipboard : "",
-      placeholder: "key1=value1; key2=value2",
-      confirmLabel: "儲存",
-    })
-    if (input === null) return
-    const parsed: Record<string, string> = parseCookieString(input)
-    if (Object.keys(parsed).length === 0) {
-      await Dialog.alert({
-        title: "格式無效",
-        message: "找不到有效的 key=value 項目。",
-      })
-      return
-    }
-    const state = setAuthCookies(provider, parsed)
-    setAuth(provider, state)
-    if (!isAuthPersistenceAvailable()) {
-      showToast("Cookie 只在本次有效：無法寫入 Keychain")
-      return
-    }
-    showToast(`已儲存 ${Object.keys(parsed).length} 個 ${providerFullName(provider)} Cookie`)
+    const result: AccountActionResult = await runPasteCookiesFlow(provider)
+    if (result.auth) setAuth(provider, result.auth)
+    if (result.message) toast.showToast(result.message)
   }
 
   const handleLogout = async (provider: Provider): Promise<void> => {
-    const confirmed: boolean = await Dialog.confirm({
-      title: `登出 ${providerFullName(provider)}`,
-      message: "確定要清除本機儲存的登入 Cookie 嗎？",
-      confirmLabel: "清除",
-    })
-    if (!confirmed) return
-    clearAuth(provider)
-    if (provider === "yt") invalidateYoutubeAuthCache()
-    setAuth(provider, getAuthState(provider))
-    showToast(`已清除 ${providerFullName(provider)} 登入狀態`)
-  }
-
-  const handleAddBlockedWord = async (): Promise<void> => {
-    const word: string | null = await Dialog.prompt({
-      title: "新增彈幕屏蔽詞",
-      message: "包含此關鍵字的彈幕將自動隱藏",
-      placeholder: "輸入關鍵字",
-      confirmLabel: "新增",
-    })
-    const trimmed: string = (word ?? "").trim()
-    if (!trimmed) return
-    if (settings.danmakuBlockedWords.includes(trimmed)) return
-    patchSettings({
-      danmakuBlockedWords: [...settings.danmakuBlockedWords, trimmed],
-    })
-  }
-
-  const handleRemoveBlockedWord = (word: string): void => {
-    patchSettings({
-      danmakuBlockedWords: settings.danmakuBlockedWords.filter((w: string): boolean => w !== word),
-    })
+    const result: AccountActionResult = await runLogoutFlow(provider)
+    if (result.auth) setAuth(provider, result.auth)
+    if (result.message) toast.showToast(result.message)
   }
 
   const handleExportClipboard = async (): Promise<void> => {
     const json: string = exportAllData()
     await Pasteboard.setString(json)
-    showToast("備份已複製到剪貼簿")
+    toast.showToast("備份已複製到剪貼簿")
   }
 
   const handleImportClipboard = async (): Promise<void> => {
@@ -341,11 +133,11 @@ export function SettingsView(props: SettingsViewProps): VirtualNode {
     const ok: boolean = importAllData(input)
     if (ok) {
       refreshAll()
-      showToast("備份已匯入")
+      toast.showToast("備份已匯入")
     } else {
       await Dialog.alert({
         title: "匯入失敗",
-        message: "JSON 格式不正確或內容損毀。",
+        message: "JSON 格式不正確或內容毀損。",
       })
     }
   }
@@ -358,7 +150,7 @@ export function SettingsView(props: SettingsViewProps): VirtualNode {
     })
     if (!ok) return
     clearWatchHistory()
-    showToast("已清空觀看紀錄")
+    toast.showToast("已清空觀看紀錄")
   }
 
   const handleExit = async (): Promise<void> => {
@@ -385,14 +177,7 @@ export function SettingsView(props: SettingsViewProps): VirtualNode {
           </Button>
         ) : undefined,
       }}
-      toast={{
-        message: statusMessage ?? "",
-        position: "bottom",
-        isPresented: statusMessage !== null,
-        onChanged: (presented: boolean) => {
-          if (!presented) setStatusMessage(null)
-        },
-      }}
+      toast={{ ...toast.toastProps, position: "bottom" }}
     >
       <Section
         header={<Text>帳號</Text>}
@@ -420,9 +205,9 @@ export function SettingsView(props: SettingsViewProps): VirtualNode {
           color="#FF9500"
           title="播放"
           summary={[
-            labelOf(BACKEND_OPTIONS, settings.videoBackend),
-            labelOf(QUALITY_OPTIONS, nearest(QUALITY_OPTIONS, settings.preferredQualityHeight)),
-            labelOf(RATE_OPTIONS, nearest(RATE_OPTIONS, settings.defaultPlaybackRate)),
+            optionLabelOf(BACKEND_OPTIONS, settings.videoBackend),
+            optionLabelOf(QUALITY_OPTIONS, nearestOption(QUALITY_OPTIONS, settings.preferredQualityHeight)),
+            optionLabelOf(RATE_OPTIONS, nearestOption(RATE_OPTIONS, settings.defaultPlaybackRate)),
           ].join("・")}
           onTap={props.onOpenPlayback}
         />
@@ -437,47 +222,9 @@ export function SettingsView(props: SettingsViewProps): VirtualNode {
         />
       </Section>
 
-      <Section title="BiliBili 彈幕">
-        <Toggle
-          title="預設開啟彈幕"
-          value={settings.danmakuEnabled}
-          onChanged={(value: boolean) => patchSettings({ danmakuEnabled: value })}
-        />
-        <NumberPicker
-          title="顯示區域"
-          options={AREA_OPTIONS}
-          value={settings.danmakuArea}
-          onChange={(value: number) => patchSettings({ danmakuArea: value })}
-        />
-        <NumberPicker
-          title="不透明度"
-          options={OPACITY_OPTIONS}
-          value={settings.danmakuOpacity}
-          onChange={(value: number) => patchSettings({ danmakuOpacity: value })}
-        />
-        <NumberPicker
-          title="速度"
-          options={SPEED_OPTIONS}
-          value={settings.danmakuSpeed}
-          onChange={(value: number) => patchSettings({ danmakuSpeed: value })}
-        />
-      </Section>
+      <DanmakuSettingsSection settings={settings} onPatch={patchSettings} />
 
-      <Section
-        header={<Text>{`屏蔽詞 ${settings.danmakuBlockedWords.length}`}</Text>}
-        footer={<Text>包含這些關鍵字的彈幕會自動隱藏。</Text>}
-      >
-        {settings.danmakuBlockedWords.map((word: string) => (
-          <Button key={`bw-${word}`} action={() => handleRemoveBlockedWord(word)}>
-            <HStack frame={{ maxWidth: "infinity" }} contentShape="rect">
-              <Text foregroundStyle="label">{word}</Text>
-              <Spacer />
-              <Image systemName="xmark.circle.fill" foregroundStyle="tertiaryLabel" />
-            </HStack>
-          </Button>
-        ))}
-        <Button title="新增屏蔽詞" systemImage="plus" action={() => void handleAddBlockedWord()} />
-      </Section>
+      <DanmakuBlockedWordsSection settings={settings} onPatch={patchSettings} />
 
       <Section title="本機資料">
         <LabeledContent title="訂閱頻道" value={`${stats.subscriptions}`} />
@@ -501,7 +248,7 @@ export function SettingsView(props: SettingsViewProps): VirtualNode {
           foregroundStyle={palette.danger}
           action={() => {
             clearSearchHistory()
-            showToast("已清空搜尋紀錄")
+            toast.showToast("已清空搜尋紀錄")
           }}
         />
       </Section>

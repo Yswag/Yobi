@@ -9,18 +9,17 @@ import {
   useState,
 } from "scripting"
 import type { VirtualNode } from "scripting"
-import type { Provider, UnifiedVideoItem, WatchHistoryEntry } from "../types"
+import type { LayoutMode, OpenChannel, UnifiedVideoItem, WatchHistoryEntry } from "../types/index"
+import { openLinkFromClipboardOrPrompt } from "../actions/index"
 import { VideoCard, VideoCardSkeleton } from "../components/VideoCard"
-import type { DetectedInputLink, FeedFilter } from "../services"
+import type { FeedFilter } from "../services/index"
 import {
-  detectInputLink,
   getHomeFeed,
   getSavedPosition,
   getWatchHistory,
-  resolveBiliShortUrl,
   subscribeStorageChanges,
-} from "../services"
-import { formatDuration, providerFullName } from "../utils/format"
+} from "../services/index"
+import { formatDuration } from "../utils/format"
 import { openVideo } from "../state/playerStore"
 import {
   ChipBar,
@@ -35,11 +34,9 @@ import {
 import { radius, space, type } from "../ui/theme"
 
 export interface HomeViewProps {
-  onOpenChannel?: (provider: Provider, authorId: string, authorName: string, avatarUrl?: string) => void
+  onOpenChannel?: OpenChannel
   onOpenSettings?: () => void
 }
-
-type LayoutMode = "grid" | "row"
 
 const CONTINUE_CARD_WIDTH: number = 220
 const CONTINUE_LIMIT: number = 8
@@ -96,59 +93,6 @@ function ContinueCard(props: { entry: WatchHistoryEntry; onSelect: () => void })
   )
 }
 
-async function detectAnyInput(input: string): Promise<DetectedInputLink | null> {
-  const trimmed: string = (input ?? "").trim()
-  if (!trimmed) return null
-
-  const direct: DetectedInputLink | null = detectInputLink(trimmed)
-  if (direct) return direct
-
-  if (trimmed.includes("b23.tv")) {
-    const resolved: { bvid?: string; aid?: number } | null = await resolveBiliShortUrl(trimmed)
-    if (resolved?.bvid) return detectInputLink(resolved.bvid)
-    if (resolved?.aid) return detectInputLink(`av${resolved.aid}`)
-  }
-  return null
-}
-
-async function openLinkFlow(): Promise<void> {
-  const clipboard: string = (await Pasteboard.getString()) ?? ""
-  let detected: DetectedInputLink | null = await detectAnyInput(clipboard)
-
-  if (!detected) {
-    const input: string | null = await Dialog.prompt({
-      title: "開啟連結",
-      message: "貼上 YouTube 連結或 BiliBili BV / AV 番號",
-      defaultValue: clipboard,
-      placeholder: "https://... 或 BV1xx411c7mD",
-      confirmLabel: "開啟",
-    })
-    if (typeof input !== "string" || !input.trim()) return
-    detected = await detectAnyInput(input)
-  }
-
-  if (!detected) {
-    await Dialog.alert({
-      title: "無法辨識連結",
-      message: "請輸入 YouTube 影片連結或 BiliBili BV / AV 番號。",
-    })
-    return
-  }
-
-  const link: DetectedInputLink = detected
-  const tempItem: UnifiedVideoItem = {
-    id: `${link.provider}:${link.rawId}`,
-    provider: link.provider,
-    rawId: link.rawId,
-    title: link.rawId,
-    thumbnailUrl: "",
-    duration: 0,
-    authorId: "",
-    authorName: providerFullName(link.provider),
-  }
-  void openVideo(tempItem)
-}
-
 export function HomeView(props: HomeViewProps): VirtualNode {
   const [filter, setFilter] = useState<FeedFilter>("all")
   const [layoutMode, setLayoutMode] = useState<LayoutMode>("grid")
@@ -195,16 +139,12 @@ export function HomeView(props: HomeViewProps): VirtualNode {
     void openVideo(item, { queue: items })
   }
 
-  const handleOpenChannel = (provider: Provider, authorId: string, authorName: string, avatarUrl?: string): void => {
-    props.onOpenChannel?.(provider, authorId, authorName, avatarUrl)
-  }
-
   const header: VirtualNode = (
     <PageHeader
       title="Yobi"
       trailing={
         <HStack spacing={10}>
-          <GlassIconButton icon="link" onTap={() => void openLinkFlow()} />
+          <GlassIconButton icon="link" onTap={() => void openLinkFromClipboardOrPrompt()} />
           {props.onOpenSettings ? (
             <GlassIconButton icon="gearshape" onTap={() => props.onOpenSettings?.()} />
           ) : null}
@@ -266,7 +206,7 @@ export function HomeView(props: HomeViewProps): VirtualNode {
             layout={layoutMode}
             progressSeconds={getSavedPosition(item.id, item.cid)}
             onSelect={handleSelect}
-            onOpenChannel={handleOpenChannel}
+            onOpenChannel={props.onOpenChannel}
           />
         ))}
       </LazyVStack>

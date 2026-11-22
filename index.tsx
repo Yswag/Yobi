@@ -18,13 +18,15 @@ import {
   startOrientationAutoFullscreen,
   usePlayerRootState,
 } from "./state/playerStore"
-import { MINI_PLAYER_RESERVED_HEIGHT, PlayerHost } from "./components/PlayerHost"
-import { channelRoute, SETTINGS_ROUTE, TabStack } from "./components/TabStack"
-import type { OpenChannel } from "./components/TabStack"
+import type { OpenChannel } from "./types/index"
+import { MINI_PLAYER_RESERVED_HEIGHT, PlayerHost, type PlayerWatchRenderProps } from "./components/PlayerHost"
+import { channelRoute, SETTINGS_ROUTE, TabStack, type TabStackNav } from "./components/TabStack"
+import { renderAppRoute } from "./views/AppRoutes"
 import { HomeView } from "./views/HomeView"
 import { LibraryView } from "./views/LibraryView"
 import { SearchView } from "./views/SearchView"
 import { SubscriptionsView } from "./views/SubscriptionsView"
+import { WatchView } from "./views/WatchView"
 import { palette } from "./ui/theme"
 
 const TAB = { home: 0, subscriptions: 1, library: 2, search: 3 }
@@ -67,71 +69,81 @@ function YobiRootView(): VirtualNode {
     })
   }, [dismiss])
 
+  const renderRoute = useCallback(
+    (route: string, nav: TabStackNav): VirtualNode =>
+      renderAppRoute(route, nav, { onOpenChannel: handleOpenChannel, onExitApp: handleExitApp }),
+    [handleOpenChannel, handleExitApp],
+  )
+
+  const renderWatch = useCallback(
+    (watchProps: PlayerWatchRenderProps): VirtualNode => <WatchView {...watchProps} />,
+    [],
+  )
+
   const bottomInset: number = root.hasItem ? MINI_PLAYER_RESERVED_HEIGHT : 0
 
   const playerOverlay = useMemo(
-    () => ({ alignment: "topLeading" as const, content: <PlayerHost onOpenChannel={handleOpenChannel} /> }),
-    [handleOpenChannel],
+    () => ({
+      alignment: "topLeading" as const,
+      content: <PlayerHost onOpenChannel={handleOpenChannel} renderWatch={renderWatch} />,
+    }),
+    [handleOpenChannel, renderWatch],
   )
 
   const homeTab = useMemo(
     () => (
       <TabStack
         path={paths[TAB.home]}
-        onOpenChannel={handleOpenChannel}
-        onExitApp={handleExitApp}
+        renderRoute={renderRoute}
         showsNavigationBar={false}
         bottomInset={bottomInset}
       >
         <HomeView onOpenChannel={handleOpenChannel} onOpenSettings={openSettings} />
       </TabStack>
     ),
-    [handleOpenChannel, handleExitApp, openSettings, bottomInset],
+    [renderRoute, handleOpenChannel, openSettings, bottomInset],
   )
 
   const subscriptionsTab = useMemo(
     () => (
       <TabStack
         path={paths[TAB.subscriptions]}
-        onOpenChannel={handleOpenChannel}
-        onExitApp={handleExitApp}
+        renderRoute={renderRoute}
         showsNavigationBar={false}
         bottomInset={bottomInset}
       >
         <SubscriptionsView onOpenChannel={handleOpenChannel} onOpenSearch={openSearch} />
       </TabStack>
     ),
-    [handleOpenChannel, handleExitApp, openSearch, bottomInset],
+    [renderRoute, handleOpenChannel, openSearch, bottomInset],
   )
 
   const libraryTab = useMemo(
     () => (
       <TabStack
         path={paths[TAB.library]}
-        onOpenChannel={handleOpenChannel}
-        onExitApp={handleExitApp}
+        renderRoute={renderRoute}
         showsNavigationBar={false}
         bottomInset={bottomInset}
       >
         <LibraryView onOpenChannel={handleOpenChannel} onOpenSettings={openSettings} />
       </TabStack>
     ),
-    [handleOpenChannel, handleExitApp, openSettings, bottomInset],
+    [renderRoute, handleOpenChannel, openSettings, bottomInset],
   )
 
   const searchTab = useMemo(
     () => (
       <TabStack
         path={paths[TAB.search]}
-        onOpenChannel={handleOpenChannel}
-        onExitApp={handleExitApp}
+        renderRoute={renderRoute}
         showsNavigationBar
         bottomInset={bottomInset}
       >
         <SearchView onOpenChannel={handleOpenChannel} />
       </TabStack>
     ),
-    [handleOpenChannel, handleExitApp, bottomInset],
+    [renderRoute, handleOpenChannel, bottomInset],
   )
 
   return (

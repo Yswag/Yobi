@@ -1,22 +1,23 @@
 import {
-  HStack,
-  Image,
   LazyVStack,
   ProgressView,
-  Rectangle,
   ScrollView,
-  Spacer,
   Text,
   VStack,
-  ZStack,
   useEffect,
   useMemo,
   useRef,
   useState,
 } from "scripting"
 import type { Point, ScrollGeometry, ScrollPhase, ScrollPhaseChangeContext, ScrollVisibilityChangeOptions, VirtualNode } from "scripting"
-import type { ChannelDetail, Provider, UnifiedVideoItem } from "../types"
+import type { ChannelDetail, LayoutMode, OpenChannel, Provider, UnifiedVideoItem } from "../types/index"
 import { VideoCard, VideoCardSkeleton } from "../components/VideoCard"
+import {
+  ChannelBanner,
+  ChannelHero,
+  ChannelToolbar,
+  type ChannelSortMode,
+} from "../components/channel/ChannelHeader"
 import {
   getChannel,
   getChannelVideos,
@@ -24,21 +25,10 @@ import {
   isSubscribed,
   searchChannelVideos,
   subscribeStorageChanges,
-  toggleSubscription,
 } from "../services/index"
-import { providerFullName } from "../utils/format"
-import { openVideo } from "../state/playerStore"
-import type { ChipOption } from "../ui/primitives"
-import {
-  Avatar,
-  ChipBar,
-  EmptyState,
-  LayoutToggle,
-  PillButton,
-  SearchField,
-  Skeleton,
-} from "../ui/primitives"
-import { motion, providerColor, space, type } from "../ui/theme"
+import { playVideoQueue, toggleChannelSubscription } from "../actions/index"
+import { EmptyState, PillButton } from "../ui/primitives"
+import { motion, space, type } from "../ui/theme"
 
 export interface ChannelViewProps {
   provider: Provider
@@ -46,30 +36,14 @@ export interface ChannelViewProps {
   initialName?: string
   initialAvatar?: string
   onClose?: () => void
-  onOpenChannel?: (provider: Provider, authorId: string, authorName: string, avatarUrl?: string) => void
+  onOpenChannel?: OpenChannel
 }
 
-type SortMode = "latest" | "popular" | "oldest"
-type LayoutMode = "row" | "grid"
-
-const BANNER_HEIGHT: number = 132
-const AVATAR_SIZE: number = 76
 const LOAD_MORE_DISTANCE: number = 600
 const DECEL_LOOKAHEAD_S: number = 0.4
 const MAX_LOOKAHEAD_PX: number = 900
 const PREFETCH_LEAD_COUNT: number = 5
 const TITLE_REVEAL_OFFSET: number = 140
-
-const SORT_OPTIONS_YT: ChipOption<SortMode>[] = [
-  { key: "latest", label: "最新" },
-  { key: "popular", label: "熱門" },
-  { key: "oldest", label: "最早" },
-]
-
-const SORT_OPTIONS_BILI: ChipOption<SortMode>[] = [
-  { key: "latest", label: "最新" },
-  { key: "popular", label: "熱門" },
-]
 
 export function ChannelView(props: ChannelViewProps): VirtualNode {
   const [detail, setDetail] = useState<ChannelDetail | null>(null)
@@ -77,7 +51,7 @@ export function ChannelView(props: ChannelViewProps): VirtualNode {
   const [errorText, setErrorText] = useState<string | null>(null)
   const [subscribed, setSubscribed] = useState<boolean>(false)
   const [query, setQuery] = useState<string>("")
-  const [sortMode, setSortMode] = useState<SortMode>("latest")
+  const [sortMode, setSortMode] = useState<ChannelSortMode>("latest")
   const [layoutMode, setLayoutMode] = useState<LayoutMode>("row")
   const [descriptionExpanded, setDescriptionExpanded] = useState<boolean>(false)
   const [titleVisible, setTitleVisible] = useState<boolean>(false)
@@ -169,7 +143,7 @@ export function ChannelView(props: ChannelViewProps): VirtualNode {
     }
   }
 
-  const changeSort = async (mode: SortMode): Promise<void> => {
+  const changeSort = async (mode: ChannelSortMode): Promise<void> => {
     if (mode === sortMode) return
     const seq: number = ++requestSeq.current
     setSortMode(mode)
@@ -228,109 +202,24 @@ export function ChannelView(props: ChannelViewProps): VirtualNode {
   }
 
   const handleToggleSubscription = (): void => {
-    const next: boolean = toggleSubscription({
-      id: subscriptionId,
+    const next: boolean = toggleChannelSubscription({
       provider: props.provider,
       rawId: props.channelId,
       name: currentName,
       avatarUrl: currentAvatar,
-      subscribedAt: Date.now(),
     })
     setSubscribed(next)
   }
 
   const handleSelect = (video: UnifiedVideoItem): void => {
-    void openVideo(video, { queue: shownVideos })
+    const index: number = shownVideos.findIndex((item: UnifiedVideoItem): boolean => item.id === video.id)
+    playVideoQueue(shownVideos, { startIndex: index >= 0 ? index : 0 })
   }
 
   const handlePlayAll = (): void => {
     if (shownVideos.length === 0) return
-    void openVideo(shownVideos[0], { queue: shownVideos })
+    playVideoQueue(shownVideos)
   }
-
-  const metaParts: string[] = [providerFullName(props.provider)]
-  if (detail?.subscriberCountText) metaParts.push(detail.subscriberCountText)
-  if (detail?.videoCountText) metaParts.push(`${detail.videoCountText} 部影片`)
-
-  const banner: VirtualNode = detail?.bannerUrl
-    ? (
-      <Rectangle
-        fill="secondarySystemFill"
-        frame={{ maxWidth: "infinity", height: BANNER_HEIGHT }}
-        overlay={
-          <Image
-            imageUrl={detail.bannerUrl}
-            resizable
-            scaleToFill
-            frame={{ maxWidth: "infinity", maxHeight: "infinity" }}
-          />
-        }
-        clipped
-      />
-    )
-    : <Rectangle fill="rgba(0,0,0,0)" frame={{ maxWidth: "infinity", height: 52 }} />
-
-  const hero: VirtualNode = (
-    <VStack alignment="leading" spacing={14} padding={{ horizontal: space.page }} frame={{ maxWidth: "infinity", alignment: "leading" }}>
-      <HStack spacing={14} frame={{ maxWidth: "infinity", alignment: "leading" }}>
-        <Avatar url={currentAvatar || undefined} name={currentName} size={AVATAR_SIZE} provider={props.provider} />
-        <VStack alignment="leading" spacing={5} frame={{ maxWidth: "infinity", alignment: "leading" }}>
-          <Text font={type.title + 2} fontWeight="heavy" foregroundStyle="label" lineLimit={2}>
-            {currentName}
-          </Text>
-          <HStack spacing={6}>
-            <Rectangle
-              fill={providerColor(props.provider)}
-              frame={{ width: 7, height: 7 }}
-              clipShape={{ type: "rect", cornerRadius: 3.5 }}
-            />
-            <Text font={type.meta + 1} foregroundStyle="secondaryLabel" lineLimit={1}>
-              {metaParts.join(" · ")}
-            </Text>
-          </HStack>
-        </VStack>
-      </HStack>
-
-      {detail?.description ? (
-        <Text
-          font={type.body}
-          foregroundStyle="secondaryLabel"
-          lineLimit={descriptionExpanded ? undefined : 2}
-          multilineTextAlignment="leading"
-          frame={{ maxWidth: "infinity", alignment: "leading" }}
-          onTapGesture={() => setDescriptionExpanded(!descriptionExpanded)}
-        >
-          {detail.description}
-        </Text>
-      ) : loading && !detail ? (
-        <VStack alignment="leading" spacing={6} frame={{ maxWidth: "infinity", alignment: "leading" }}>
-          <Skeleton height={12} />
-          <Skeleton width={180} height={12} />
-        </VStack>
-      ) : null}
-
-      <HStack spacing={10} frame={{ maxWidth: "infinity" }}>
-        <PillButton
-          label={subscribed ? "已訂閱" : "訂閱"}
-          icon={subscribed ? "checkmark" : "plus"}
-          prominent={!subscribed}
-          onTap={handleToggleSubscription}
-        />
-        {shownVideos.length > 0 ? (
-          <PillButton label="全部播放" icon="play.fill" prominent={false} onTap={handlePlayAll} />
-        ) : null}
-      </HStack>
-    </VStack>
-  )
-
-  const filterField: VirtualNode = (
-    <SearchField
-      value={query}
-      prompt="在頻道中搜尋"
-      onChange={handleQueryChange}
-      onCommit={() => void submitSearch()}
-    />
-  )
 
   const loadMoreRef = useRef<() => void>(() => {})
   loadMoreRef.current = (): void => {
@@ -460,26 +349,33 @@ export function ChannelView(props: ChannelViewProps): VirtualNode {
       }}
     >
       <VStack spacing={20} frame={{ maxWidth: "infinity" }} padding={{ bottom: 16 }}>
-        {banner}
-        {hero}
-        <VStack spacing={12} frame={{ maxWidth: "infinity" }}>
-          <VStack padding={{ horizontal: space.page }} frame={{ maxWidth: "infinity" }}>
-            {filterField}
-          </VStack>
-          {searching ? (
-            <HStack padding={{ horizontal: space.page }} frame={{ maxWidth: "infinity" }}>
-              <Spacer />
-              <LayoutToggle layout={layoutMode} onChange={setLayoutMode} />
-            </HStack>
-          ) : (
-            <ChipBar
-              options={props.provider === "yt" ? SORT_OPTIONS_YT : SORT_OPTIONS_BILI}
-              value={sortMode}
-              onChange={(mode: SortMode) => void changeSort(mode)}
-              trailing={<LayoutToggle layout={layoutMode} onChange={setLayoutMode} />}
-            />
-          )}
-        </VStack>
+        <ChannelBanner bannerUrl={detail?.bannerUrl} />
+        <ChannelHero
+          provider={props.provider}
+          name={currentName}
+          avatarUrl={currentAvatar}
+          subscriberCountText={detail?.subscriberCountText}
+          videoCountText={detail?.videoCountText}
+          description={detail?.description}
+          descriptionExpanded={descriptionExpanded}
+          onToggleDescription={() => setDescriptionExpanded(!descriptionExpanded)}
+          showDescriptionSkeleton={loading && !detail}
+          subscribed={subscribed}
+          onToggleSubscription={handleToggleSubscription}
+          canPlayAll={shownVideos.length > 0}
+          onPlayAll={handlePlayAll}
+        />
+        <ChannelToolbar
+          provider={props.provider}
+          query={query}
+          onQueryChange={handleQueryChange}
+          onSearch={() => void submitSearch()}
+          searching={searching}
+          sortMode={sortMode}
+          onSortChange={(mode: ChannelSortMode) => void changeSort(mode)}
+          layoutMode={layoutMode}
+          onLayoutChange={setLayoutMode}
+        />
         {listContent}
         {footer}
       </VStack>

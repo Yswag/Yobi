@@ -14,10 +14,26 @@ import {
   useState,
 } from "scripting"
 import type { VirtualNode } from "scripting"
-import type { CustomPlaylist, Provider, UnifiedVideoItem, WatchHistoryEntry } from "../types"
+import type {
+  CustomPlaylist,
+  OpenChannel,
+  ProviderFilter,
+  UnifiedVideoItem,
+  WatchHistoryEntry,
+} from "../types/index"
+import { playVideoQueue } from "../actions/index"
 import { VideoCard } from "../components/VideoCard"
 import type { CardAction } from "../components/VideoCard"
-import type { StorageTopic } from "../services"
+import {
+  PlayActions,
+  PlaylistDetailView,
+  PlaylistRow,
+  entryKey,
+  historyMeta,
+  matchesKeyword,
+  PLAYLIST_COVER_WIDTH,
+} from "../components/library/LibraryComponents"
+import type { StorageTopic } from "../services/index"
 import {
   clearWatchHistory,
   createPlaylist,
@@ -28,145 +44,32 @@ import {
   removeVideoFromPlaylist,
   subscribeStorageChanges,
   toggleWatchLater,
-} from "../services"
-import { formatDuration } from "../utils/format"
+} from "../services/index"
 import { getPlayerStoreSnapshot, openVideo, subscribePlayerStore } from "../state/playerStore"
 import {
   ChipBar,
   EmptyState,
   GlassIconButton,
   PageHeader,
-  PillButton,
   PROVIDER_FILTERS,
   SearchField,
-  Thumbnail,
 } from "../ui/primitives"
 import { motion, palette, radius, space, type } from "../ui/theme"
 
 export interface LibraryViewProps {
-  onOpenChannel?: (provider: Provider, authorId: string, authorName: string, avatarUrl?: string) => void
+  onOpenChannel?: OpenChannel
   onOpenSettings?: () => void
 }
 
-type LibraryFilter = "all" | Provider
 type LibraryTab = "history" | "watchLater" | "playlists"
 
 const LIBRARY_TABS: LibraryTab[] = ["history", "watchLater", "playlists"]
-
-const PLAYLIST_COVER_WIDTH: number = 120
-
-function shuffle<T>(list: T[]): T[] {
-  const copy: T[] = list.slice()
-  for (let i = copy.length - 1; i > 0; i--) {
-    const j: number = Math.floor(Math.random() * (i + 1))
-    const tmp: T = copy[i]
-    copy[i] = copy[j]
-    copy[j] = tmp
-  }
-  return copy
-}
-
-function pad2(value: number): string {
-  return String(value).padStart(2, "0")
-}
-
-function relativeTime(timestamp: number): string {
-  if (!Number.isFinite(timestamp) || timestamp <= 0) return ""
-  const then: Date = new Date(timestamp)
-  const now: Date = new Date()
-  const diffMinutes: number = Math.floor((now.getTime() - timestamp) / 60000)
-  if (diffMinutes < 1) return "剛剛"
-  if (diffMinutes < 60) return `${diffMinutes} 分鐘前`
-  const clock: string = `${pad2(then.getHours())}:${pad2(then.getMinutes())}`
-  const startOfToday: number = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
-  if (timestamp >= startOfToday) return `今天 ${clock}`
-  if (timestamp >= startOfToday - 86400000) return `昨天 ${clock}`
-  return `${then.getMonth() + 1} 月 ${then.getDate()} 日`
-}
-
-function matchesKeyword(item: UnifiedVideoItem, keyword: string): boolean {
-  if (!keyword) return true
-  return (
-    item.title.toLowerCase().includes(keyword) ||
-    item.authorName.toLowerCase().includes(keyword)
-  )
-}
-
-function entryKey(entry: WatchHistoryEntry): string {
-  return `${entry.item.id}-${entry.cid ?? entry.item.cid ?? 0}-${entry.page ?? 0}`
-}
-
-function historyMeta(entry: WatchHistoryEntry): string {
-  const parts: string[] = []
-  if (entry.item.provider === "bili" && entry.page !== undefined && entry.page > 1) parts.push(`P${entry.page}`)
-  parts.push(`看到 ${formatDuration(entry.position)}`)
-  const when: string = relativeTime(entry.watchedAt)
-  if (when) parts.push(when)
-  return parts.join(" · ")
-}
-
-function PlayActions(props: { onPlay: () => void; onShuffle?: () => void }): VirtualNode {
-  return (
-    <HStack spacing={10} padding={{ horizontal: space.page }} frame={{ maxWidth: "infinity" }}>
-      <PillButton label="全部播放" icon="play.fill" prominent onTap={props.onPlay} />
-      {props.onShuffle ? <PillButton label="隨機播放" icon="shuffle" onTap={props.onShuffle} /> : null}
-    </HStack>
-  )
-}
-
-function PlaylistRow(props: {
-  playlist: CustomPlaylist
-  onOpen: () => void
-  onPlay: () => void
-  onShuffle: () => void
-  onDelete: () => void
-}): VirtualNode {
-  const playlist: CustomPlaylist = props.playlist
-  const coverUrl: string | undefined = playlist.items[0]?.thumbnailUrl || undefined
-
-  return (
-    <HStack spacing={12} padding={{ horizontal: space.page, vertical: 8 }} frame={{ maxWidth: "infinity" }}>
-      <HStack spacing={12} frame={{ maxWidth: "infinity", alignment: "leading" }} contentShape="rect" onTapGesture={props.onOpen}>
-        {coverUrl ? (
-          <Thumbnail url={coverUrl} width={PLAYLIST_COVER_WIDTH} cornerRadius={radius.sm} />
-        ) : (
-          <VStack
-            frame={{ width: PLAYLIST_COVER_WIDTH, height: Math.round(PLAYLIST_COVER_WIDTH * 9 / 16) }}
-            background={{ style: palette.brandSoft, shape: { type: "rect", cornerRadius: radius.sm, style: "continuous" } }}
-          >
-            <Image systemName="music.note.list" font={22} foregroundStyle={palette.brand} />
-          </VStack>
-        )}
-        <VStack alignment="leading" spacing={3} frame={{ maxWidth: "infinity", alignment: "leading" }}>
-          <Text font={type.cardTitle} fontWeight="semibold" foregroundStyle="label" lineLimit={1}>{playlist.name}</Text>
-          <Text font={type.meta} foregroundStyle="secondaryLabel" lineLimit={1}>
-            {`${playlist.items.length} 部影片 · ${relativeTime(playlist.updatedAt)}`}
-          </Text>
-          {playlist.description ? (
-            <Text font={type.caption} foregroundStyle="tertiaryLabel" lineLimit={1}>{playlist.description}</Text>
-          ) : null}
-        </VStack>
-      </HStack>
-      <Menu
-        label={
-          <HStack spacing={0} frame={{ width: 28, height: 28 }} contentShape="rect">
-            <Image systemName="ellipsis" font={15} fontWeight="semibold" foregroundStyle="secondaryLabel" />
-          </HStack>
-        }
-      >
-        <Button title="全部播放" systemImage="play.fill" action={props.onPlay} />
-        <Button title="隨機播放" systemImage="shuffle" action={props.onShuffle} />
-        <Button title="刪除清單" systemImage="trash" role="destructive" action={props.onDelete} />
-      </Menu>
-    </HStack>
-  )
-}
 
 export function LibraryView(props: LibraryViewProps): VirtualNode {
   const [history, setHistory] = useState<WatchHistoryEntry[]>(getWatchHistory())
   const [watchLater, setWatchLater] = useState<UnifiedVideoItem[]>(getWatchLater())
   const [playlists, setPlaylists] = useState<CustomPlaylist[]>(getPlaylists())
-  const [filter, setFilter] = useState<LibraryFilter>("all")
+  const [filter, setFilter] = useState<ProviderFilter>("all")
   const [tab, setTab] = useState<LibraryTab>("history")
   const [query, setQuery] = useState<string>("")
   const [selectedPlaylistId, setSelectedPlaylistId] = useState<string | null>(null)
@@ -228,9 +131,7 @@ export function LibraryView(props: LibraryViewProps): VirtualNode {
   }
 
   const playQueue = (items: UnifiedVideoItem[], random: boolean): void => {
-    if (items.length === 0) return
-    const ordered: UnifiedVideoItem[] = random ? shuffle(items) : items
-    void openVideo(ordered[0], { queue: ordered })
+    playVideoQueue(items, { shuffle: random })
   }
 
   const confirmClearHistory = async (): Promise<void> => {
@@ -295,43 +196,20 @@ export function LibraryView(props: LibraryViewProps): VirtualNode {
 
   if (selectedPlaylist) {
     return (
-      <ScrollView axes="vertical" scrollIndicator="hidden" frame={{ maxWidth: "infinity", maxHeight: "infinity" }}>
-        <VStack spacing={16} frame={{ maxWidth: "infinity" }} padding={{ top: 6, bottom: 16 }}>
-          <HStack padding={{ horizontal: space.page }} frame={{ maxWidth: "infinity", alignment: "leading" }}>
-            <GlassIconButton icon="chevron.left" onTap={() => setSelectedPlaylistId(null)} />
-          </HStack>
-          <VStack alignment="leading" spacing={6} padding={{ horizontal: space.page }} frame={{ maxWidth: "infinity", alignment: "leading" }}>
-            <Text font={type.largeTitle - 4} fontWeight="heavy" foregroundStyle="label" lineLimit={2}>
-              {selectedPlaylist.name}
-            </Text>
-            <Text font={type.meta + 1} foregroundStyle="secondaryLabel" lineLimit={1}>
-              {`${playlistItems.length} 部影片 · ${relativeTime(selectedPlaylist.updatedAt)}`}
-            </Text>
-            {selectedPlaylist.description ? (
-              <Text font={type.body} foregroundStyle="secondaryLabel" lineLimit={3}>{selectedPlaylist.description}</Text>
-            ) : null}
-          </VStack>
-          {playlistItems.length > 0 ? (
-            <PlayActions
-              onPlay={() => playQueue(playlistItems, false)}
-              onShuffle={() => playQueue(playlistItems, true)}
-            />
-          ) : null}
-          <ChipBar options={PROVIDER_FILTERS} value={filter} onChange={setFilter} />
-          {playlistItems.length === 0 ? (
-            <EmptyState
-              icon="tray"
-              title="這個清單還沒有影片"
-              message="在任何影片的「⋯」選單選「加入播放清單」"
-            />
-          ) : videoList(playlistItems, (item: UnifiedVideoItem) => [{
-            label: "從清單移除",
-            icon: "minus.circle",
-            destructive: true,
-            onTap: () => removeVideoFromPlaylist(selectedPlaylist.id, item.id),
-          }])}
-        </VStack>
-      </ScrollView>
+      <PlaylistDetailView
+        playlist={selectedPlaylist}
+        items={playlistItems}
+        filter={filter}
+        onFilterChange={setFilter}
+        onBack={() => setSelectedPlaylistId(null)}
+        onPlay={() => playQueue(playlistItems, false)}
+        onShuffle={() => playQueue(playlistItems, true)}
+        onSelectItem={(item: UnifiedVideoItem, queue: UnifiedVideoItem[]) => {
+          void openVideo(item, { queue })
+        }}
+        onRemoveItem={(item: UnifiedVideoItem) => removeVideoFromPlaylist(selectedPlaylist.id, item.id)}
+        onOpenChannel={props.onOpenChannel}
+      />
     )
   }
 
