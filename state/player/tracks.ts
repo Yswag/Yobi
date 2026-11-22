@@ -1,5 +1,5 @@
 import { fetch } from "scripting"
-import type { PlayerSettings, SubtitleTrackInfo } from "../../types"
+import type { PlayerSettings, SubtitleTrackInfo } from "../../types/index"
 import { fetchBiliDanmakuXml, updateSettings } from "../../services/index"
 import { reportError } from "../../services/errors"
 import { biliSubtitleToVtt, toCleanVtt } from "../../utils/subtitles"

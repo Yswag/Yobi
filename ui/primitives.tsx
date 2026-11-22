@@ -12,7 +12,7 @@ import {
   useState,
 } from "scripting"
 import type { Color, VirtualNode } from "scripting"
-import type { Provider } from "../types"
+import type { Provider } from "../types/index"
 import { formatDuration, providerBadgeLabel } from "../utils/format"
 import { palette, providerColor, radius, space, thumbHeight, type } from "./theme"
 

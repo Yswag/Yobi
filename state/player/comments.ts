@@ -1,5 +1,5 @@
 import { useEffect, useState } from "scripting"
-import type { CommentItem, CommentPage, CommentSort, UnifiedVideoItem } from "../../types"
+import type { CommentItem, CommentPage, CommentSort, UnifiedVideoItem } from "../../types/index"
 import { getCommentPage, getCommentReplies } from "../../services/index"
 import { reportError } from "../../services/errors"
 import type { CommentsStoreSnapshot } from "./types"

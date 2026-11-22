@@ -1,5 +1,5 @@
 import { fetch } from "scripting"
-import type { Provider, ProviderAuthState } from "../types"
+import type { Provider, ProviderAuthState } from "../types/index"
 import { setYoutubeLocale } from "./youtube/locale"
 import { reportError } from "./errors"
 

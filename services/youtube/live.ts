@@ -1,8 +1,9 @@
 
 import { fetch } from "scripting"
-import type { StreamManifest, VideoQualityTrack } from "../../types"
+import type { StreamManifest, VideoQualityTrack } from "../../types/index"
 import { parseHlsMasterText, qualityLabel, resolveUrl, type HlsVariant } from "./hls"
 import { fetchPlayerResponse, type InnertubeClientKey, type JsonObject } from "./innertube"
+import { asObject } from "./parsePrimitives"
 
 interface LiveClientProfile {
   key: InnertubeClientKey
@@ -21,11 +22,6 @@ interface LiveCandidate {
   source: InnertubeClientKey
   preference: number
   challenged: boolean
-}
-
-function asObject(value: unknown): JsonObject | null {
-  if (value && typeof value === "object" && !Array.isArray(value)) return value as JsonObject
-  return null
 }
 
 function manifestUrlOf(player: JsonObject): string {

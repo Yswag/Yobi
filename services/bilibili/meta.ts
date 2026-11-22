@@ -1,5 +1,6 @@
 import { fetch } from "scripting"
-import type { UnifiedVideoItem } from "../../types"
+import type { UnifiedVideoItem } from "../../types/index"
+import { decodeEntities, parseDurationText } from "../../utils/format"
 import { reportError } from "../errors"
 import { parseBiliInput } from "./input"
 import {
@@ -159,16 +160,6 @@ export function stripHtml(value: string): string {
   return value.replace(/<[^>]*>/g, "")
 }
 
-export function decodeEntities(value: string): string {
-  return value
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&nbsp;/g, " ")
-}
-
 export function cleanText(value: unknown): string {
   if (typeof value !== "string") return ""
   return decodeEntities(stripHtml(value)).trim()
@@ -177,23 +168,6 @@ export function cleanText(value: unknown): string {
 export function numberOrUndefined(value: unknown): number | undefined {
   const parsed: number = Number(value)
   return Number.isFinite(parsed) ? parsed : undefined
-}
-
-export function parseDurationText(value: unknown): number {
-  if (typeof value === "number" && Number.isFinite(value)) return value
-  if (typeof value !== "string" || !value) return 0
-  const parts: number[] = value.trim().split(":").map((part: string): number => Number(part))
-  if (parts.some((part: number): boolean => !Number.isFinite(part))) return 0
-  let seconds: number = 0
-  for (const part of parts) seconds = seconds * 60 + part
-  return Math.max(0, Math.round(seconds))
-}
-
-export function formatCount(count: number): string {
-  if (!Number.isFinite(count) || count <= 0) return "0"
-  if (count >= 100000000) return `${(count / 100000000).toFixed(1)}億`
-  if (count >= 10000) return `${(count / 10000).toFixed(1)}萬`
-  return String(Math.round(count))
 }
 
 export function publishedTextFromEpoch(seconds?: number): string | undefined {

@@ -1,4 +1,4 @@
-import type { StreamManifest } from "../../types"
+import type { StreamManifest } from "../../types/index"
 
 export { parseBiliInput } from "./input"
 export { resolveBiliShortUrl } from "./meta"

@@ -1,4 +1,4 @@
-import type { StreamManifest, YoutubeStreamPreference } from "../../types"
+import type { StreamManifest, YoutubeStreamPreference } from "../../types/index"
 import type { InnertubeClientKey } from "./innertube"
 import type { SabrPlayerInfo } from "./stream"
 

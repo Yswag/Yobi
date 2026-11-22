@@ -5,14 +5,14 @@ import type {
   UnifiedVideoItem,
   VideoDetail,
   VideoPagePart,
-} from "../../types"
+} from "../../types/index"
+import { formatCount } from "../../utils/format"
 import { reportError } from "../errors"
 import {
   BILI_API,
   cleanText,
   fetchView,
   fetchViewDetail,
-  formatCount,
   imageUrl,
   mapItem,
   mapItems,

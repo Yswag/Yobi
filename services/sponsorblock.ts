@@ -1,5 +1,5 @@
 import { fetch } from "scripting"
-import type { Provider, SponsorCategory, SponsorSegment } from "../types"
+import type { Provider, SponsorCategory, SponsorSegment } from "../types/index"
 
 const YOUTUBE_ENDPOINT = "https://sponsor.ajay.app/api/skipSegments"
 const BILIBILI_ENDPOINT = "https://bsbsb.top/api/skipSegments"

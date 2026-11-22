@@ -1,4 +1,4 @@
-import type { CommentItem, CommentPage, CommentQuery, CommentRun } from "../../types"
+import type { CommentItem, CommentPage, CommentQuery, CommentRun } from "../../types/index"
 import {
   BILI_API,
   cleanText,

@@ -7,7 +7,7 @@ import type {
   UnifiedVideoItem,
   VideoChapter,
   VideoDetail,
-} from "../../types"
+} from "../../types/index"
 
 export type PlayerPresentationMode = "hidden" | "expanded" | "mini"
 

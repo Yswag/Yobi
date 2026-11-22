@@ -7,7 +7,7 @@ import type {
   VideoDetail,
   VideoPagePart,
   VideoQualityTrack,
-} from "../../types"
+} from "../../types/index"
 import {
   clearHlsRelays,
   clearMediaSessions,

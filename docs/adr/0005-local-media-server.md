@@ -6,7 +6,7 @@
 
 ## 決策
 
-播放器只認本機 HTTP。`services/mediaServer.ts` 是自寫的 HTTP/1.1（`node:net`），`services/localProxy.ts` 是路由與快取，`services/prefetch.ts` 決定先抓哪幾塊。
+播放器只認本機 HTTP。`services/mediaServer.ts` 是自寫的 HTTP/1.1（`node:net`），`services/localProxy.ts` 是路由與快取，`services/prefetch.ts` 決定先抓哪幾塊。兩者透過處理器註冊介面提供串流、SABR、HLS 轉手與分塊代理，不反向依賴各平台模組，並對 session 與虛擬 manifest 設上限淘汰。
 
 ### 路由
 

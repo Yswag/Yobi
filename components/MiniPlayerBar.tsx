@@ -8,7 +8,7 @@ import {
   ZStack,
 } from "scripting"
 import type { VirtualNode } from "scripting"
-import type { UnifiedVideoItem } from "../types"
+import type { UnifiedVideoItem } from "../types/index"
 import type { PlaybackStatus, PlayerProgressSnapshot, PlayerStoreSnapshot } from "../state/playerStore"
 import {
   closePlayer,

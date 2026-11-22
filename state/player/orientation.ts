@@ -1,4 +1,4 @@
-import type { StreamManifest, VideoQualityTrack } from "../../types"
+import type { StreamManifest, VideoQualityTrack } from "../../types/index"
 import { reportError } from "../../services/errors"
 import { emitStore, patchStore, readDraftStore } from "./store"
 

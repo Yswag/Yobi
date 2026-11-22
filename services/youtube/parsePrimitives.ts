@@ -1,4 +1,5 @@
 import type { JsonObject } from "./innertube"
+export { parseDurationText } from "../../utils/format"
 
 export const VIDEO_RENDERER_KEYS: string[] = [
   "richItemRenderer",
@@ -81,24 +82,6 @@ export function findThumbnailDeep(node: unknown, depth: number = 0): string {
     if (found) return found
   }
   return ""
-}
-
-export function parseDurationText(text: string): number {
-  if (!text) return 0
-  const trimmed: string = text.trim()
-  const match: RegExpMatchArray | null = trimmed.match(/^(\d+):(\d{2})(?::(\d{2}))?$/)
-  if (match) {
-    const first: number = Number(match[1])
-    const second: number = Number(match[2])
-    const third: number | undefined = match[3] === undefined ? undefined : Number(match[3])
-    if (third === undefined) return first * 60 + second
-    return first * 3600 + second * 60 + third
-  }
-  const iso: RegExpMatchArray | null = trimmed.match(/^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$/)
-  if (iso) {
-    return Number(iso[1] ?? 0) * 3600 + Number(iso[2] ?? 0) * 60 + Number(iso[3] ?? 0)
-  }
-  return 0
 }
 
 export function parseViewCountText(text: string): number | undefined {

@@ -3,7 +3,7 @@ import type {
   StreamManifest,
   SubtitleTrackInfo,
   VideoQualityTrack,
-} from "../../types"
+} from "../../types/index"
 import { effectiveResolution } from "../../utils/format"
 import { unregisterMediaSession } from "../mediaServer"
 import type { BiliDashMedia, BiliDashPayload } from "./dashMpd"

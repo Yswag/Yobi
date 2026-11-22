@@ -1,6 +1,6 @@
 
 import { fetch } from "scripting"
-import type { VideoQualityTrack } from "../../types"
+import type { VideoQualityTrack } from "../../types/index"
 import { effectiveResolution } from "../../utils/format"
 import { clearHlsRelays, createHlsRelay } from "../hlsRelay"
 import { registerVirtualManifest, unregisterVirtualManifest } from "../localProxy"

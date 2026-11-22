@@ -1,5 +1,5 @@
 import type { Color } from "scripting"
-import type { Provider, SponsorCategory, UnifiedVideoItem } from "../types"
+import type { Provider, SponsorCategory, UnifiedVideoItem } from "../types/index"
 
 export function formatDuration(seconds?: number | null): string {
   if (seconds === undefined || seconds === null || !Number.isFinite(seconds) || seconds <= 0) {
@@ -67,13 +67,40 @@ export function effectiveResolution(width?: number | null, height?: number | nul
   return h || w
 }
 
+export function decodeEntities(text: string): string {
+  return text
+    .replace(/&nbsp;/g, " ")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, "\"")
+    .replace(/&#39;/g, "'")
+    .replace(/&#(\d+);/g, (_: string, code: string): string => String.fromCodePoint(Number(code)))
+    .replace(/&amp;/g, "&")
+}
+
+export function parseDurationText(value: unknown): number {
+  if (typeof value === "number" && Number.isFinite(value)) return Math.max(0, Math.round(value))
+  if (typeof value !== "string" || !value) return 0
+  const trimmed: string = value.trim()
+  const colon: RegExpMatchArray | null = trimmed.match(/^(\d+):(\d{1,2})(?::(\d{1,2}))?$/)
+  if (colon) {
+    const first: number = Number(colon[1])
+    const second: number = Number(colon[2])
+    const third: number | undefined = colon[3] === undefined ? undefined : Number(colon[3])
+    if (third === undefined) return first * 60 + second
+    return first * 3600 + second * 60 + third
+  }
+  const iso: RegExpMatchArray | null = trimmed.match(/^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$/)
+  if (iso) {
+    return Number(iso[1] ?? 0) * 3600 + Number(iso[2] ?? 0) * 60 + Number(iso[3] ?? 0)
+  }
+  const numeric: number = Number(trimmed)
+  return Number.isFinite(numeric) && numeric > 0 ? Math.round(numeric) : 0
+}
+
 export function getVideoShareUrl(item: Pick<UnifiedVideoItem, "provider" | "rawId" | "cid">): string {
   if (item.provider === "bili") {
-    const raw: string = item.rawId
-    if (/^av\d+$/i.test(raw)) {
-      return `https://www.bilibili.com/video/${raw}`
-    }
-    return `https://www.bilibili.com/video/${raw}`
+    return `https://www.bilibili.com/video/${item.rawId}`
   }
   return `https://www.youtube.com/watch?v=${encodeURIComponent(item.rawId)}`
 }

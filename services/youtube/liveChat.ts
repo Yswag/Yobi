@@ -7,6 +7,7 @@ import {
   type JsonObject,
 } from "./innertube"
 import { getYoutubeLocale } from "./locale"
+import { asArray, asObject } from "./parsePrimitives"
 import { fetchWatchNext } from "./watchNext"
 
 const CHAT_ENDPOINT: string = "https://www.youtube.com/youtubei/v1/live_chat/get_live_chat"
@@ -42,15 +43,6 @@ export interface LiveChatCursor {
 export interface LiveChatBatch {
   messages: LiveChatMessage[]
   cursor: LiveChatCursor | null
-}
-
-function asObject(value: unknown): JsonObject | null {
-  if (value && typeof value === "object" && !Array.isArray(value)) return value as JsonObject
-  return null
-}
-
-function asArray(value: unknown): unknown[] {
-  return Array.isArray(value) ? value : []
 }
 
 function readText(node: unknown): string {

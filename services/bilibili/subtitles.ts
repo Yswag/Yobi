@@ -1,5 +1,5 @@
 import { fetch } from "scripting"
-import type { SubtitleTrackInfo } from "../../types"
+import type { SubtitleTrackInfo } from "../../types/index"
 import { BILI_REFERER, BILI_USER_AGENT, getBiliRequestHeaders, signWbiParams } from "./wbi"
 
 const SUBTITLE_API: string = "https://api.bilibili.com/x/player/wbi/v2"

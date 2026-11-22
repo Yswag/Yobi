@@ -7,7 +7,7 @@ import type {
   CommentSort,
   UnifiedVideoItem,
   VideoDetail,
-} from "../../types"
+} from "../../types/index"
 import {
   fetchBrowseContinuation,
   fetchBrowseResponse,
@@ -29,6 +29,7 @@ import {
   parseVideoDetail,
   type AboutChannelInfo,
 } from "./parsers"
+import { asArray, asObject } from "./parsePrimitives"
 import { fetchWatchNext } from "./watchNext"
 
 const SUGGEST_ENDPOINT: string = "https://suggestqueries-clients6.youtube.com/complete/search"
@@ -39,15 +40,6 @@ const LIVE_VIEWERS_MAX_AGE_MS: number = 25_000
 const ABOUT_TTL: number = 10 * 60 * 1000
 const SORT_TOKEN_TTL: number = 10 * 60 * 1000
 const MAX_CHANNEL_CACHE: number = 32
-
-function asObject(value: unknown): JsonObject | null {
-  if (value && typeof value === "object" && !Array.isArray(value)) return value as JsonObject
-  return null
-}
-
-function asArray(value: unknown): unknown[] {
-  return Array.isArray(value) ? value : []
-}
 
 function dedupeItems(items: UnifiedVideoItem[]): UnifiedVideoItem[] {
   const seen: Set<string> = new Set()

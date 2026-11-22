@@ -1,6 +1,6 @@
 
 import { fetch } from "scripting"
-import type { VideoQualityTrack } from "../../types"
+import type { VideoQualityTrack } from "../../types/index"
 import { recordDownload } from "../netMeter"
 import { parseSidx, type SidxEntry, type SidxIndex } from "../sidx"
 import {
@@ -10,6 +10,7 @@ import {
   type JsonObject,
 } from "./innertube"
 import { getYoutubeLocale } from "./locale"
+import { asObject } from "./parsePrimitives"
 import {
   registerSabrSessionHandler,
   unregisterSabrSessionHandler,
@@ -90,11 +91,6 @@ const SABR_MAX_BACKOFF_MS: number = 10_000
 
 const SEGMENT_DURATION_MS: number = 5000
 const MAX_SEGMENT_CACHE_BYTES: number = 24 * 1024 * 1024
-
-function asObject(value: unknown): JsonObject | null {
-  if (value && typeof value === "object" && !Array.isArray(value)) return value as JsonObject
-  return null
-}
 
 export interface SabrSessionConfig {
   videoId: string

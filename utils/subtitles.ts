@@ -1,4 +1,6 @@
 
+import { decodeEntities } from "./format"
+
 interface Cue {
   start: number
   end: number
@@ -24,17 +26,6 @@ function vttTime(seconds: number): string {
   const totalSeconds: number = Math.floor(totalMs / 1000)
   const pad = (value: number, width: number = 2): string => String(value).padStart(width, "0")
   return `${pad(Math.floor(totalSeconds / 3600))}:${pad(Math.floor(totalSeconds / 60) % 60)}:${pad(totalSeconds % 60)}.${pad(ms, 3)}`
-}
-
-function decodeEntities(text: string): string {
-  return text
-    .replace(/&nbsp;/g, " ")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, "\"")
-    .replace(/&#39;/g, "'")
-    .replace(/&#(\d+);/g, (_: string, code: string) => String.fromCodePoint(Number(code)))
-    .replace(/&amp;/g, "&")
 }
 
 function parseCues(source: string): Cue[] {

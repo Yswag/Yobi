@@ -3,7 +3,7 @@ import type {
   StreamManifest,
   VideoQualityTrack,
   YoutubeStreamPreference,
-} from "../../types"
+} from "../../types/index"
 import { effectiveResolution } from "../../utils/format"
 import {
   fetchPlayerResponse,

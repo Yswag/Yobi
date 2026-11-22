@@ -1,4 +1,4 @@
-import type { CommentItem, CommentRun, UnifiedVideoItem } from "../../types"
+import type { CommentItem, CommentRun, UnifiedVideoItem } from "../../types/index"
 import type { JsonObject } from "./innertube"
 import { extractVideoItems } from "./parseItems"
 import { asArray, asObject, readText, readThumbnailUrl, runNavigationBrowseId } from "./parsePrimitives"

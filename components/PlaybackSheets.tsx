@@ -13,7 +13,7 @@ import {
   VStack,
 } from "scripting"
 import type { VirtualNode } from "scripting"
-import type { VideoQualityTrack } from "../types"
+import type { VideoQualityTrack } from "../types/index"
 import type { PlayerStoreSnapshot } from "../state/playerStore"
 import {
   getPlayerController,

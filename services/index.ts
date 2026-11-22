@@ -9,7 +9,7 @@ import type {
   UnifiedVideoItem,
   VideoDetail,
   YoutubeStreamPreference,
-} from "../types"
+} from "../types/index"
 import {
   getYoutubeChannel,
   getYoutubeChannelVideos,

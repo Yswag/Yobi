@@ -1,6 +1,7 @@
-import type { AudioStreamTrack, VideoQualityTrack } from "../../types"
+import type { AudioStreamTrack, VideoQualityTrack } from "../../types/index"
 import { effectiveResolution } from "../../utils/format"
 import type { JsonObject } from "./innertube"
+import { asObject } from "./parsePrimitives"
 import type { SabrByteRange } from "./sabrProto"
 
 export interface SabrFormat {
@@ -37,11 +38,6 @@ export interface SabrManifestBuilderInput {
   session: SabrTimelineSource
   video: SabrFormat
   audio: SabrFormat
-}
-
-function asObject(value: unknown): JsonObject | null {
-  if (value && typeof value === "object" && !Array.isArray(value)) return value as JsonObject
-  return null
 }
 
 function parseRange(value: unknown): SabrByteRange | undefined {

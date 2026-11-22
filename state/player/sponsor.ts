@@ -1,4 +1,4 @@
-import type { PlayerSettings, SponsorSegment, UnifiedVideoItem } from "../../types"
+import type { PlayerSettings, SponsorSegment, UnifiedVideoItem } from "../../types/index"
 import {
   fetchSponsorSegments,
   filterSegmentsForCid,

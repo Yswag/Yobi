@@ -1,4 +1,4 @@
-import type { SubtitleTrackInfo, UnifiedVideoItem, VideoChapter } from "../../types"
+import type { SubtitleTrackInfo, UnifiedVideoItem, VideoChapter } from "../../types/index"
 import type { JsonObject } from "./innertube"
 import {
   asArray,

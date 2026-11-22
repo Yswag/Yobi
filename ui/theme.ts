@@ -1,5 +1,5 @@
 import type { Color } from "scripting"
-import type { Provider } from "../types"
+import type { Provider } from "../types/index"
 
 export const palette = {
   brand: "rgba(255,55,95,1)" as Color,

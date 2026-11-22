@@ -4,7 +4,7 @@ import type {
   SubscriptionChannel,
   UnifiedVideoItem,
   WatchHistoryEntry,
-} from "../types"
+} from "../types/index"
 import { reportError } from "./errors"
 
 const KEYS = {

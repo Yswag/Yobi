@@ -4,7 +4,7 @@ import type {
   VideoChapter,
   VideoCollaborator,
   VideoDetail,
-} from "../../types"
+} from "../../types/index"
 import type { JsonObject } from "./innertube"
 import { extractVideoItems, parseChapters, parseRelatedVideos } from "./parseItems"
 import { asArray, asObject, parseViewCountText, readText, readThumbnailUrl } from "./parsePrimitives"

@@ -4,7 +4,7 @@ import type {
   StreamManifest,
   UnifiedVideoItem,
   VideoChapter,
-} from "../../types"
+} from "../../types/index"
 import { getSettings, recordWatchHistory } from "../../services/index"
 import { reportError } from "../../services/errors"
 import type {

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "scripting"
-import type { UnifiedVideoItem } from "../../types"
+import type { UnifiedVideoItem } from "../../types/index"
 import { getYoutubeLiveViewers } from "../../services/index"
 import { reportError } from "../../services/errors"
 import type { LiveViewerSnapshot } from "./types"
