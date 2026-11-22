@@ -28,6 +28,7 @@ import {
   selectQuality,
   selectSubtitle,
   setPlaybackRate,
+  setTemporaryBoost2x,
   skipActiveSponsorSegment,
   subscribePlayerProgress,
   toggleDanmaku,
@@ -65,6 +66,9 @@ const AUTO_HIDE_MS: number = 4000
 const DOUBLE_TAP_MS: number = 230
 const TAP_HINT_MS: number = 650
 const FILL_HINT_MS: number = 1200
+const LONG_PRESS_BOOST_MS: number = 350
+const LONG_PRESS_HOLD_MS: number = 60_000
+const POST_BOOST_TAP_SUPPRESS_MS: number = 250
 const PINCH_ZOOM_IN_THRESHOLD: number = 1.12
 const PINCH_ZOOM_OUT_THRESHOLD: number = 0.88
 const PLAYBACK_RATES: number[] = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2]
@@ -296,7 +300,12 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
   const hideTimerRef = useRef<number | null>(null)
   const hintTimerRef = useRef<number | null>(null)
   const fillHintTimerRef = useRef<number | null>(null)
+  const boostTimerRef = useRef<number | null>(null)
+  const boostingRef = useRef<boolean>(false)
+  const suppressTapUntilRef = useRef<number>(0)
   const pinchHandledRef = useRef<boolean>(false)
+  const isLiveRef = useRef<boolean>(store.currentItem?.isLive === true)
+  isLiveRef.current = store.currentItem?.isLive === true
   const isFullscreenRef = useRef<boolean>(store.isFullscreen)
   isFullscreenRef.current = store.isFullscreen
   const videoFillRef = useRef<boolean>(props.videoFill === true)
@@ -308,7 +317,39 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
   const statusRef = useRef<string>(store.status)
   statusRef.current = store.status
 
+  function cancelPendingBoost(): void {
+    if (boostTimerRef.current !== null) {
+      clearTimeout(boostTimerRef.current)
+      boostTimerRef.current = null
+    }
+  }
+
+  function stopBoost(): void {
+    cancelPendingBoost()
+    if (!boostingRef.current) return
+    boostingRef.current = false
+    suppressTapUntilRef.current = Date.now() + POST_BOOST_TAP_SUPPRESS_MS
+    setTemporaryBoost2x(false)
+  }
+
+  function handleLongPressingChanged(pressing: boolean): void {
+    if (!pressing) {
+      stopBoost()
+      return
+    }
+    if (isLiveRef.current || statusRef.current !== "playing") return
+    cancelPendingBoost()
+    boostTimerRef.current = setTimeout(() => {
+      boostTimerRef.current = null
+      if (isLiveRef.current || statusRef.current !== "playing" || dragModeRef.current !== "none") return
+      boostingRef.current = true
+      HapticFeedback.lightImpact()
+      setTemporaryBoost2x(true)
+    }, LONG_PRESS_BOOST_MS)
+  }
+
   useEffect(() => {
+    if (store.status !== "playing") stopBoost()
     if (store.status === "ended") {
       setControlsVisible(true)
       clearAutoHide()
@@ -318,7 +359,12 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
   }, [store.status])
 
   useEffect(() => {
+    stopBoost()
+  }, [store.currentItem?.id])
+
+  useEffect(() => {
     return () => {
+      stopBoost()
       if (hideTimerRef.current !== null) clearTimeout(hideTimerRef.current)
       if (hintTimerRef.current !== null) clearTimeout(hintTimerRef.current)
       if (fillHintTimerRef.current !== null) clearTimeout(fillHintTimerRef.current)
@@ -330,6 +376,7 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
       MagnifyGesture(0.05)
         .onChanged((value: MagnifyGestureValue): void => {
           if (!isFullscreenRef.current) return
+          stopBoost()
           dragModeRef.current = "ignore"
           onCancelFullscreenDragRef.current?.()
           if (pinchHandledRef.current) return
@@ -422,6 +469,7 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
 
   function handleTap(loc: Point): void {
     const now: number = Date.now()
+    if (now < suppressTapUntilRef.current) return
     const lastTapAt: number | null = lastTapAtRef.current
     if (lastTapAt !== null && now - lastTapAt < DOUBLE_TAP_MS && !store.currentItem?.isLive) {
       lastTapAtRef.current = null
@@ -456,10 +504,15 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
   }
 
   function handleDragChanged(d: DragGestureDetails): void {
+    if (boostingRef.current) {
+      dragModeRef.current = "ignore"
+      return
+    }
     if (dragModeRef.current === "none") {
       dragModeRef.current = resolveDragMode(d)
     }
     const mode = dragModeRef.current
+    if (mode !== "none" && mode !== "ignore") cancelPendingBoost()
     if (mode === "minimize") {
       props.onMinimizeDragChanged?.(d.translation.height, d.translation.width)
     } else if (mode === "enterFullscreen") {
@@ -862,6 +915,11 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
         fill="rgba(0,0,0,0.001)"
         frame={{ width: props.width, height: props.height }}
         onTapGesture={{ count: 1, coordinateSpace: "local", perform: handleTap }}
+        onLongPressGesture={{
+          minDuration: LONG_PRESS_HOLD_MS,
+          perform: () => {},
+          onPressingChanged: handleLongPressingChanged,
+        }}
         onDragGesture={{
           minDistance: 10,
           coordinateSpace: props.dragSpace,

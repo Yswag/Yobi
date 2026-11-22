@@ -1061,6 +1061,7 @@ export function setPlaybackRate(rate: number): void {
 export function setTemporaryBoost2x(boosting: boolean): void {
   const ctrl: VideoPlaybackController = getPlayerController()
   if (boosting) {
+    if (isLivePlayback()) return
     if (!storeState.isBoosting2x) {
       savedRateBeforeBoost = storeState.playbackRate || 1
       ctrl.playbackRate = 2
@@ -1433,6 +1434,9 @@ function applyOverlayVisibility(visible: boolean): void {
 
 export function minimizeToMiniPlayer(): void {
   saveCurrentHistory(true)
+  if (storeState.isBoosting2x) {
+    setTemporaryBoost2x(false)
+  }
   if (storeState.isFullscreen) {
     setFullscreen(false)
   }
