@@ -313,7 +313,7 @@ function findChapterAt(chapters: VideoChapter[] | undefined, seconds: number): V
 async function ensureAudioSession(): Promise<void> {
   if (audioSessionReady) return
   try {
-    await SharedAudioSession.setCategory("playback", ["mixWithOthers"])
+    await SharedAudioSession.setCategory("playback", [])
     await SharedAudioSession.setActive(true)
     audioSessionReady = true
     setAudioUnavailable(false)
@@ -380,6 +380,19 @@ export function getPlayerController(): VideoPlaybackController {
 
   setBiliLineSwitchListener((): void => {
     showSkippedToast("已切換線路")
+  })
+
+  SharedAudioSession.addInterruptionListener((type: AudioSessionInterruptionType): void => {
+    if (type !== "began") return
+    audioSessionReady = false
+    if (storeState.status !== "playing" && ctrl.state !== "playing") return
+    try {
+      ctrl.pause()
+    } catch (error) {
+      reportError("player", "interruption.pause", error)
+    }
+    storeState.status = "paused"
+    emitStore()
   })
 
   ctrl.on("state", (snap: VideoPlaybackSnapshot) => {
@@ -917,6 +930,7 @@ export async function togglePlayPause(): Promise<void> {
       }
       await ctrl.seek(0)
     }
+    await ensureAudioSession()
     await ctrl.play()
   } catch (err: unknown) {
     storeState.errorText = err instanceof Error ? err.message : "播放失敗"
@@ -1159,6 +1173,7 @@ export async function selectPage(pagePart: VideoPagePart): Promise<void> {
     streamSwitchPending = false
     await restoreControllerSettings()
     void loadBiliDanmakuForCid(pagePart.cid)
+    await ensureAudioSession()
     await ctrl.play()
   } catch (err: unknown) {
     storeState.status = "error"
