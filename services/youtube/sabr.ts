@@ -1,6 +1,7 @@
 
 import { fetch } from "scripting"
 import type { AudioStreamTrack, VideoQualityTrack } from "../../types"
+import { effectiveResolution } from "../../utils/format"
 import { recordDownload } from "../netMeter"
 import { parseSidx, type SidxEntry, type SidxIndex } from "../sidx"
 import {
@@ -137,9 +138,15 @@ export function pickBestAudioFormat(formats: SabrFormat[]): SabrFormat | undefin
   return audios.sort((a: SabrFormat, b: SabrFormat): number => score(b) - score(a))[0]
 }
 
+function resolutionOf(format: Pick<SabrFormat, "width" | "height" | "qualityLabel">): number {
+  const labeled: RegExpMatchArray | null = format.qualityLabel?.match(/(\d{3,4})p/i) ?? null
+  if (labeled) return Number(labeled[1])
+  return effectiveResolution(format.width, format.height)
+}
+
 function videoCodecScore(format: SabrFormat): number {
   const codec: string = codecOf(format.mimeType).toLowerCase()
-  if ((format.height ?? 0) >= 2160) {
+  if (resolutionOf(format) >= 2160) {
     if (codec.startsWith("av01")) return 3
     return codec.startsWith("hvc") || codec.startsWith("hev") ? 2 : 0
   }
@@ -165,7 +172,7 @@ export function pickVideoFormats(formats: SabrFormat[], includeAv1: boolean = tr
     }
   }
   return Array.from(byLabel.values()).sort(
-    (a: SabrFormat, b: SabrFormat): number => (b.height ?? 0) - (a.height ?? 0) || (b.fps ?? 0) - (a.fps ?? 0),
+    (a: SabrFormat, b: SabrFormat): number => resolutionOf(b) - resolutionOf(a) || (b.fps ?? 0) - (a.fps ?? 0),
   )
 }
 
@@ -698,7 +705,8 @@ export class SabrSession {
     abrState.uint32(22, 0).uint32(46, 0).int64(68, 0)
     const target: SabrFormat | undefined = format.isAudio ? audio : video
     if (target?.bitrate) abrState.int64(23, target.bitrate)
-    if (target?.isVideo && target.height) abrState.uint32(21, target.height).uint32(16, target.height)
+    const targetResolution: number = target?.isVideo ? resolutionOf(target) : 0
+    if (targetResolution > 0) abrState.uint32(21, targetResolution).uint32(16, targetResolution)
     if (audio?.audioTrackId) abrState.string(69, audio.audioTrackId)
     return abrState
   }
@@ -1147,10 +1155,10 @@ export function qualityLabelOf(format: SabrFormat): string {
       ? `${format.qualityLabel}60`
       : format.qualityLabel
   }
-  const height: number = format.height ?? 0
-  if (height >= 2160) return "4K"
-  if (height >= 1440) return "2K"
-  return height > 0 ? `${height}p` : `${format.itag}`
+  const resolution: number = effectiveResolution(format.width, format.height)
+  if (resolution >= 2160) return "4K"
+  if (resolution >= 1440) return "2K"
+  return resolution > 0 ? `${resolution}p` : `${format.itag}`
 }
 
 export function audioTrackOf(format: SabrFormat): AudioStreamTrack {

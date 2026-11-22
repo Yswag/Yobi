@@ -34,7 +34,7 @@ import {
   updateSettings,
   warmStreamStart,
 } from "../services"
-import { SPONSOR_CATEGORY_LABELS } from "../utils/format"
+import { effectiveResolution, SPONSOR_CATEGORY_LABELS } from "../utils/format"
 import { biliSubtitleToVtt, toCleanVtt } from "../utils/subtitles"
 import { reportError } from "../services/errors"
 
@@ -675,9 +675,9 @@ function pickInitialQualityTrack(
     return { id: matched.id, label: matched.label }
   }
   let best: VideoQualityTrack = manifest.qualities[0]
-  let bestDelta: number = Math.abs((best.height || preferredHeight) - preferredHeight)
+  let bestDelta: number = Math.abs((effectiveResolution(best.width, best.height) || preferredHeight) - preferredHeight)
   for (const track of manifest.qualities) {
-    const delta: number = Math.abs((track.height || preferredHeight) - preferredHeight)
+    const delta: number = Math.abs((effectiveResolution(track.width, track.height) || preferredHeight) - preferredHeight)
     if (delta < bestDelta) {
       bestDelta = delta
       best = track

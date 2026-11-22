@@ -60,6 +60,13 @@ export const SPONSOR_CATEGORY_COLORS: Record<SponsorCategory, Color> = {
   poi_highlight: "rgba(255,22,132,0.85)",
 }
 
+export function effectiveResolution(width?: number | null, height?: number | null): number {
+  const w: number = width && Number.isFinite(width) && width > 0 ? width : 0
+  const h: number = height && Number.isFinite(height) && height > 0 ? height : 0
+  if (w > 0 && h > 0) return Math.min(w, h)
+  return h || w
+}
+
 export function getVideoShareUrl(item: Pick<UnifiedVideoItem, "provider" | "rawId" | "cid">): string {
   if (item.provider === "bili") {
     const raw: string = item.rawId

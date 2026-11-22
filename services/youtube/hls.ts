@@ -1,6 +1,7 @@
 
 import { fetch } from "scripting"
 import type { VideoQualityTrack } from "../../types"
+import { effectiveResolution } from "../../utils/format"
 import { createHlsRelay } from "../hlsRelay"
 import { registerVirtualManifest } from "../localProxy"
 
@@ -200,14 +201,18 @@ export async function resolveHlsManifest(masterUrl: string): Promise<ResolvedHls
 
   const sorted: HlsVariant[] = parsed.variants
     .slice()
-    .sort((a: HlsVariant, b: HlsVariant): number => (b.height ?? 0) - (a.height ?? 0) || b.bandwidth - a.bandwidth)
+    .sort(
+      (a: HlsVariant, b: HlsVariant): number =>
+        effectiveResolution(b.width, b.height) - effectiveResolution(a.width, a.height) || b.bandwidth - a.bandwidth,
+    )
 
   const qualities: VideoQualityTrack[] = []
   const seenLabels: Set<string> = new Set()
   const relayGroup: string = `yt${simpleHash(masterUrl)}`
 
   for (const variant of sorted) {
-    const label: string = qualityLabel(variant.height ?? 0, variant.frameRate)
+    const resolution: number = effectiveResolution(variant.width, variant.height)
+    const label: string = qualityLabel(resolution, variant.frameRate)
     if (seenLabels.has(label)) continue
     seenLabels.add(label)
 
@@ -227,7 +232,7 @@ export async function resolveHlsManifest(masterUrl: string): Promise<ResolvedHls
     )
 
     const quality: VideoQualityTrack = {
-      id: `hls-${variant.height ?? 0}p${variant.frameRate && variant.frameRate >= 50 ? "60" : ""}`,
+      id: `hls-${resolution}p${variant.frameRate && variant.frameRate >= 50 ? "60" : ""}`,
       label,
       width: variant.width ?? 0,
       height: variant.height ?? 0,

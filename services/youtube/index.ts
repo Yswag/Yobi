@@ -27,6 +27,7 @@ import {
   type JsonObject,
 } from "./innertube"
 import { decipherStreamingUrl } from "./nsig"
+import { effectiveResolution } from "../../utils/format"
 import { getYoutubePageTokens, refreshYoutubePageToken } from "./pageMinter"
 import { getYoutubePoTokens, type YoutubePoTokens } from "./potoken"
 import {
@@ -563,8 +564,9 @@ function closestQuality(qualities: VideoQualityTrack[], preferredHeight: number)
   let best: VideoQualityTrack | undefined
   let bestDelta: number = Number.MAX_SAFE_INTEGER
   for (const quality of qualities) {
-    if (quality.delivery === "sabr" && quality.height === 0) continue
-    const delta: number = Math.abs((quality.height || preferredHeight) - preferredHeight)
+    const resolution: number = effectiveResolution(quality.width, quality.height)
+    if (quality.delivery === "sabr" && resolution === 0) continue
+    const delta: number = Math.abs((resolution || preferredHeight) - preferredHeight)
     if (delta < bestDelta) {
       bestDelta = delta
       best = quality

@@ -28,6 +28,7 @@ import {
   writeBiliDashMpdFromPrepared,
 } from "./dashMpd"
 import { writeBiliHlsManifest } from "./hls"
+import { effectiveResolution } from "../../utils/format"
 import { fetchBiliSubtitleTracks } from "./subtitles"
 import { reportError } from "../errors"
 
@@ -554,15 +555,19 @@ function pickDefaultQuality(
   preferredHeight?: number,
 ): VideoQualityTrack | null {
   if (!qualities.length) return null
-  const preferred = preferredHeight && preferredHeight > 0 ? preferredHeight : 1080
-  const ascending = qualities
+  const preferred: number = preferredHeight && preferredHeight > 0 ? preferredHeight : 1080
+  const resolutionOf = (track: VideoQualityTrack): number => effectiveResolution(track.width, track.height)
+  const ascending: VideoQualityTrack[] = qualities
     .slice()
-    .sort((a, b) => a.height - b.height || (a.fps ?? 0) - (b.fps ?? 0))
+    .sort((a: VideoQualityTrack, b: VideoQualityTrack): number => resolutionOf(a) - resolutionOf(b) || (a.fps ?? 0) - (b.fps ?? 0))
 
-  const withinLimit = ascending.filter(track => track.height > 0 && track.height <= preferred)
+  const withinLimit: VideoQualityTrack[] = ascending.filter((track: VideoQualityTrack): boolean => {
+    const res: number = resolutionOf(track)
+    return res > 0 && res <= preferred
+  })
   if (withinLimit.length) return withinLimit[withinLimit.length - 1]
 
-  const known = ascending.filter(track => track.height > 0)
+  const known: VideoQualityTrack[] = ascending.filter((track: VideoQualityTrack): boolean => resolutionOf(track) > 0)
   if (known.length) return known[0]
   return ascending[0]
 }
