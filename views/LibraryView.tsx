@@ -39,7 +39,7 @@ import {
   SearchField,
   Thumbnail,
 } from "../ui/primitives"
-import { palette, radius, space, type } from "../ui/theme"
+import { motion, palette, radius, space, type } from "../ui/theme"
 
 export interface LibraryViewProps {
   onOpenChannel?: (provider: Provider, authorId: string, authorName: string, avatarUrl?: string) => void
@@ -452,7 +452,7 @@ export function LibraryView(props: LibraryViewProps): VirtualNode {
       <Picker
         title="媒體庫分類"
         value={tab}
-        onChanged={(next: string) => withAnimation(() => setTab(next as LibraryTab))}
+        onChanged={(next: string) => withAnimation(motion.move, () => setTab(next as LibraryTab))}
         pickerStyle="segmented"
         padding={{ horizontal: space.page }}
       >

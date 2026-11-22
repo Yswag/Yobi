@@ -38,7 +38,7 @@ import {
   SPONSOR_CATEGORY_LABELS,
   formatDuration,
 } from "../utils/format"
-import { palette, type } from "../ui/theme"
+import { motion, palette, type } from "../ui/theme"
 import { NetSpeedLabel, PlaybackStatsPanel } from "./PlaybackStats"
 
 export interface PlayerControlsOverlayProps {
@@ -52,8 +52,6 @@ export interface PlayerControlsOverlayProps {
 }
 
 const AUTO_HIDE_MS: number = 4000
-const CONTROLS_FADE_IN_SECONDS: number = 0.15
-const CONTROLS_FADE_OUT_SECONDS: number = 0.09
 const DOUBLE_TAP_MS: number = 230
 const TAP_HINT_MS: number = 650
 const PLAYBACK_RATES: number[] = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2]
@@ -731,7 +729,7 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
         opacity={controlsVisible ? 1 : 0}
         allowsHitTesting={controlsVisible}
         animation={{
-          animation: controlsVisible ? Animation.easeOut(CONTROLS_FADE_IN_SECONDS) : Animation.easeIn(CONTROLS_FADE_OUT_SECONDS),
+          animation: controlsVisible ? motion.enter : motion.exit,
           value: controlsVisible,
         }}
       >

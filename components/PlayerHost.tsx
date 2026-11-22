@@ -21,6 +21,7 @@ import {
   usePlayerStore,
 } from "../state/playerStore"
 import { MINI_BUTTON_SIZE, MiniPlayerBar } from "./MiniPlayerBar"
+import { motion } from "../ui/theme"
 import { DanmakuSheet, QualitySheet } from "./PlaybackSheets"
 import { PlayerControlsOverlay } from "./PlayerControlsOverlay"
 import { WatchView } from "../views/WatchView"
@@ -33,9 +34,9 @@ const MINI_VIDEO_INSET_LEADING: number = 10
 const MINI_VIDEO_RADIUS: number = 10
 const TAB_BAR_CLEARANCE: number = 44 + 8
 export const MINI_PLAYER_RESERVED_HEIGHT: number = MINI_HEIGHT + 8
-const MORPH_SECONDS: number = 0.38
-const FADE_OUT_SECONDS: number = 0.12
-const FADE_IN_SECONDS: number = 0.2
+const MORPH_SECONDS: number = motion.duration.morph
+const FADE_OUT_SECONDS: number = motion.duration.exit
+const FADE_IN_SECONDS: number = motion.duration.enter
 const PLAYER_DRAG_SPACE: string = "playerRoot"
 const MINIMIZE_DRAG_RATIO: number = 0.45
 
@@ -205,8 +206,8 @@ export function PlayerHost(props: {
   )
 
   const surfaceColor = fullscreen ? "black" : "systemBackground"
-  const fadeOut: Animation = Animation.easeOut(FADE_OUT_SECONDS)
-  const fadeInLate: Animation = Animation.easeOut(FADE_IN_SECONDS).delay(MORPH_SECONDS - FADE_IN_SECONDS)
+  const fadeOut: Animation = motion.exit
+  const fadeInLate: Animation = motion.enter.delay(MORPH_SECONDS - FADE_IN_SECONDS)
 
   return (
     <ZStack
@@ -224,7 +225,7 @@ export function PlayerHost(props: {
         opacity={mode === "hidden" && restsMini ? 0 : 1}
         allowsHitTesting={mode !== "hidden"}
         animation={{
-          animation: Animation.smooth({ duration: MORPH_SECONDS }),
+          animation: motion.morph,
           value: `${mode}|${fullscreen}|${drag === null ? "settled" : "drag"}`,
         }}
         sheet={{

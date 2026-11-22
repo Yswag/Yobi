@@ -46,7 +46,7 @@ import {
   usePlayerStore,
 } from "../state/playerStore"
 import { Avatar, EmptyState, SectionHeader } from "../ui/primitives"
-import { palette, providerColor, radius, space, type } from "../ui/theme"
+import { motion, palette, providerColor, radius, space, type } from "../ui/theme"
 
 export interface WatchViewProps {
   onOpenChannel?: (provider: Provider, authorId: string, authorName: string, avatarUrl?: string) => void
@@ -531,7 +531,7 @@ export function WatchView(props: WatchViewProps): VirtualNode {
         <Picker
           title="內容"
           value={tab}
-          onChanged={(next: number) => withAnimation(() => setTab(next))}
+          onChanged={(next: number) => withAnimation(motion.move, () => setTab(next))}
           pickerStyle="segmented"
           frame={{ maxWidth: "infinity", height: 32 }}
         >

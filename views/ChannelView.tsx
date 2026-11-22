@@ -37,7 +37,7 @@ import {
   SearchField,
   Skeleton,
 } from "../ui/primitives"
-import { providerColor, space, type } from "../ui/theme"
+import { motion, providerColor, space, type } from "../ui/theme"
 
 export interface ChannelViewProps {
   provider: Provider
@@ -424,7 +424,7 @@ export function ChannelView(props: ChannelViewProps): VirtualNode {
             foregroundStyle="label"
             lineLimit={1}
             opacity={titleVisible ? 1 : 0}
-            animation={{ animation: Animation.easeIn(0.18), value: titleVisible }}
+            animation={{ animation: motion.enter, value: titleVisible }}
           >
             {currentName}
           </Text>

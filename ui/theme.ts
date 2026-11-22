@@ -42,6 +42,21 @@ export const type = {
   micro: 10,
 }
 
+export const motion = {
+  enter: Animation.easeOut(0.26),
+  exit: Animation.easeIn(0.14),
+  move: Animation.smooth({ duration: 0.3 }),
+  morph: Animation.smooth({ duration: 0.38 }),
+  confirm: Animation.bouncy({ duration: 0.34, extraBounce: 0.1 }),
+  settle: Animation.spring({ response: 0.34, dampingFraction: 0.8 }),
+  duration: {
+    enter: 0.26,
+    exit: 0.14,
+    move: 0.3,
+    morph: 0.38,
+  },
+}
+
 export function providerColor(provider: Provider): Color {
   return provider === "bili" ? palette.bili : palette.yt
 }
