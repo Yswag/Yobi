@@ -1034,21 +1034,29 @@ export async function fetchBiliDanmakuXml(cid: number): Promise<string> {
   throw new Error("無法取得彈幕資料")
 }
 
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+}
+
 function emoteRuns(message: string, emotes: unknown): CommentRun[] | undefined {
   if (!message || !emotes || typeof emotes !== "object") return undefined
   const table: Record<string, any> = emotes as Record<string, any>
+  const keys: string[] = Object.keys(table).filter((key: string): boolean => typeof table[key]?.url === "string")
+  if (keys.length === 0) return undefined
+  keys.sort((a: string, b: string): number => b.length - a.length)
+  const pattern: RegExp = new RegExp(keys.map(escapeRegExp).join("|"), "g")
   const runs: CommentRun[] = []
   let last: number = 0
   let matched: boolean = false
-  const pattern: RegExp = /\[[^\[\]\n]{1,16}\]/g
   let match: RegExpExecArray | null
   while ((match = pattern.exec(message)) !== null) {
-    const emote: any = table[match[0]]
-    const url: string = typeof emote?.url === "string" ? emote.url : ""
-    if (!url) continue
+    if (!match[0]) break
     matched = true
     if (match.index > last) runs.push({ text: message.slice(last, match.index) })
-    runs.push({ imageUrl: url, alt: match[0] })
+    const emote: any = table[match[0]]
+    const run: CommentRun = { imageUrl: emote.url, alt: match[0] }
+    if (Number(emote?.meta?.size) === 2) run.scale = 2
+    runs.push(run)
     last = match.index + match[0].length
   }
   if (!matched) return undefined

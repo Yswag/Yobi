@@ -119,6 +119,7 @@ export interface CommentRun {
   text?: string
   imageUrl?: string
   alt?: string
+  scale?: number
 }
 
 export interface CommentItem {

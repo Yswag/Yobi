@@ -11,6 +11,7 @@ const SORT_OPTIONS: { key: CommentSort; label: string }[] = [
 ]
 
 const EMOJI_SIZE: number = 18
+const EMOJI_LARGE: number = 28
 const EMOJI_GAP: number = 3
 const WIDE_CHAR: RegExp = /[\u1100-\u11ff\u2e80-\u303f\u3040-\u9fff\uac00-\ud7af\uf900-\ufaff\ufe30-\ufe4f\uff00-\uff60\uffe0-\uffe6]/
 
@@ -59,13 +60,14 @@ interface LineItem {
   key: string
   imageUrl?: string
   text?: string
+  scale?: number
 }
 
 function lineNodes(line: CommentRun[]): VirtualNode[] {
   const items: LineItem[] = []
   line.forEach((run: CommentRun, runIndex: number): void => {
     if (run.imageUrl) {
-      items.push({ key: `img-${runIndex}`, imageUrl: run.imageUrl })
+      items.push({ key: `img-${runIndex}`, imageUrl: run.imageUrl, scale: run.scale })
       return
     }
     textChunks(run.text ?? "").forEach((chunk: string, chunkIndex: number): void => {
@@ -73,24 +75,33 @@ function lineNodes(line: CommentRun[]): VirtualNode[] {
     })
   })
 
+  const hasLarge: boolean = items.some((item: LineItem): boolean => (item.scale ?? 1) > 1)
+  const rowHeight: number = hasLarge ? EMOJI_LARGE : EMOJI_SIZE
+
   const nodes: VirtualNode[] = []
   items.forEach((item: LineItem, index: number): void => {
     const previous: LineItem | undefined = items[index - 1]
     if (previous && (previous.imageUrl || item.imageUrl)) nodes.push(gapNode(`gap-${index}`))
     if (item.imageUrl) {
+      const size: number = (item.scale ?? 1) > 1 ? EMOJI_LARGE : EMOJI_SIZE
       nodes.push(
         <Image
           key={item.key}
           imageUrl={item.imageUrl}
           resizable
           scaleToFit
-          frame={{ width: EMOJI_SIZE, height: EMOJI_SIZE }}
+          frame={{ width: size, height: size }}
         />,
       )
       return
     }
     nodes.push(
-      <Text key={item.key} font={type.cardTitle} foregroundStyle="label">
+      <Text
+        key={item.key}
+        font={type.cardTitle}
+        foregroundStyle="label"
+        frame={hasLarge ? { height: rowHeight, alignment: "bottom" } : undefined}
+      >
         {item.text ?? ""}
       </Text>,
     )
