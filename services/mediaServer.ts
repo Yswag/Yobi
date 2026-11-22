@@ -49,17 +49,17 @@ function latin1(bytes: Uint8Array): string {
 
 async function writeChunk(socket: Socket, bytes: Uint8Array): Promise<boolean> {
   if (socket.destroyed) return false
-  if (socket.write(bytes)) return true
   return new Promise<boolean>((resolve): void => {
+    let settled: boolean = false
     const finish = (ok: boolean): void => {
-      socket.off("drain", onDrain)
+      if (settled) return
+      settled = true
       socket.off("close", onClose)
       resolve(ok)
     }
-    const onDrain = (): void => finish(true)
     const onClose = (): void => finish(false)
-    socket.once("drain", onDrain)
     socket.once("close", onClose)
+    socket.write(bytes, (error?: Error | null): void => finish(!error))
   })
 }
 
