@@ -106,6 +106,7 @@ let audioSessionReady: boolean = false
 let openRequestSeq: number = 0
 let lastHistorySaveAt: number = 0
 let streamSwitchPending: boolean = false
+let seekPendingCount: number = 0
 let lastSkippedSegmentUuid: string = ""
 let dismissedSegmentUuid: string = ""
 let sponsorSegmentsAll: SponsorSegment[] = []
@@ -392,6 +393,12 @@ function setAudioUnavailable(unavailable: boolean): void {
   emitStore()
 }
 
+function syncStatus(next: PlaybackStatus): void {
+  if (storeState.status === next) return
+  storeState.status = next
+  emitStore()
+}
+
 function mapControllerState(rawState: VideoPlaybackState): PlaybackStatus {
   switch (rawState) {
     case "playing":
@@ -400,6 +407,7 @@ function mapControllerState(rawState: VideoPlaybackState): PlaybackStatus {
       return "paused"
     case "buffering":
     case "loading":
+    case "seeking":
       return "buffering"
     case "ready":
       return "ready"
@@ -450,6 +458,9 @@ export function getPlayerController(): VideoPlaybackController {
   ctrl.on("state", (snap: VideoPlaybackSnapshot) => {
     if (streamSwitchPending) return
     const mapped: PlaybackStatus = mapControllerState(snap.state)
+    if (seekPendingCount > 0 && storeState.status === "buffering" && (mapped === "paused" || mapped === "ready")) {
+      return
+    }
     if (mapped === "paused" || mapped === "ended") saveCurrentHistory(true)
     if (storeState.status !== mapped) {
       storeState.status = mapped
@@ -783,6 +794,7 @@ export async function openVideo(item: UnifiedVideoItem, options: OpenVideoOption
   const ctrl: VideoPlaybackController = getPlayerController()
   const settings: PlayerSettings = getSettings()
   streamSwitchPending = true
+  seekPendingCount = 0
   saveCurrentHistory(true)
   try {
     ctrl.pause()
@@ -965,23 +977,29 @@ export async function openVideo(item: UnifiedVideoItem, options: OpenVideoOption
     const url: string = manifest.primaryUrl
     const backend: PlaybackBackend = pickBackend(manifest.backend)
     const headers = manifest.headers
-    if (resumeAt > 0) warmStreamStart(url, resumeAt)
+    if (resumeAt > 0) {
+      progressState.position = resumeAt
+      progressState.activeChapter = findChapterAt(storeState.detail?.chapters, resumeAt)
+      emitProgress()
+      warmStreamStart(url, resumeAt)
+    }
     await ctrl.open(url, { backend, headers })
-    if (requestId !== openRequestSeq) return
-    streamSwitchPending = false
-    await restoreControllerSettings()
     if (requestId !== openRequestSeq) return
 
     if (resumeAt > 0) {
       await seekForResume(ctrl, resumeAt)
       if (requestId !== openRequestSeq) return
     }
+    await restoreControllerSettings()
+    if (requestId !== openRequestSeq) return
     if (item.provider === "bili" && activeCid) {
       void loadBiliDanmakuForCid(activeCid)
     }
 
+    streamSwitchPending = false
     await ctrl.play()
     if (requestId !== openRequestSeq) return
+    if (mapControllerState(ctrl.state) === "playing") syncStatus("playing")
     const pendingSubtitles = manifest.resolveSubtitles
     if (pendingSubtitles) {
       void pendingSubtitles()
@@ -996,6 +1014,7 @@ export async function openVideo(item: UnifiedVideoItem, options: OpenVideoOption
     }
   } catch (err: unknown) {
     if (requestId !== openRequestSeq) return
+    streamSwitchPending = false
     const message: string = err instanceof Error ? err.message : String(err)
     storeState.status = "error"
     storeState.errorText = message || "無法載入影片串流"
@@ -1031,13 +1050,34 @@ export async function seekTo(seconds: number): Promise<void> {
   if (isLivePlayback()) return
   const ctrl: VideoPlaybackController = getPlayerController()
   const target: number = Math.max(0, seconds)
+  const shouldShowBuffering: boolean = storeState.status === "playing" || storeState.status === "buffering"
   progressState.position = target
   progressState.activeChapter = findChapterAt(storeState.detail?.chapters, target)
   emitProgress()
+  seekPendingCount++
+  if (shouldShowBuffering && storeState.status !== "buffering") {
+    storeState.status = "buffering"
+    emitStore()
+  }
   try {
     await ctrl.seek(target)
+    if (seekPendingCount === 1 && !streamSwitchPending && shouldShowBuffering) {
+      const afterSeek: PlaybackStatus = mapControllerState(ctrl.state)
+      if (afterSeek === "ready" || afterSeek === "paused") {
+        await ctrl.play()
+      }
+    }
   } catch (error) {
     reportError("player", "seek", error)
+  } finally {
+    seekPendingCount = Math.max(0, seekPendingCount - 1)
+    if (seekPendingCount === 0 && !streamSwitchPending) {
+      const nextStatus: PlaybackStatus = mapControllerState(ctrl.state)
+      if (storeState.status !== nextStatus) {
+        storeState.status = nextStatus
+        emitStore()
+      }
+    }
   }
 }
 
@@ -1105,6 +1145,7 @@ export async function selectQuality(qualityId: string): Promise<void> {
     const url: string = resolved.url
     const backend: PlaybackBackend = pickBackend(resolved.backend)
     const headers = resolved.headers ?? manifest.headers
+    streamSwitchPending = true
     if (currentPos > 0.5 && !isLivePlayback()) warmStreamStart(url, currentPos)
     await ctrl.open(url, { backend, headers })
     if (currentPos > 0.5 && !isLivePlayback()) {
@@ -1119,10 +1160,15 @@ export async function selectQuality(qualityId: string): Promise<void> {
     if (storeState.currentItem?.provider === "bili" && activeCid && storeState.danmakuEnabled) {
       void loadBiliDanmakuForCid(activeCid)
     }
+    streamSwitchPending = false
     if (wasPlaying) {
       await ctrl.play()
+      if (mapControllerState(ctrl.state) === "playing") syncStatus("playing")
+    } else {
+      syncStatus("paused")
     }
   } catch (err: unknown) {
+    streamSwitchPending = false
     const message: string = err instanceof Error ? err.message : "切換畫質失敗"
     storeState.status = "error"
     storeState.errorText = message
@@ -1261,12 +1307,14 @@ export async function selectPage(pagePart: VideoPagePart): Promise<void> {
     const backend: PlaybackBackend = pickBackend(manifest.backend)
     const headers = manifest.headers
     await ctrl.open(url, { backend, headers })
-    streamSwitchPending = false
     await restoreControllerSettings()
     void loadBiliDanmakuForCid(pagePart.cid)
     await ensureAudioSession()
+    streamSwitchPending = false
     await ctrl.play()
+    if (mapControllerState(ctrl.state) === "playing") syncStatus("playing")
   } catch (err: unknown) {
+    streamSwitchPending = false
     storeState.status = "error"
     storeState.errorText = err instanceof Error ? err.message : "切換分P失敗"
     emitStore()
@@ -1460,6 +1508,8 @@ export async function closePlayer(): Promise<void> {
   }
   const ctrl: VideoPlaybackController = getPlayerController()
   openRequestSeq++
+  streamSwitchPending = false
+  seekPendingCount = 0
   stopLiveViewerRefresh()
   publishLiveViewers("", null)
   releaseAllPrefetchers()

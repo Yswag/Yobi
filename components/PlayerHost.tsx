@@ -373,6 +373,13 @@ export function PlayerHost(props: {
                 ) : (
                   <Rectangle fill="black" frame={{ width: geometry.videoWidth, height: geometry.videoHeight }} />
                 )}
+                <Rectangle
+                  fill="black"
+                  frame={{ width: geometry.videoWidth, height: geometry.videoHeight }}
+                  opacity={store.status === "loading" ? 1 : 0}
+                  allowsHitTesting={false}
+                  animation={{ animation: motion.exit, value: store.status === "loading" }}
+                />
                 {isExpanded ? (
                   <ZStack
                     opacity={controlsOpacity}
