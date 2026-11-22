@@ -114,6 +114,8 @@ export function PlayerHost(props: {
   )
   const openQualitySheet = useCallback((): void => setShowQualitySheet(true), [])
   const openDanmakuSheet = useCallback((): void => setShowDanmakuSheet(true), [])
+  const closeQualitySheet = useCallback((): void => setShowQualitySheet(false), [])
+  const closeDanmakuSheet = useCallback((): void => setShowDanmakuSheet(false), [])
 
   const handleMinimizeDragChanged = useCallback((dy: number, dx: number): void => {
     setDragTranslation(dy > 0 && dy > Math.abs(dx) ? dy : 0)
@@ -303,7 +305,7 @@ export function PlayerHost(props: {
         sheet={{
           isPresented: showQualitySheet,
           onChanged: setShowQualitySheet,
-          content: <QualitySheet onDone={() => setShowQualitySheet(false)} />,
+          content: <QualitySheet onDone={closeQualitySheet} />,
         }}
       >
         <ZStack
@@ -360,7 +362,7 @@ export function PlayerHost(props: {
                 sheet={{
                   isPresented: showDanmakuSheet,
                   onChanged: setShowDanmakuSheet,
-                  content: <DanmakuSheet onDone={() => setShowDanmakuSheet(false)} />,
+                  content: <DanmakuSheet onDone={closeDanmakuSheet} />,
                 }}
               >
                 {surfaceMounted ? (
@@ -394,8 +396,8 @@ export function PlayerHost(props: {
                       topSafeInset={insets.top}
                       bottomSafeInset={insets.bottom}
                       dragSpace={PLAYER_DRAG_SPACE}
-                      onOpenQualitySheet={() => setShowQualitySheet(true)}
-                      onOpenDanmakuSheet={() => setShowDanmakuSheet(true)}
+                      onOpenQualitySheet={openQualitySheet}
+                      onOpenDanmakuSheet={openDanmakuSheet}
                       onMinimizeDragChanged={handleMinimizeDragChanged}
                       onMinimizeDragEnded={handleMinimizeDragEnded}
                       onFullscreenDragChanged={handleFullscreenDragChanged}
@@ -409,7 +411,7 @@ export function PlayerHost(props: {
                   <Rectangle
                     fill="rgba(0,0,0,0.001)"
                     frame={{ width: geometry.videoWidth, height: geometry.videoHeight }}
-                    onTapGesture={() => expandFromMiniPlayer()}
+                    onTapGesture={expandFromMiniPlayer}
                   />
                 )}
               </ZStack>

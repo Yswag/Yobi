@@ -2,8 +2,8 @@
 import { fetch } from "scripting"
 import type { VideoQualityTrack } from "../../types"
 import { effectiveResolution } from "../../utils/format"
-import { createHlsRelay } from "../hlsRelay"
-import { registerVirtualManifest } from "../localProxy"
+import { clearHlsRelays, createHlsRelay } from "../hlsRelay"
+import { registerVirtualManifest, unregisterVirtualManifest } from "../localProxy"
 
 export interface HlsAudioGroup {
   groupId: string
@@ -35,6 +35,7 @@ export interface ResolvedHlsManifest {
   masterText: string
   variants: HlsVariant[]
   audioGroups: HlsAudioGroup[]
+  dispose: () => void
 }
 
 function splitAttributes(input: string): Record<string, string> {
@@ -209,6 +210,7 @@ export async function resolveHlsManifest(masterUrl: string): Promise<ResolvedHls
   const qualities: VideoQualityTrack[] = []
   const seenLabels: Set<string> = new Set()
   const relayGroup: string = `yt${simpleHash(masterUrl)}`
+  const manifestIds: string[] = []
 
   for (const variant of sorted) {
     const resolution: number = effectiveResolution(variant.width, variant.height)
@@ -225,8 +227,10 @@ export async function resolveHlsManifest(masterUrl: string): Promise<ResolvedHls
       ? { ...audio, uri: createHlsRelay(relayGroup, simpleHash(audio.uri), audio.uri) }
       : undefined
 
+    const manifestId: string = `yt-hls-${simpleHash(variant.uri)}`
+    manifestIds.push(manifestId)
     const localUrl: string = registerVirtualManifest(
-      `yt-hls-${simpleHash(variant.uri)}`,
+      manifestId,
       buildSingleVariantMaster(relayedVariant, relayedAudio),
       "application/vnd.apple.mpegurl",
     )
@@ -245,10 +249,16 @@ export async function resolveHlsManifest(masterUrl: string): Promise<ResolvedHls
     qualities.push(quality)
   }
 
+  const autoManifestId: string = `yt-hls-auto-${relayGroup}`
+  manifestIds.push(autoManifestId)
   const primaryUrl: string = registerVirtualManifest(
-    `yt-hls-auto-${relayGroup}`,
+    autoManifestId,
     relayMasterText(masterText, masterUrl, relayGroup),
     "application/vnd.apple.mpegurl",
   )
-  return { primaryUrl, qualities, masterText, variants: parsed.variants, audioGroups: parsed.audioGroups }
+  const dispose = (): void => {
+    for (const id of manifestIds) unregisterVirtualManifest(id)
+    clearHlsRelays(relayGroup)
+  }
+  return { primaryUrl, qualities, masterText, variants: parsed.variants, audioGroups: parsed.audioGroups, dispose }
 }

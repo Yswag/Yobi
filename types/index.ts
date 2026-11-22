@@ -96,6 +96,7 @@ export interface StreamManifest {
     backend: "auto" | "native" | "system" | "remux"
     headers?: Record<string, string>
   }>
+  dispose?: () => void
 }
 
 export interface VideoCollaborator {

@@ -54,6 +54,7 @@ import {
   parseAdaptiveFormats,
   pickBestAudioFormat,
   pickVideoFormats,
+  sabrQualityTrackOf,
   type SabrFormat,
   type SabrQualitySession,
   type SabrSessionConfig,
@@ -581,7 +582,8 @@ interface ResolvedRoute {
   qualities: VideoQualityTrack[]
   audioTracks: AudioStreamTrack[]
   player: JsonObject
-  prepareQuality?: (qualityId: string) => Promise<boolean>
+  prepareQuality?: (qualityId: string) => Promise<string | null>
+  dispose?: () => void
 }
 
 async function resolveHlsRoute(videoId: string): Promise<ResolvedRoute> {
@@ -592,7 +594,14 @@ async function resolveHlsRoute(videoId: string): Promise<ResolvedRoute> {
   const manifestUrl: string = String(asObject(player["streamingData"])?.["hlsManifestUrl"] ?? "")
   if (!manifestUrl) throw new Error("YouTube 沒有 HLS 串流")
   const resolved = await resolveHlsManifest(manifestUrl)
-  return { delivery: "hls", primaryUrl: resolved.primaryUrl, qualities: resolved.qualities, audioTracks: [], player }
+  return {
+    delivery: "hls",
+    primaryUrl: resolved.primaryUrl,
+    qualities: resolved.qualities,
+    audioTracks: [],
+    player,
+    dispose: resolved.dispose,
+  }
 }
 
 async function resolveSabrRoute(videoId: string): Promise<ResolvedRoute> {
@@ -616,19 +625,60 @@ async function resolveSabrRoute(videoId: string): Promise<ResolvedRoute> {
       ? (staleToken: string): Promise<string> => refreshYoutubePageToken(videoId, staleToken)
       : undefined,
   }
-  const sessions: SabrQualitySession[] = pickVideoFormats(info.formats, true).map(
-    (video: SabrFormat): SabrQualitySession => createSabrQualitySession(config, video, audio),
-  )
-  const qualities: VideoQualityTrack[] = sessions.map((entry: SabrQualitySession): VideoQualityTrack => entry.quality)
-  if (qualities.length === 0) throw new Error("YouTube SABR 沒有影片軌")
-  const prepareQuality = async (qualityId: string): Promise<boolean> => {
-    const entry: SabrQualitySession | undefined = sessions.find((item: SabrQualitySession): boolean => item.quality.id === qualityId)
-    return entry ? entry.prepare() : false
+  const videos: SabrFormat[] = pickVideoFormats(info.formats, true)
+  if (videos.length === 0) throw new Error("YouTube SABR 沒有影片軌")
+  const qualities: VideoQualityTrack[] = videos.map((video: SabrFormat): VideoQualityTrack => sabrQualityTrackOf(video))
+  const formatsById: Map<string, SabrFormat> = new Map()
+  for (let i = 0; i < videos.length; i++) formatsById.set(qualities[i].id, videos[i])
+  const activeSessions: Map<string, SabrQualitySession> = new Map()
+  let lastPreparedId: string | null = null
+
+  const prepareQuality = async (qualityId: string): Promise<string | null> => {
+    const video: SabrFormat | undefined = formatsById.get(qualityId)
+    if (!video) return null
+    let entry: SabrQualitySession | undefined = activeSessions.get(qualityId)
+    if (!entry) {
+      for (const [id, existing] of activeSessions.entries()) {
+        if (id !== lastPreparedId) {
+          existing.dispose()
+          activeSessions.delete(id)
+        }
+      }
+      entry = createSabrQualitySession(config, video, audio)
+      activeSessions.set(qualityId, entry)
+    }
+    const ready: boolean = await entry.prepare()
+    if (!ready) {
+      entry.dispose()
+      activeSessions.delete(qualityId)
+      return null
+    }
+    const track: VideoQualityTrack | undefined = qualities.find(
+      (item: VideoQualityTrack): boolean => item.id === qualityId,
+    )
+    if (track) track.url = entry.urls.hlsUrl
+    lastPreparedId = qualityId
+    return entry.urls.hlsUrl
   }
+
+  const dispose = (): void => {
+    for (const entry of activeSessions.values()) entry.dispose()
+    activeSessions.clear()
+    lastPreparedId = null
+  }
+
   const audioTracks: AudioStreamTrack[] = info.formats
     .filter((format: SabrFormat): boolean => format.isAudio && format.mimeType.startsWith("audio/mp4"))
     .map((format: SabrFormat): AudioStreamTrack => audioTrackOf(format))
-  return { delivery: "sabr", primaryUrl: qualities[0].url, qualities, audioTracks, player: info.player, prepareQuality }
+  return {
+    delivery: "sabr",
+    primaryUrl: "",
+    qualities,
+    audioTracks,
+    player: info.player,
+    prepareQuality,
+    dispose,
+  }
 }
 
 export async function resolveYoutubeStream(
@@ -642,19 +692,24 @@ export async function resolveYoutubeStream(
   const routes: Array<(id: string) => Promise<ResolvedRoute>> =
     mode === "sabr" ? [resolveSabrRoute, resolveHlsRoute] : [resolveHlsRoute, resolveSabrRoute]
   let route: ResolvedRoute | null = null
-  let chosen: VideoQualityTrack | undefined
+  let chosenUrl: string | null = null
   let firstError: unknown = null
   for (const resolve of routes) {
+    let candidate: ResolvedRoute | null = null
     try {
-      const candidate: ResolvedRoute = await resolve(videoId)
+      candidate = await resolve(videoId)
       const pick: VideoQualityTrack | undefined = preferredHeight > 0 ? closestQuality(candidate.qualities, preferredHeight) : undefined
-      if (candidate.prepareQuality && !(await candidate.prepareQuality(pick?.id ?? candidate.qualities[0].id))) {
-        throw new Error("YouTube SABR 讀不到分段索引")
+      if (candidate.prepareQuality) {
+        const preparedUrl: string | null = await candidate.prepareQuality(pick?.id ?? candidate.qualities[0].id)
+        if (!preparedUrl) throw new Error("YouTube SABR 讀不到分段索引")
+        chosenUrl = preparedUrl
+      } else {
+        chosenUrl = pick?.url ?? candidate.primaryUrl
       }
       route = candidate
-      chosen = pick
       break
     } catch (error) {
+      candidate?.dispose?.()
       if (firstError === null) firstError = error
     }
   }
@@ -666,14 +721,15 @@ export async function resolveYoutubeStream(
     }
   }
 
-  const { primaryUrl, qualities, prepareQuality } = route
+  const { primaryUrl, qualities, prepareQuality, dispose } = route
   const details: JsonObject = asObject(route.player["videoDetails"]) ?? {}
+  const resolvedPrimaryUrl: string = chosenUrl || primaryUrl
 
   return {
     provider: "yt",
     rawId: videoId,
     delivery: route.delivery,
-    primaryUrl: chosen?.url ?? primaryUrl,
+    primaryUrl: resolvedPrimaryUrl,
     backend: "native",
     qualities,
     audioTracks: route.audioTracks,
@@ -686,10 +742,13 @@ export async function resolveYoutubeStream(
       const quality: VideoQualityTrack | undefined = qualities.find(
         (entry: VideoQualityTrack): boolean => entry.id === qualityId,
       )
-      if (quality && prepareQuality && !(await prepareQuality(quality.id))) {
-        throw new Error("這個畫質暫時無法播放")
+      if (quality && prepareQuality) {
+        const preparedUrl: string | null = await prepareQuality(quality.id)
+        if (!preparedUrl) throw new Error("這個畫質暫時無法播放")
+        return { url: preparedUrl, backend: "native" }
       }
-      return { url: quality?.url ?? primaryUrl, backend: "native" }
+      return { url: quality?.url || resolvedPrimaryUrl, backend: "native" }
     },
+    dispose,
   }
 }

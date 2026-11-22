@@ -10,6 +10,7 @@ import {
   Text,
   VStack,
   useEffect,
+  useRef,
   useState,
 } from "scripting"
 import type { VirtualNode } from "scripting"
@@ -29,7 +30,7 @@ import {
   toggleWatchLater,
 } from "../services"
 import { formatDuration } from "../utils/format"
-import { openVideo } from "../state/playerStore"
+import { getPlayerStoreSnapshot, openVideo, subscribePlayerStore } from "../state/playerStore"
 import {
   ChipBar,
   EmptyState,
@@ -169,16 +170,39 @@ export function LibraryView(props: LibraryViewProps): VirtualNode {
   const [tab, setTab] = useState<LibraryTab>("history")
   const [query, setQuery] = useState<string>("")
   const [selectedPlaylistId, setSelectedPlaylistId] = useState<string | null>(null)
+  const visibleRef = useRef<boolean>(false)
+  const dirtyHistoryRef = useRef<boolean>(false)
+
+  const isVisibleNow = (): boolean =>
+    visibleRef.current && getPlayerStoreSnapshot().presentationMode !== "expanded"
+
+  const flushDirtyHistory = (): void => {
+    if (!dirtyHistoryRef.current || !isVisibleNow()) return
+    dirtyHistoryRef.current = false
+    setHistory(getWatchHistory())
+  }
 
   const refresh = (topic?: StorageTopic): void => {
-    if (!topic || topic === "history") setHistory(getWatchHistory())
+    if (!topic || topic === "history") {
+      if (!topic || isVisibleNow()) {
+        dirtyHistoryRef.current = false
+        setHistory(getWatchHistory())
+      } else {
+        dirtyHistoryRef.current = true
+      }
+    }
     if (!topic || topic === "watchLater") setWatchLater(getWatchLater())
     if (!topic || topic === "playlists") setPlaylists(getPlaylists())
   }
 
   useEffect(() => {
     refresh()
-    return subscribeStorageChanges(refresh, ["history", "watchLater", "playlists"])
+    const unsubscribeStorage: () => void = subscribeStorageChanges(refresh, ["history", "watchLater", "playlists"])
+    const unsubscribePlayer: () => void = subscribePlayerStore(flushDirtyHistory)
+    return (): void => {
+      unsubscribeStorage()
+      unsubscribePlayer()
+    }
   }, [])
 
   const keyword: string = query.trim().toLowerCase()
@@ -445,7 +469,17 @@ export function LibraryView(props: LibraryViewProps): VirtualNode {
   )
 
   return (
-    <VStack spacing={14} frame={{ maxWidth: "infinity", maxHeight: "infinity", alignment: "top" }}>
+    <VStack
+      spacing={14}
+      frame={{ maxWidth: "infinity", maxHeight: "infinity", alignment: "top" }}
+      onAppear={() => {
+        visibleRef.current = true
+        flushDirtyHistory()
+      }}
+      onDisappear={() => {
+        visibleRef.current = false
+      }}
+    >
       <PageHeader
         title="媒體庫"
         trailing={props.onOpenSettings ? <GlassIconButton icon="gearshape" onTap={props.onOpenSettings} /> : undefined}

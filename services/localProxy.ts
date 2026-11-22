@@ -41,6 +41,7 @@ interface VirtualManifest {
 }
 
 const TRY_PORTS: number[] = [18920, 18921, 18922, 18923, 0]
+const MAX_VIRTUAL_MANIFESTS: number = 32
 
 let server: HttpServer | null = null
 let serverPort: number = 0
@@ -786,8 +787,18 @@ export function warmBiliRange(id: string, start: number, end: number): void {
 export function registerVirtualManifest(id: string, content: string, contentType: string): string {
   const port: number = ensureLocalProxyStarted()
   const file: string = ensureManifestFile(contentType)
+  virtualManifests.delete(id)
+  while (virtualManifests.size >= MAX_VIRTUAL_MANIFESTS) {
+    const oldestId: string | undefined = virtualManifests.keys().next().value
+    if (oldestId === undefined) break
+    virtualManifests.delete(oldestId)
+  }
   virtualManifests.set(id, { content, contentType, file })
   return `http://127.0.0.1:${port}/manifest/${id}/${file}`
+}
+
+export function unregisterVirtualManifest(id: string): void {
+  virtualManifests.delete(id)
 }
 
 export function updateVirtualManifest(id: string, content: string): void {

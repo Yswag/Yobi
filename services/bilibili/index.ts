@@ -27,7 +27,8 @@ import {
   prepareBiliPlayback,
   writeBiliDashMpdFromPrepared,
 } from "./dashMpd"
-import { writeBiliHlsManifest } from "./hls"
+import { writeBiliHlsSession } from "./hls"
+import { unregisterMediaSession } from "../mediaServer"
 import { effectiveResolution } from "../../utils/format"
 import { fetchBiliSubtitleTracks } from "./subtitles"
 import { reportError } from "../errors"
@@ -577,14 +578,16 @@ async function buildBiliPlayable(
   cid: number,
   dash: BiliDashPayload,
   qn: number,
-): Promise<{ url: string; delivery: "hls" | "dash"; proxyFailed: boolean }> {
+): Promise<{ url: string; delivery: "hls" | "dash"; proxyFailed: boolean; sessionId?: string }> {
   const prepared = await prepareBiliPlayback(bvid, cid, dash, qn)
   if (prepared.videos[0]?.index) {
     try {
+      const hls = await writeBiliHlsSession(bvid, cid, qn, prepared)
       return {
-        url: await writeBiliHlsManifest(bvid, cid, qn, prepared),
+        url: hls.url,
         delivery: "hls",
         proxyFailed: prepared.proxyFailed,
+        sessionId: hls.sessionId,
       }
     } catch {
     }
@@ -654,7 +657,9 @@ export async function resolveBiliStream(
     const qualities = buildQualityTracks(dash)
     const selected = pickDefaultQuality(qualities, preferredHeight)
     const defaultQn = selected?.qn ?? Number(selected?.id) ?? 0
+    const sessionIds: Set<string> = new Set()
     const primary = await buildBiliPlayable(resolvedBvid, streamCid, dash, defaultQn)
+    if (primary.sessionId) sessionIds.add(primary.sessionId)
     const audioTracks = buildAudioTracks(dash)
 
     const manifest: StreamManifest = {
@@ -681,11 +686,16 @@ export async function resolveBiliStream(
           ? parsed
           : defaultQn
         const next = await buildBiliPlayable(resolvedBvid, streamCid, dash, qn)
+        if (next.sessionId) sessionIds.add(next.sessionId)
         return {
           url: next.url,
           backend: "native",
           headers: { ...BILI_HEADERS },
         }
+      },
+      dispose: (): void => {
+        for (const id of sessionIds) unregisterMediaSession(id)
+        sessionIds.clear()
       },
     }
     return manifest

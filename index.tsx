@@ -10,7 +10,7 @@ import {
   useObservable,
 } from "scripting"
 import type { VirtualNode } from "scripting"
-import { disposeYoutubePageMinter, stopLocalProxy, warmYoutubePageMinter } from "./services/index"
+import { disposeYoutubePageMinter, stopLocalProxy, stopMediaServer, warmYoutubePageMinter } from "./services/index"
 import {
   closePlayer,
   getPlayerStoreSnapshot,
@@ -61,6 +61,7 @@ function YobiRootView(): VirtualNode {
 
   const handleExitApp = useCallback((): void => {
     void closePlayer().finally(() => {
+      stopMediaServer()
       stopLocalProxy()
       dismiss()
     })
@@ -172,6 +173,7 @@ async function run(): Promise<void> {
   } finally {
     clearTimeout(warmTimer)
     await closePlayer()
+    stopMediaServer()
     stopLocalProxy()
     disposeYoutubePageMinter()
     Script.exit()

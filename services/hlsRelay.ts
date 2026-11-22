@@ -142,7 +142,8 @@ export function createHlsRelay(group: string, key: string, upstreamUrl: string):
   return registerHlsRelayHandler(id, relay)
 }
 
-export function clearHlsRelays(): void {
+export function clearHlsRelays(group?: string): void {
+  if (group !== undefined && group !== activeGroup) return
   for (const relay of relays.values()) {
     relay.dispose()
     unregisterHlsRelayHandler(relay.id)

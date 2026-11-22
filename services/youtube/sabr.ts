@@ -13,6 +13,7 @@ import {
 import { getYoutubeLocale } from "./locale"
 import {
   registerSabrSessionHandler,
+  unregisterSabrSessionHandler,
   type SabrProxySessionHandler,
   type SabrProxyUrls,
 } from "../localProxy"
@@ -35,6 +36,7 @@ const SABR_MAX_ATTEMPTS: number = 4
 const SABR_MAX_BACKOFF_MS: number = 10_000
 
 const SEGMENT_DURATION_MS: number = 5000
+const MAX_SEGMENT_CACHE_BYTES: number = 24 * 1024 * 1024
 
 export interface SabrByteRange {
   start: number
@@ -544,6 +546,7 @@ export class SabrSession {
   private requestNumber: number = 1
   private initCache: Map<number, Uint8Array> = new Map()
   private segmentCache: Map<string, Uint8Array> = new Map()
+  private segmentCacheBytes: number = 0
   private timings: Map<string, { startMs: number; durationMs: number }> = new Map()
   private sidxCache: Map<number, SidxIndex | null> = new Map()
   private initMetadata: Map<number, SabrFormatInitMetadata> = new Map()
@@ -822,7 +825,7 @@ export class SabrSession {
           this.initCache.set(itag, media)
           segments.set(`${itag}:init`, media)
         } else {
-          this.segmentCache.set(`${itag}:${header.segmentNum}`, media)
+          this.cacheSegment(`${itag}:${header.segmentNum}`, media)
           segments.set(`${itag}:${header.segmentNum}`, media)
         }
       } else if (part.type === UMP_PART.FORMAT_INITIALIZATION_METADATA) {
@@ -932,12 +935,41 @@ export class SabrSession {
 
     if (!this.config.serverAbrStreamingUrl && format.url) {
       const direct: Uint8Array | null = await this.fetchDirectSegment(format, sequence)
-      if (direct) this.segmentCache.set(key, direct)
+      if (direct) this.cacheSegment(key, direct)
       return direct
     }
 
     await this.requestWithContext(format, sequence, key)
     return this.segmentCache.get(key) ?? null
+  }
+
+  private cacheSegment(key: string, media: Uint8Array): void {
+    const previous: Uint8Array | undefined = this.segmentCache.get(key)
+    if (previous) {
+      this.segmentCacheBytes -= previous.byteLength
+      this.segmentCache.delete(key)
+    }
+    this.segmentCache.set(key, media)
+    this.segmentCacheBytes += media.byteLength
+    while (this.segmentCacheBytes > MAX_SEGMENT_CACHE_BYTES && this.segmentCache.size > 1) {
+      const oldestKey: string | undefined = this.segmentCache.keys().next().value
+      if (oldestKey === undefined) break
+      const oldest: Uint8Array | undefined = this.segmentCache.get(oldestKey)
+      this.segmentCache.delete(oldestKey)
+      if (oldest) this.segmentCacheBytes -= oldest.byteLength
+    }
+  }
+
+  dispose(): void {
+    this.segmentCache.clear()
+    this.segmentCacheBytes = 0
+    this.initCache.clear()
+    this.timings.clear()
+    this.sidxCache.clear()
+    this.initMetadata.clear()
+    this.indexedCounts.clear()
+    this.sabrContexts.clear()
+    this.activeContextTypes.clear()
   }
 
   private indexUrlFor(format: SabrFormat): string | undefined {
@@ -1147,6 +1179,23 @@ export interface SabrQualitySession {
   audio: SabrFormat
   quality: VideoQualityTrack
   prepare: () => Promise<boolean>
+  dispose: () => void
+}
+
+export function sabrQualityTrackOf(video: SabrFormat, url: string = ""): VideoQualityTrack {
+  const quality: VideoQualityTrack = {
+    id: `sabr-${video.itag}`,
+    label: qualityLabelOf(video),
+    width: video.width ?? 0,
+    height: video.height ?? 0,
+    delivery: "sabr",
+    url,
+    itag: video.itag,
+  }
+  if (video.fps) quality.fps = video.fps
+  if (video.bitrate) quality.bitrate = video.bitrate
+  if (codecOf(video.mimeType)) quality.codec = codecOf(video.mimeType)
+  return quality
 }
 
 export function qualityLabelOf(format: SabrFormat): string {
@@ -1221,19 +1270,7 @@ export function createSabrQualitySession(
   }
 
   const urls: SabrProxyUrls = registerSabrSessionHandler(sessionId, handler)
-
-  const quality: VideoQualityTrack = {
-    id: `sabr-${video.itag}`,
-    label: qualityLabelOf(video),
-    width: video.width ?? 0,
-    height: video.height ?? 0,
-    delivery: "sabr",
-    url: urls.hlsUrl,
-    itag: video.itag,
-  }
-  if (video.fps) quality.fps = video.fps
-  if (video.bitrate) quality.bitrate = video.bitrate
-  if (codecOf(video.mimeType)) quality.codec = codecOf(video.mimeType)
+  const quality: VideoQualityTrack = sabrQualityTrackOf(video, urls.hlsUrl)
 
   const prepare = async (): Promise<boolean> => {
     const [videoReady, audioReady] = await Promise.all([
@@ -1243,5 +1280,15 @@ export function createSabrQualitySession(
     return videoReady && audioReady
   }
 
-  return { session, urls, video, audio, quality, prepare }
+  let disposed: boolean = false
+  const dispose = (): void => {
+    if (disposed) return
+    disposed = true
+    unregisterSabrSessionHandler(sessionId)
+    for (const prefetcher of prefetchers.values()) prefetcher.dispose()
+    prefetchers.clear()
+    session.dispose()
+  }
+
+  return { session, urls, video, audio, quality, prepare, dispose }
 }

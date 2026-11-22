@@ -291,6 +291,7 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
   const store: PlayerStoreSnapshot = usePlayerStore()
 
   const [controlsVisible, setControlsVisible] = useState<boolean>(false)
+  const [controlsMounted, setControlsMounted] = useState<boolean>(false)
   const [scrub, setScrub] = useState<ScrubPreview | null>(null)
   const [tapHint, setTapHint] = useState<"left" | "right" | null>(null)
   const [fillHint, setFillHint] = useState<string | null>(null)
@@ -298,6 +299,7 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
   const lastTapAtRef = useRef<number | null>(null)
   const dragModeRef = useRef<"none" | "minimize" | "enterFullscreen" | "exitFullscreen" | "ignore">("none")
   const hideTimerRef = useRef<number | null>(null)
+  const unmountTimerRef = useRef<number | null>(null)
   const hintTimerRef = useRef<number | null>(null)
   const fillHintTimerRef = useRef<number | null>(null)
   const boostTimerRef = useRef<number | null>(null)
@@ -363,9 +365,27 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
   }, [store.currentItem?.id])
 
   useEffect(() => {
+    if (unmountTimerRef.current !== null) {
+      clearTimeout(unmountTimerRef.current)
+      unmountTimerRef.current = null
+    }
+    if (controlsVisible) {
+      setControlsMounted(true)
+      return
+    }
+    if (!controlsMounted) return
+    const delayMs: number = Math.ceil(motion.duration.exit * 1000) + 40
+    unmountTimerRef.current = setTimeout(() => {
+      unmountTimerRef.current = null
+      setControlsMounted(false)
+    }, delayMs)
+  }, [controlsVisible])
+
+  useEffect(() => {
     return () => {
       stopBoost()
       if (hideTimerRef.current !== null) clearTimeout(hideTimerRef.current)
+      if (unmountTimerRef.current !== null) clearTimeout(unmountTimerRef.current)
       if (hintTimerRef.current !== null) clearTimeout(hintTimerRef.current)
       if (fillHintTimerRef.current !== null) clearTimeout(fillHintTimerRef.current)
     }
@@ -937,7 +957,7 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
           value: controlsVisible,
         }}
       >
-        {renderControlsLayer()}
+        {controlsMounted || controlsVisible ? renderControlsLayer() : null}
       </ZStack>
       {renderFloatingLayer()}
     </ZStack>

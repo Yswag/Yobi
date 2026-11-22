@@ -144,12 +144,12 @@ function masterPlaylist(
   return lines.join("\n")
 }
 
-export async function writeBiliHlsManifest(
+export async function writeBiliHlsSession(
   bvid: string,
   cid: number,
   qn: number,
   prepared: { videos: PreparedTrack[]; audio: PreparedTrack | null },
-): Promise<string> {
+): Promise<{ url: string; sessionId: string }> {
   const selected: PreparedTrack | undefined = prepared.videos[0]
   if (!selected?.index) throw new Error("影片軌沒有 sidx，無法產生 HLS")
   const video: MediaTrack = toMediaTrack(selected, VIDEO_ITAG)
@@ -172,5 +172,15 @@ export async function writeBiliHlsManifest(
     media,
     tracks,
   }
-  return registerMediaSession(sessionId, session)
+  const url: string = await registerMediaSession(sessionId, session)
+  return { url, sessionId }
+}
+
+export async function writeBiliHlsManifest(
+  bvid: string,
+  cid: number,
+  qn: number,
+  prepared: { videos: PreparedTrack[]; audio: PreparedTrack | null },
+): Promise<string> {
+  return (await writeBiliHlsSession(bvid, cid, qn, prepared)).url
 }

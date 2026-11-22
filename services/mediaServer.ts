@@ -27,6 +27,7 @@ interface Session {
 const PIPELINE: number = 6
 const IDLE_TIMEOUT_MS: number = 60000
 const GRID_TRIES: number = 3
+const MAX_SESSIONS: number = 2
 
 const sessions: Map<string, Session> = new Map()
 let currentSessionId: string | null = null
@@ -330,6 +331,12 @@ export async function registerMediaSession(id: string, session: MediaSession): P
   for (const old of sessions.values()) {
     for (const access of old.access.values()) access.prefetcher.held = false
   }
+  sessions.delete(id)
+  while (sessions.size >= MAX_SESSIONS) {
+    const oldestId: string | undefined = sessions.keys().next().value
+    if (oldestId === undefined) break
+    unregisterMediaSession(oldestId)
+  }
   currentSessionId = id
   sessions.set(id, { session, access: new Map() })
   return `http://127.0.0.1:${port}/media-hls/${id}/master.m3u8`
@@ -339,6 +346,27 @@ export function unregisterMediaSession(id: string): void {
   for (const access of sessions.get(id)?.access.values() ?? []) access.prefetcher.held = false
   if (currentSessionId === id) currentSessionId = null
   sessions.delete(id)
+}
+
+export function clearMediaSessions(): void {
+  for (const entry of sessions.values()) {
+    for (const access of entry.access.values()) access.prefetcher.held = false
+  }
+  sessions.clear()
+  currentSessionId = null
+}
+
+export function stopMediaServer(): void {
+  clearMediaSessions()
+  const running: Server | null = server
+  server = null
+  serverPort = 0
+  starting = null
+  if (!running) return
+  try {
+    running.close()
+  } catch {
+  }
 }
 
 export function mediaPaths(id: string, itag: number, sequence: number): {

@@ -47,8 +47,9 @@ export * from "./storage"
 export * from "./auth"
 export * from "./sponsorblock"
 export * from "./localProxy"
+export { clearHlsRelays } from "./hlsRelay"
 export { prefetchedAheadBytes, prefetchWindow, releaseAllPrefetchers } from "./prefetch"
-export { lastMediaFailure } from "./mediaServer"
+export { clearMediaSessions, lastMediaFailure, stopMediaServer } from "./mediaServer"
 export { currentDownloadBps, lastDownloadHost } from "./netMeter"
 
 export type FeedFilter = "all" | Provider

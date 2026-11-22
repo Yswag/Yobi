@@ -10,6 +10,7 @@ import {
   TabView,
   Text,
   VStack,
+  useCallback,
   useEffect,
   useRef,
   useState,
@@ -237,6 +238,12 @@ export function WatchView(props: WatchViewProps): VirtualNode {
     setSubscribed(readSubscribed())
     setShowDescription(false)
   }, [item?.id, store.activeCid])
+
+  const relatedVideosRef = useRef<UnifiedVideoItem[] | undefined>(detail?.relatedVideos)
+  relatedVideosRef.current = detail?.relatedVideos
+  const handleSelectRelated = useCallback((selected: UnifiedVideoItem): void => {
+    void openVideo(selected, { queue: relatedVideosRef.current })
+  }, [])
 
   if (!item) {
     return <EmptyView />
@@ -481,9 +488,7 @@ export function WatchView(props: WatchViewProps): VirtualNode {
             key={`related-${video.id}`}
             item={video}
             layout="row"
-            onSelect={(selected: UnifiedVideoItem) => {
-              void openVideo(selected, { queue: detail?.relatedVideos })
-            }}
+            onSelect={handleSelectRelated}
             onOpenChannel={props.onOpenChannel}
           />
         ))}
