@@ -1,13 +1,13 @@
 
 import { fetch } from "scripting"
 import {
-  fetchNextResponse,
   getAnonymousVisitorData,
   getYoutubeAuth,
   INNERTUBE_CLIENTS,
   type JsonObject,
 } from "./innertube"
 import { getYoutubeLocale } from "./locale"
+import { fetchWatchNext } from "./watchNext"
 
 const CHAT_ENDPOINT: string = "https://www.youtube.com/youtubei/v1/live_chat/get_live_chat"
 const DEFAULT_POLL_MS: number = 2500
@@ -227,7 +227,7 @@ function parseChatResponse(response: JsonObject): LiveChatBatch {
 }
 
 export async function fetchLiveChatStart(videoId: string): Promise<LiveChatCursor | null> {
-  const next: JsonObject = await fetchNextResponse(videoId)
+  const next: JsonObject = await fetchWatchNext(videoId)
   const conversationBar: JsonObject | null = asObject(
     asObject(asObject(next["contents"])?.["twoColumnWatchNextResults"])?.["conversationBar"],
   )

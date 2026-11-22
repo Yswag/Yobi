@@ -1,7 +1,6 @@
 
 import { fetch } from "scripting"
-import type { AudioStreamTrack, VideoQualityTrack } from "../../types"
-import { effectiveResolution } from "../../utils/format"
+import type { VideoQualityTrack } from "../../types"
 import { recordDownload } from "../netMeter"
 import { parseSidx, type SidxEntry, type SidxIndex } from "../sidx"
 import {
@@ -18,18 +17,72 @@ import {
   type SabrProxyUrls,
 } from "../localProxy"
 import { Prefetcher } from "../prefetch"
+import {
+  UMP_PART,
+  ProtoWriter,
+  base64ToBytes,
+  concatBytes,
+  decodeFormatInitMetadata,
+  decodeMediaHeader,
+  decodeNextRequestPolicy,
+  decodeProto,
+  decodeSabrError,
+  decodeSabrRedirect,
+  makeClientPlaybackNonce,
+  parseUmpParts,
+  protoBytes,
+  protoInts,
+  protoNumber,
+  type ProtoField,
+  type SabrFormatInitMetadata,
+  type SabrMediaHeader,
+  type SabrNextRequestPolicy,
+  type UmpPart,
+} from "./sabrProto"
+import {
+  buildDashManifest,
+  buildHlsMasterPlaylist,
+  buildMediaPlaylist,
+  containerOf,
+  resolutionOf,
+  sabrQualityTrackOf,
+  stripSidxBoxes,
+  type SabrFormat,
+  type SabrManifestBuilderInput,
+} from "./sabrFormats"
 
-export const UMP_PART = {  MEDIA_HEADER: 20,
-  MEDIA: 21,
-  MEDIA_END: 22,
-  NEXT_REQUEST_POLICY: 35,
-  FORMAT_INITIALIZATION_METADATA: 42,
-  SABR_REDIRECT: 43,
-  SABR_ERROR: 44,
-  SABR_CONTEXT_UPDATE: 57,
-  STREAM_PROTECTION_STATUS: 58,
-  SABR_CONTEXT_SENDING_POLICY: 59,
-} as const
+export {
+  UMP_PART,
+  decodeFormatInitMetadata,
+  decodeMediaHeader,
+  decodeNextRequestPolicy,
+  decodeProto,
+  decodeSabrError,
+  decodeSabrRedirect,
+  makeClientPlaybackNonce,
+  parseUmpParts,
+  type ProtoField,
+  type ProtoValue,
+  type SabrByteRange,
+  type SabrFormatInitMetadata,
+  type SabrMediaHeader,
+  type SabrNextRequestPolicy,
+  type UmpPart,
+} from "./sabrProto"
+export {
+  audioTrackOf,
+  buildDashManifest,
+  buildHlsMasterPlaylist,
+  buildMediaPlaylist,
+  parseAdaptiveFormats,
+  pickBestAudioFormat,
+  pickVideoFormats,
+  qualityLabelOf,
+  sabrQualityTrackOf,
+  type SabrFormat,
+  type SabrManifestBuilderInput,
+  type SabrTimelineSource,
+} from "./sabrFormats"
 
 const SABR_CONTEXT_KEEP_EXISTING: number = 2
 const SABR_MAX_ATTEMPTS: number = 4
@@ -38,459 +91,9 @@ const SABR_MAX_BACKOFF_MS: number = 10_000
 const SEGMENT_DURATION_MS: number = 5000
 const MAX_SEGMENT_CACHE_BYTES: number = 24 * 1024 * 1024
 
-export interface SabrByteRange {
-  start: number
-  end: number
-}
-
-export interface SabrFormat {
-  itag: number
-  mimeType: string
-  lastModified: string
-  xtags?: string
-  bitrate: number
-  isAudio: boolean
-  isVideo: boolean
-  width?: number
-  height?: number
-  fps?: number
-  qualityLabel?: string
-  audioQuality?: string
-  approxDurationMs?: number
-  contentLength?: number
-  url?: string
-  initRange?: SabrByteRange
-  indexRange?: SabrByteRange
-  audioTrackId?: string
-  audioTrackName?: string
-  isDrc?: boolean
-}
-
 function asObject(value: unknown): JsonObject | null {
   if (value && typeof value === "object" && !Array.isArray(value)) return value as JsonObject
   return null
-}
-
-function parseRange(value: unknown): SabrByteRange | undefined {
-  const range: JsonObject | null = asObject(value)
-  if (!range) return undefined
-  const start: unknown = range["start"]
-  const end: unknown = range["end"]
-  if (start === undefined || end === undefined) return undefined
-  return { start: Number(start), end: Number(end) }
-}
-
-function lastModifiedOf(format: JsonObject): string {
-  const direct: unknown = format["lastModified"] ?? format["last_modified"] ?? format["last_modified_ms"]
-  if (direct === undefined || direct === null) return "0"
-  const text: string = String(direct)
-  return text.replace(/[^\d]/g, "") || "0"
-}
-
-export function parseAdaptiveFormats(formats: unknown[], fpsMap: Map<number, number> = new Map()): SabrFormat[] {
-  const result: SabrFormat[] = []
-  for (const entry of formats) {
-    const format: JsonObject | null = asObject(entry)
-    if (!format) continue
-    const itag: number = Number(format["itag"] ?? 0)
-    const mimeType: string = String(format["mimeType"] ?? format["mime_type"] ?? "")
-    if (!itag || !mimeType) continue
-    const audioTrack: JsonObject | null = asObject(format["audioTrack"])
-    const parsed: SabrFormat = {
-      itag,
-      mimeType,
-      lastModified: lastModifiedOf(format),
-      bitrate: Number(format["bitrate"] ?? format["averageBitrate"] ?? 0),
-      isAudio: mimeType.includes("audio"),
-      isVideo: mimeType.includes("video"),
-    }
-    if (format["xtags"] !== undefined) parsed.xtags = String(format["xtags"])
-    if (format["width"] !== undefined) parsed.width = Number(format["width"])
-    if (format["height"] !== undefined) parsed.height = Number(format["height"])
-    if (format["fps"]) parsed.fps = Number(format["fps"])
-    else if (fpsMap.has(itag)) parsed.fps = fpsMap.get(itag)
-    if (format["qualityLabel"]) parsed.qualityLabel = String(format["qualityLabel"])
-    if (format["audioQuality"]) parsed.audioQuality = String(format["audioQuality"])
-    if (format["approxDurationMs"] !== undefined) parsed.approxDurationMs = Number(format["approxDurationMs"])
-    if (format["contentLength"] !== undefined) parsed.contentLength = Number(format["contentLength"])
-    if (typeof format["url"] === "string") parsed.url = String(format["url"])
-    if (audioTrack) {
-      if (audioTrack["id"] !== undefined) parsed.audioTrackId = String(audioTrack["id"])
-      if (audioTrack["displayName"] !== undefined) parsed.audioTrackName = String(audioTrack["displayName"])
-    }
-    if (format["isDrc"] === true) parsed.isDrc = true
-    const initRange: SabrByteRange | undefined = parseRange(format["initRange"])
-    if (initRange) parsed.initRange = initRange
-    const indexRange: SabrByteRange | undefined = parseRange(format["indexRange"])
-    if (indexRange) parsed.indexRange = indexRange
-    result.push(parsed)
-  }
-  return result
-}
-
-export function pickBestAudioFormat(formats: SabrFormat[]): SabrFormat | undefined {
-  const audios: SabrFormat[] = formats.filter((format: SabrFormat): boolean => format.isAudio)
-  if (audios.length === 0) return undefined
-  const score = (format: SabrFormat): number => {
-    let value: number = format.bitrate
-    if (format.mimeType.includes("mp4")) value += 1_000_000
-    if (!format.isDrc) value += 500_000
-    return value
-  }
-  return audios.sort((a: SabrFormat, b: SabrFormat): number => score(b) - score(a))[0]
-}
-
-function resolutionOf(format: Pick<SabrFormat, "width" | "height" | "qualityLabel">): number {
-  const labeled: RegExpMatchArray | null = format.qualityLabel?.match(/(\d{3,4})p/i) ?? null
-  if (labeled) return Number(labeled[1])
-  return effectiveResolution(format.width, format.height)
-}
-
-function videoCodecScore(format: SabrFormat): number {
-  const codec: string = codecOf(format.mimeType).toLowerCase()
-  if (resolutionOf(format) >= 2160) {
-    if (codec.startsWith("av01")) return 3
-    return codec.startsWith("hvc") || codec.startsWith("hev") ? 2 : 0
-  }
-  return codec.startsWith("av01") ? 1 : 3
-}
-
-export function pickVideoFormats(formats: SabrFormat[], includeAv1: boolean = true): SabrFormat[] {
-  const videos: SabrFormat[] = formats.filter((format: SabrFormat): boolean => {
-    if (!format.isVideo || !format.mimeType.startsWith("video/mp4")) return false
-    if (!includeAv1 && format.mimeType.includes("av01")) return false
-    return true
-  })
-  const byLabel: Map<string, SabrFormat> = new Map()
-  for (const format of videos) {
-    const label: string = qualityLabelOf(format)
-    const current: SabrFormat | undefined = byLabel.get(label)
-    if (
-      !current ||
-      videoCodecScore(format) > videoCodecScore(current) ||
-      (videoCodecScore(format) === videoCodecScore(current) && format.bitrate > current.bitrate)
-    ) {
-      byLabel.set(label, format)
-    }
-  }
-  return Array.from(byLabel.values()).sort(
-    (a: SabrFormat, b: SabrFormat): number => resolutionOf(b) - resolutionOf(a) || (b.fps ?? 0) - (a.fps ?? 0),
-  )
-}
-
-export interface UmpPart {
-  type: number
-  data: Uint8Array
-}
-
-function readVarInt(bytes: Uint8Array, offset: number): [number, number] {
-  if (offset >= bytes.length) return [-1, offset]
-  const first: number = bytes[offset]
-  const byteLength: number =
-    first < 128 ? 1 : first < 192 ? 2 : first < 224 ? 3 : first < 240 ? 4 : 5
-  if (offset + byteLength > bytes.length) return [-1, offset]
-
-  if (byteLength === 1) return [first, offset + 1]
-  if (byteLength === 2) {
-    return [(first & 0x3f) | (bytes[offset + 1] << 6), offset + 2]
-  }
-  if (byteLength === 3) {
-    return [(first & 0x1f) | (bytes[offset + 1] << 5) | (bytes[offset + 2] << 13), offset + 3]
-  }
-  if (byteLength === 4) {
-    return [
-      (first & 0x0f) | (bytes[offset + 1] << 4) | (bytes[offset + 2] << 12) | (bytes[offset + 3] << 20),
-      offset + 4,
-    ]
-  }
-  const value: number =
-    (bytes[offset + 1] | (bytes[offset + 2] << 8) | (bytes[offset + 3] << 16) | (bytes[offset + 4] << 24)) >>> 0
-  return [value, offset + 5]
-}
-
-function writeVarInt(value: number, out: number[]): void {
-  if (value < 0) throw new Error("UMP VarInt 不可為負")
-  if (value < 128) {
-    out.push(value)
-  } else if (value < 16384) {
-    out.push((value & 0x3f) | 0x80, value >> 6)
-  } else if (value < 2097152) {
-    out.push((value & 0x1f) | 0xc0, (value >> 5) & 0xff, value >> 13)
-  } else if (value < 268435456) {
-    out.push((value & 0x0f) | 0xe0, (value >> 4) & 0xff, (value >> 12) & 0xff, value >> 20)
-  } else {
-    out.push(0xf0, value & 0xff, (value >> 8) & 0xff, (value >> 16) & 0xff, (value >> 24) & 0xff)
-  }
-}
-
-export function parseUmpParts(bytes: Uint8Array): UmpPart[] {
-  const parts: UmpPart[] = []
-  let offset: number = 0
-  while (offset < bytes.length) {
-    const typeResult: [number, number] = readVarInt(bytes, offset)
-    if (typeResult[0] < 0) break
-    offset = typeResult[1]
-    const sizeResult: [number, number] = readVarInt(bytes, offset)
-    if (sizeResult[0] < 0) break
-    offset = sizeResult[1]
-    const size: number = sizeResult[0]
-    if (offset + size > bytes.length) break
-    parts.push({ type: typeResult[0], data: bytes.subarray(offset, offset + size) })
-    offset += size
-  }
-  return parts
-}
-
-export type ProtoValue = number | Uint8Array
-
-export interface ProtoField {
-  field: number
-  wire: number
-  value: ProtoValue
-}
-
-class ProtoWriter {
-  private buffer: number[] = []
-
-  private varint(value: number): void {
-    let remaining: number = Math.max(0, Math.floor(value))
-    while (remaining > 0x7f) {
-      this.buffer.push((remaining & 0x7f) | 0x80)
-      remaining = Math.floor(remaining / 128)
-    }
-    this.buffer.push(remaining & 0x7f)
-  }
-
-  private tag(field: number, wire: number): void {
-    this.varint((field << 3) | wire)
-  }
-
-  uint32(field: number, value: number): ProtoWriter {
-    this.tag(field, 0)
-    this.varint(value)
-    return this
-  }
-
-  int64(field: number, value: number): ProtoWriter {
-    this.tag(field, 0)
-    this.varint(value)
-    return this
-  }
-
-  float(field: number, value: number): ProtoWriter {
-    this.tag(field, 5)
-    const buffer: ArrayBuffer = new ArrayBuffer(4)
-    new DataView(buffer).setFloat32(0, value, true)
-    const view: Uint8Array = new Uint8Array(buffer)
-    for (let i = 0; i < 4; i++) this.buffer.push(view[i])
-    return this
-  }
-
-  string(field: number, value: string): ProtoWriter {
-    const encoded: Uint8Array = new TextEncoder().encode(value)
-    this.tag(field, 2)
-    this.varint(encoded.length)
-    for (let i = 0; i < encoded.length; i++) this.buffer.push(encoded[i])
-    return this
-  }
-
-  bytes(field: number, value: Uint8Array): ProtoWriter {
-    this.tag(field, 2)
-    this.varint(value.length)
-    for (let i = 0; i < value.length; i++) this.buffer.push(value[i])
-    return this
-  }
-
-  message(field: number, builder: ProtoWriter): ProtoWriter {
-    return this.bytes(field, builder.finish())
-  }
-
-  finish(): Uint8Array {
-    return new Uint8Array(this.buffer)
-  }
-}
-
-function readProtoVarint(bytes: Uint8Array, offset: number): [number, number] {
-  let result: number = 0
-  let shift: number = 0
-  let cursor: number = offset
-  while (cursor < bytes.length) {
-    const byte: number = bytes[cursor]
-    result += (byte & 0x7f) * Math.pow(2, shift)
-    cursor++
-    if ((byte & 0x80) === 0) return [result, cursor]
-    shift += 7
-    if (shift > 49) break
-  }
-  return [0, offset]
-}
-
-export function decodeProto(bytes: Uint8Array): Map<number, ProtoField[]> {
-  const fields: Map<number, ProtoField[]> = new Map()
-  let offset: number = 0
-  while (offset < bytes.length) {
-    const tagResult: [number, number] = readProtoVarint(bytes, offset)
-    const tag: number = tagResult[0]
-    if (tagResult[1] === offset) break
-    offset = tagResult[1]
-    if (tag === 0) break
-    const field: number = tag >>> 3
-    const wire: number = tag & 7
-    let value: ProtoValue = 0
-
-    if (wire === 0) {
-      const varintResult: [number, number] = readProtoVarint(bytes, offset)
-      value = varintResult[0]
-      offset = varintResult[1]
-    } else if (wire === 2) {
-      const lengthResult: [number, number] = readProtoVarint(bytes, offset)
-      const length: number = lengthResult[0]
-      offset = lengthResult[1]
-      const end: number = Math.min(offset + length, bytes.length)
-      value = bytes.subarray(offset, end)
-      offset = end
-    } else if (wire === 1) {
-      offset += 8
-      continue
-    } else if (wire === 5) {
-      if (offset + 4 <= bytes.length) {
-        const view: DataView = new DataView(bytes.buffer, bytes.byteOffset + offset, 4)
-        value = view.getFloat32(0, true)
-      }
-      offset += 4
-    } else {
-      break
-    }
-
-    const list: ProtoField[] = fields.get(field) ?? []
-    list.push({ field, wire, value })
-    fields.set(field, list)
-  }
-  return fields
-}
-
-function protoNumber(fields: Map<number, ProtoField[]>, field: number): number | undefined {
-  const entry: ProtoField | undefined = fields.get(field)?.[0]
-  if (!entry) return undefined
-  return typeof entry.value === "number" ? entry.value : undefined
-}
-
-function protoBytes(fields: Map<number, ProtoField[]>, field: number): Uint8Array | undefined {
-  const entry: ProtoField | undefined = fields.get(field)?.[0]
-  if (!entry || typeof entry.value === "number") return undefined
-  return entry.value
-}
-
-function protoInts(fields: Map<number, ProtoField[]>, field: number): number[] {
-  const out: number[] = []
-  for (const entry of fields.get(field) ?? []) {
-    if (typeof entry.value === "number") {
-      out.push(entry.value)
-      continue
-    }
-    let offset: number = 0
-    while (offset < entry.value.length) {
-      const [value, next] = readProtoVarint(entry.value, offset)
-      if (next === offset) break
-      out.push(value)
-      offset = next
-    }
-  }
-  return out
-}
-
-function protoString(fields: Map<number, ProtoField[]>, field: number): string | undefined {
-  const value: Uint8Array | undefined = protoBytes(fields, field)
-  return value ? new TextDecoder().decode(value) : undefined
-}
-
-export interface SabrMediaHeader {
-  headerId: number
-  itag?: number
-  segmentNum?: number
-  isInitializationSegment?: boolean
-  startMs?: number
-  durationMs?: number
-  byteRangeStart?: number
-}
-
-export function decodeMediaHeader(bytes: Uint8Array): SabrMediaHeader {
-  const fields: Map<number, ProtoField[]> = decodeProto(bytes)
-  const header: SabrMediaHeader = { headerId: protoNumber(fields, 1) ?? 0 }
-  const itag: number | undefined = protoNumber(fields, 3)
-  if (itag !== undefined) header.itag = itag
-  const segmentNum: number | undefined = protoNumber(fields, 9)
-  if (segmentNum !== undefined) header.segmentNum = segmentNum
-  const isInit: number | undefined = protoNumber(fields, 8)
-  if (isInit !== undefined) header.isInitializationSegment = isInit === 1
-  const startMs: number | undefined = protoNumber(fields, 11)
-  if (startMs !== undefined) header.startMs = startMs
-  const durationMs: number | undefined = protoNumber(fields, 12)
-  if (durationMs !== undefined) header.durationMs = durationMs
-  const byteRangeStart: number | undefined = protoNumber(fields, 6)
-  if (byteRangeStart !== undefined) header.byteRangeStart = byteRangeStart
-  return header
-}
-
-export interface SabrFormatInitMetadata {
-  itag: number
-  lastModified: string
-  endSegmentNumber?: number
-  indexRange?: SabrByteRange
-}
-
-function decodeRange(bytes: Uint8Array | undefined): SabrByteRange | undefined {
-  if (!bytes) return undefined
-  const fields: Map<number, ProtoField[]> = decodeProto(bytes)
-  const start: number | undefined = protoNumber(fields, 1)
-  const end: number | undefined = protoNumber(fields, 2)
-  return start !== undefined && end !== undefined ? { start, end } : undefined
-}
-
-export function decodeFormatInitMetadata(bytes: Uint8Array): SabrFormatInitMetadata | null {
-  const fields: Map<number, ProtoField[]> = decodeProto(bytes)
-  const formatId: Uint8Array | undefined = protoBytes(fields, 2)
-  if (!formatId) return null
-  const idFields: Map<number, ProtoField[]> = decodeProto(formatId)
-  const itag: number | undefined = protoNumber(idFields, 1)
-  if (itag === undefined) return null
-  const metadata: SabrFormatInitMetadata = { itag, lastModified: String(protoNumber(idFields, 2) ?? 0) }
-  const endSegmentNumber: number | undefined = protoNumber(fields, 4)
-  if (endSegmentNumber !== undefined) metadata.endSegmentNumber = endSegmentNumber
-  const indexRange: SabrByteRange | undefined = decodeRange(protoBytes(fields, 7))
-  if (indexRange) metadata.indexRange = indexRange
-  return metadata
-}
-
-export interface SabrNextRequestPolicy {
-  playbackCookie?: Uint8Array
-  targetVideoReadaheadMs?: number
-  targetAudioReadaheadMs?: number
-  backoffTimeMs?: number
-}
-
-export function decodeNextRequestPolicy(bytes: Uint8Array): SabrNextRequestPolicy {
-  const fields: Map<number, ProtoField[]> = decodeProto(bytes)
-  const policy: SabrNextRequestPolicy = {}
-  const cookie: Uint8Array | undefined = protoBytes(fields, 7)
-  if (cookie) policy.playbackCookie = cookie
-  const video: number | undefined = protoNumber(fields, 2)
-  if (video !== undefined) policy.targetVideoReadaheadMs = video
-  const audio: number | undefined = protoNumber(fields, 1)
-  if (audio !== undefined) policy.targetAudioReadaheadMs = audio
-  const backoff: number | undefined = protoNumber(fields, 4)
-  if (backoff !== undefined) policy.backoffTimeMs = backoff
-  return policy
-}
-
-export function decodeSabrError(bytes: Uint8Array): string {
-  const fields: Map<number, ProtoField[]> = decodeProto(bytes)
-  return protoString(fields, 2) ?? protoString(fields, 1) ?? "SABR error"
-}
-
-export function decodeSabrRedirect(bytes: Uint8Array): string | undefined {
-  const fields: Map<number, ProtoField[]> = decodeProto(bytes)
-  return protoString(fields, 1)
 }
 
 export interface SabrSessionConfig {
@@ -508,33 +111,6 @@ export interface SabrSessionConfig {
   cpn?: string
   pairedItags?: { video: number; audio: number }
   refreshPoToken?: (staleToken: string) => Promise<string>
-}
-
-function base64ToBytes(value: string): Uint8Array | null {
-  if (!value) return null
-  let normalized: string = value.replace(/-/g, "+").replace(/_/g, "/").replace(/\./g, "=")
-  while (normalized.length % 4 !== 0) normalized += "="
-  const data: Data | null = Data.fromBase64String(normalized)
-  return data ? data.toUint8Array() : null
-}
-
-function concatBytes(chunks: Uint8Array[]): Uint8Array {
-  let total: number = 0
-  for (const chunk of chunks) total += chunk.length
-  const out: Uint8Array = new Uint8Array(total)
-  let offset: number = 0
-  for (const chunk of chunks) {
-    out.set(chunk, offset)
-    offset += chunk.length
-  }
-  return out
-}
-
-export function makeClientPlaybackNonce(): string {
-  const alphabet: string = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-"
-  let nonce: string = ""
-  for (let i = 0; i < 16; i++) nonce += alphabet[Math.floor(Math.random() * alphabet.length)]
-  return nonce
 }
 
 export class SabrSession {
@@ -1019,159 +595,6 @@ async function fetchRange(
   return new Uint8Array(buffer)
 }
 
-function codecOf(mimeType: string): string {
-  const index: number = mimeType.indexOf("codecs=")
-  if (index < 0) return ""
-  return mimeType
-    .slice(index + 7)
-    .replace(/["']/g, "")
-    .trim()
-}
-
-function containerOf(mimeType: string): string {
-  return mimeType.split(";")[0].trim()
-}
-
-function targetDuration(session: SabrSession, itag: number): number {
-  const count: number = session.segmentCount(itag)
-  let maxMs: number = 0
-  for (let seq = 1; seq <= count; seq++) {
-    maxMs = Math.max(maxMs, session.segmentTiming(itag, seq).durationMs)
-  }
-  return Math.max(1, Math.ceil(maxMs / 1000))
-}
-
-export interface SabrManifestBuilderInput {
-  sessionId: string
-  session: SabrSession
-  video: SabrFormat
-  audio: SabrFormat
-}
-
-function stripSidxBoxes(bytes: Uint8Array | null): Uint8Array | null {
-  if (!bytes) return bytes
-  const readSize = (offset: number): number =>
-    ((bytes[offset] << 24) | (bytes[offset + 1] << 16) | (bytes[offset + 2] << 8) | bytes[offset + 3]) >>> 0
-  const parts: Uint8Array[] = []
-  let offset: number = 0
-  let stripped: boolean = false
-  while (offset + 8 <= bytes.length) {
-    let size: number = readSize(offset)
-    const type: string = String.fromCharCode(bytes[offset + 4], bytes[offset + 5], bytes[offset + 6], bytes[offset + 7])
-    if (size === 1) size = readSize(offset + 8)
-    if (size < 8) break
-    if (type === "sidx") stripped = true
-    else parts.push(bytes.subarray(offset, offset + size))
-    offset += size
-  }
-  if (!stripped) return bytes
-  const out: Uint8Array = new Uint8Array(parts.reduce((sum: number, part: Uint8Array): number => sum + part.length, 0))
-  let cursor: number = 0
-  for (const part of parts) {
-    out.set(part, cursor)
-    cursor += part.length
-  }
-  return out
-}
-
-export function buildHlsMasterPlaylist(input: SabrManifestBuilderInput): string {
-  const { sessionId, video, audio } = input
-  const bandwidth: number = Math.max(1, video.bitrate + audio.bitrate)
-  const videoCodec: string = codecOf(video.mimeType)
-  const audioCodec: string = codecOf(audio.mimeType)
-  const codecs: string = [videoCodec, audioCodec].filter((codec: string): boolean => codec.length > 0).join(",")
-  const resolution: string = video.width && video.height ? `RESOLUTION=${video.width}x${video.height},` : ""
-  const frameRate: string = video.fps ? `FRAME-RATE=${video.fps},` : ""
-
-  return [
-    "#EXTM3U",
-    "#EXT-X-VERSION:7",
-    "#EXT-X-INDEPENDENT-SEGMENTS",
-    `#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",NAME="audio",DEFAULT=YES,AUTOSELECT=YES,URI="/hls-media/${sessionId}/${audio.itag}/playlist.m3u8"`,
-    `#EXT-X-STREAM-INF:BANDWIDTH=${bandwidth},${resolution}${frameRate}${codecs ? `CODECS="${codecs}",` : ""}AUDIO="audio"`,
-    `/hls-media/${sessionId}/${video.itag}/playlist.m3u8`,
-    "",
-  ].join("\n")
-}
-
-export function buildMediaPlaylist(input: SabrManifestBuilderInput, itag: number): string {
-  const { sessionId, session } = input
-  const count: number = session.segmentCount(itag)
-  const lines: string[] = [
-    "#EXTM3U",
-    "#EXT-X-VERSION:7",
-    `#EXT-X-TARGETDURATION:${targetDuration(session, itag)}`,
-    "#EXT-X-MEDIA-SEQUENCE:1",
-    "#EXT-X-PLAYLIST-TYPE:VOD",
-    `#EXT-X-MAP:URI="/sabr-init/${sessionId}/${itag}/init.mp4"`,
-  ]
-  for (let seq = 1; seq <= count; seq++) {
-    const timing: { startMs: number; durationMs: number } = session.segmentTiming(itag, seq)
-    const seconds: string = (timing.durationMs / 1000).toFixed(3)
-    lines.push(`#EXTINF:${seconds},`, `/sabr-seg/${sessionId}/${itag}/${seq}/seg.mp4`)
-  }
-  lines.push("#EXT-X-ENDLIST", "")
-  return lines.join("\n")
-}
-
-function appendDashRepresentation(
-  lines: string[],
-  sessionId: string,
-  session: SabrSession,
-  format: SabrFormat,
-  representationId: string,
-  includeSize: boolean,
-): void {
-  const container: string = containerOf(format.mimeType)
-  const codecs: string = codecOf(format.mimeType)
-  const bandwidth: number = Math.max(1, format.bitrate)
-  const sizeAttributes: string =
-    includeSize && format.width && format.height
-      ? ` width="${format.width}" height="${format.height}"`
-      : ""
-  lines.push(
-    `      <Representation id="${representationId}" bandwidth="${bandwidth}"${sizeAttributes}${
-      codecs ? ` codecs="${codecs}"` : ""
-    }>`,
-    `        <SegmentList timescale="1000">`,
-    `          <Initialization sourceURL="/sabr-init/${sessionId}/${format.itag}/init.mp4"/>`,
-    "          <SegmentTimeline>",
-  )
-  let start: number = 0
-  const count: number = session.segmentCount(format.itag)
-  for (let seq = 1; seq <= count; seq++) {
-    const timing: { startMs: number; durationMs: number } = session.segmentTiming(format.itag, seq)
-    lines.push(`            <S t="${start}" d="${Math.max(1, timing.durationMs)}"/>`)
-    start += Math.max(1, timing.durationMs)
-  }
-  lines.push("          </SegmentTimeline>")
-  for (let seq = 1; seq <= count; seq++) {
-    lines.push(`          <SegmentURL media="/sabr-seg/${sessionId}/${format.itag}/${seq}/seg.mp4"/>`)
-  }
-  lines.push("        </SegmentList>", "      </Representation>")
-  void container
-}
-
-export function buildDashManifest(input: SabrManifestBuilderInput): string {
-  const { sessionId, session, video, audio } = input
-  const durationSec: number = Math.max(1, Math.ceil((session.durationMs(video.itag) || 0) / 1000))
-  const lines: string[] = [
-    '<?xml version="1.0" encoding="UTF-8"?>',
-    '<MPD xmlns="urn:mpeg:dash:schema:mpd:2011"',
-    '     profiles="urn:mpeg:dash:profile:full:2011"',
-    '     type="static"',
-    `     mediaPresentationDuration="PT${durationSec}S"`,
-    '     minBufferTime="PT2S">',
-    "  <Period>",
-    `    <AdaptationSet mimeType="${containerOf(video.mimeType)}" startWithSAP="1">`,
-  ]
-  appendDashRepresentation(lines, sessionId, session, video, "v", true)
-  lines.push("    </AdaptationSet>", `    <AdaptationSet mimeType="${containerOf(audio.mimeType)}">`)
-  appendDashRepresentation(lines, sessionId, session, audio, "a", false)
-  lines.push("    </AdaptationSet>", "  </Period>", "</MPD>", "")
-  return lines.join("\n")
-}
-
 export interface SabrQualitySession {
   session: SabrSession
   urls: SabrProxyUrls
@@ -1180,49 +603,6 @@ export interface SabrQualitySession {
   quality: VideoQualityTrack
   prepare: () => Promise<boolean>
   dispose: () => void
-}
-
-export function sabrQualityTrackOf(video: SabrFormat, url: string = ""): VideoQualityTrack {
-  const quality: VideoQualityTrack = {
-    id: `sabr-${video.itag}`,
-    label: qualityLabelOf(video),
-    width: video.width ?? 0,
-    height: video.height ?? 0,
-    delivery: "sabr",
-    url,
-    itag: video.itag,
-  }
-  if (video.fps) quality.fps = video.fps
-  if (video.bitrate) quality.bitrate = video.bitrate
-  if (codecOf(video.mimeType)) quality.codec = codecOf(video.mimeType)
-  return quality
-}
-
-export function qualityLabelOf(format: SabrFormat): string {
-  if (format.qualityLabel) {
-    return format.fps && format.fps >= 50 && !format.qualityLabel.includes("60")
-      ? `${format.qualityLabel}60`
-      : format.qualityLabel
-  }
-  const resolution: number = effectiveResolution(format.width, format.height)
-  if (resolution >= 2160) return "4K"
-  if (resolution >= 1440) return "2K"
-  return resolution > 0 ? `${resolution}p` : `${format.itag}`
-}
-
-export function audioTrackOf(format: SabrFormat): AudioStreamTrack {
-  const track: AudioStreamTrack = {
-    id: `sabr-audio-${format.itag}`,
-    label: format.audioTrackName ?? format.audioQuality ?? `${Math.round(format.bitrate / 1000)}kbps`,
-    bitrate: format.bitrate,
-    codec: codecOf(format.mimeType),
-    mimeType: format.mimeType,
-    url: "",
-    itag: format.itag,
-  }
-  if (format.initRange) track.initRange = `${format.initRange.start}-${format.initRange.end}`
-  if (format.indexRange) track.indexRange = `${format.indexRange.start}-${format.indexRange.end}`
-  return track
 }
 
 export function createSabrQualitySession(

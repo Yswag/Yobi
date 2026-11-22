@@ -12,6 +12,7 @@ import {
   type RangeReadResult,
 } from "../localProxy"
 import type { MediaStreamAccess } from "../mediaServer"
+import { notifyBiliLineSwitch, setBiliLineSwitchListener } from "./hooks"
 import {
   hostOf,
   isLineBanned,
@@ -195,11 +196,7 @@ async function fetchBiliAttempt(
   }
 }
 
-let biliLineSwitchListener: ((host: string) => void) | null = null
-
-export function setBiliLineSwitchListener(listener: ((host: string) => void) | null): void {
-  biliLineSwitchListener = listener
-}
+export { setBiliLineSwitchListener }
 
 function markWaiting(source: BiliFileSource, index: number): void {
   source.playhead = index
@@ -223,9 +220,9 @@ function refreshPrimary(source: BiliFileSource, announce: boolean): void {
   if (!forced && Date.now() - source.primarySince < BILI_PRIMARY_DWELL_MS) return
   source.primary = best
   source.primarySince = Date.now()
-  if (!announce || !biliLineSwitchListener) return
+  if (!announce) return
   try {
-    biliLineSwitchListener(best)
+    notifyBiliLineSwitch(best)
   } catch (error) {
     reportError("proxy", "lineSwitch.listener", error)
   }

@@ -1,11 +1,9 @@
 import { HStack, Image, ScrollView, Text, VStack, useEffect, useRef, useState } from "scripting"
 import type { Color, VirtualNode } from "scripting"
-import {
-  fetchLiveChatBatch,
-  fetchLiveChatStart,
-  type LiveChatCursor,
-  type LiveChatMessage,
-  type LiveChatRun,
+import type {
+  LiveChatCursor,
+  LiveChatMessage,
+  LiveChatRun,
 } from "../services/youtube/liveChat"
 import { Avatar, EmptyState } from "../ui/primitives"
 import { palette, space, type } from "../ui/theme"
@@ -156,8 +154,10 @@ export function LiveChat(props: LiveChatProps): VirtualNode {
     }
     const tick = async (): Promise<void> => {
       try {
+        const liveChatMod = await import("../services/youtube/liveChat")
+        if (disposedRef.current) return
         if (!cursorRef.current) {
-          const start: LiveChatCursor | null = await fetchLiveChatStart(props.videoId)
+          const start: LiveChatCursor | null = await liveChatMod.fetchLiveChatStart(props.videoId)
           if (disposedRef.current) return
           if (!start) {
             setStatus("unavailable")
@@ -166,7 +166,7 @@ export function LiveChat(props: LiveChatProps): VirtualNode {
           cursorRef.current = start
         }
         const startedAt: number = Date.now()
-        const batch = await fetchLiveChatBatch(props.videoId, cursorRef.current)
+        const batch = await liveChatMod.fetchLiveChatBatch(props.videoId, cursorRef.current)
         const elapsed: number = Date.now() - startedAt
         if (disposedRef.current) return
         push(batch.messages)

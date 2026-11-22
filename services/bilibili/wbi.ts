@@ -108,6 +108,7 @@ interface WbiKeyCache {
 }
 
 let wbiKeyCache: WbiKeyCache | null = null
+let wbiKeyPending: Promise<{ imgKey: string; subKey: string }> | null = null
 
 interface BuvidCache {
   buvid3: string
@@ -116,6 +117,7 @@ interface BuvidCache {
 }
 
 let buvidCache: BuvidCache | null = null
+let buvidPending: Promise<BuvidCache | null> | null = null
 
 function extractKey(url: unknown): string {
   if (typeof url !== "string" || !url) return ""
@@ -135,20 +137,7 @@ function parseCookieHeader(header: string): Map<string, string> {
   return map
 }
 
-async function getBuvid(): Promise<BuvidCache | null> {
-  if (buvidCache && Date.now() - buvidCache.at < BUVID_TTL) return buvidCache
-
-  const stored = Storage.get<BuvidCache>(BUVID_KEY)
-  if (
-    stored &&
-    typeof stored.buvid3 === "string" &&
-    stored.buvid3.length > 0 &&
-    Date.now() - stored.at < BUVID_TTL
-  ) {
-    buvidCache = stored
-    return stored
-  }
-
+async function fetchBuvid(): Promise<BuvidCache | null> {
   try {
     const res = await fetch(SPI_URL, {
       headers: {
@@ -171,6 +160,28 @@ async function getBuvid(): Promise<BuvidCache | null> {
   } catch {
     return buvidCache
   }
+}
+
+async function getBuvid(): Promise<BuvidCache | null> {
+  if (buvidCache && Date.now() - buvidCache.at < BUVID_TTL) return buvidCache
+
+  const stored = Storage.get<BuvidCache>(BUVID_KEY)
+  if (
+    stored &&
+    typeof stored.buvid3 === "string" &&
+    stored.buvid3.length > 0 &&
+    Date.now() - stored.at < BUVID_TTL
+  ) {
+    buvidCache = stored
+    return stored
+  }
+
+  if (!buvidPending) {
+    buvidPending = fetchBuvid().finally((): void => {
+      buvidPending = null
+    })
+  }
+  return buvidPending
 }
 
 export async function getBiliCookieHeader(): Promise<string> {
@@ -196,11 +207,7 @@ export async function getBiliRequestHeaders(): Promise<Record<string, string>> {
   }
 }
 
-export async function getWbiKeys(): Promise<{ imgKey: string; subKey: string }> {
-  if (wbiKeyCache && Date.now() - wbiKeyCache.at < WBI_TTL) {
-    return { imgKey: wbiKeyCache.imgKey, subKey: wbiKeyCache.subKey }
-  }
-
+async function fetchWbiKeys(): Promise<{ imgKey: string; subKey: string }> {
   try {
     const res = await fetch(NAV_URL, { headers: await getBiliRequestHeaders() })
     if (res.ok) {
@@ -221,6 +228,19 @@ export async function getWbiKeys(): Promise<{ imgKey: string; subKey: string }> 
   }
 
   return { imgKey: "", subKey: "" }
+}
+
+export async function getWbiKeys(): Promise<{ imgKey: string; subKey: string }> {
+  if (wbiKeyCache && Date.now() - wbiKeyCache.at < WBI_TTL) {
+    return { imgKey: wbiKeyCache.imgKey, subKey: wbiKeyCache.subKey }
+  }
+
+  if (!wbiKeyPending) {
+    wbiKeyPending = fetchWbiKeys().finally((): void => {
+      wbiKeyPending = null
+    })
+  }
+  return wbiKeyPending
 }
 
 function mixinKeyFor(imgKey: string, subKey: string): string {

@@ -1,7 +1,4 @@
 import { fetch } from "scripting"
-import { ASTRING_SOURCE } from "./vendor/astring"
-import { MERIYAH_SOURCE } from "./vendor/meriyah"
-import { YT_SOLVER_SOURCE } from "./vendor/ytSolver"
 
 interface SolverResponse {
   type: "result" | "error"
@@ -19,6 +16,7 @@ interface SolverResult {
 type Solver = (request: Record<string, unknown>) => SolverResult
 
 let solver: Solver | null = null
+let solverLoading: Promise<Solver> | null = null
 const MAX_PLAYERS: number = 4
 const preprocessed: Map<string, Promise<string>> = new Map()
 
@@ -28,20 +26,39 @@ function loadUmd(source: string): unknown {
   return module.exports
 }
 
-function getSolver(): Solver {
-  if (solver) return solver
-  const meriyah: unknown = loadUmd(MERIYAH_SOURCE)
-  const astring: unknown = loadUmd(ASTRING_SOURCE)
-  solver = new Function("meriyah", "astring", `${YT_SOLVER_SOURCE}; return jsc;`)(meriyah, astring) as Solver
-  return solver
+function getSolver(): Promise<Solver> {
+  if (solver) return Promise.resolve(solver)
+  if (!solverLoading) {
+    solverLoading = Promise.all([
+      import("./vendor/meriyah"),
+      import("./vendor/astring"),
+      import("./vendor/ytSolver"),
+    ])
+      .then(([meriyahMod, astringMod, ytSolverMod]): Solver => {
+        const meriyah: unknown = loadUmd(meriyahMod.MERIYAH_SOURCE)
+        const astring: unknown = loadUmd(astringMod.ASTRING_SOURCE)
+        solver = new Function("meriyah", "astring", `${ytSolverMod.YT_SOLVER_SOURCE}; return jsc;`)(
+          meriyah,
+          astring,
+        ) as Solver
+        return solver
+      })
+      .finally((): void => {
+        solverLoading = null
+      })
+  }
+  return solverLoading
 }
 
 async function loadPlayer(jsUrl: string): Promise<string> {
   const url: string = jsUrl.startsWith("http") ? jsUrl : `https://www.youtube.com${jsUrl}`
-  const response = await fetch(url, { timeout: 25, debugLabel: "Yobi player js" })
+  const [response, runSolver] = await Promise.all([
+    fetch(url, { timeout: 25, debugLabel: "Yobi player js" }),
+    getSolver(),
+  ])
   if (!response.ok) throw new Error(`播放器腳本下載失敗：HTTP ${response.status}`)
   const player: string = await response.text()
-  const result: SolverResult = getSolver()({
+  const result: SolverResult = runSolver({
     type: "player",
     player,
     requests: [],
@@ -71,9 +88,13 @@ export function warmThrottlingDecoder(jsUrl: string): void {
 }
 
 async function solve(jsUrl: string, values: string[]): Promise<Record<string, string>> {
-  const result: SolverResult = getSolver()({
+  const [runSolver, preprocessedPlayerText] = await Promise.all([
+    getSolver(),
+    preprocessedPlayer(jsUrl),
+  ])
+  const result: SolverResult = runSolver({
     type: "preprocessed",
-    preprocessed_player: await preprocessedPlayer(jsUrl),
+    preprocessed_player: preprocessedPlayerText,
     requests: [{ type: "n", challenges: values }],
   })
   const response: SolverResponse | undefined = result.responses?.[0]

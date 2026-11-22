@@ -37,13 +37,12 @@ import {
   searchBiliVideos,
 } from "./bilibili/index"
 
-export { parseYoutubeInput } from "./youtube"
-export { getYoutubeLiveViewers } from "./youtube"
+export { parseYoutubeInput } from "./youtube/input"
+export { getYoutubeLiveViewers } from "./youtube/index"
 export { invalidateYoutubeAuthCache } from "./youtube/innertube"
-export { disposeYoutubePageMinter, warmYoutubePageMinter } from "./youtube/pageMinter"
-export { parseBiliInput, fetchBiliDanmakuXml, resolveBiliShortUrl } from "./bilibili/index"
-export { setBiliLineSwitchListener } from "./bilibili/chunkSource"
-export { warmBiliStart as warmStreamStart } from "./bilibili/dashMpd"
+export { parseBiliInput } from "./bilibili/input"
+export { fetchBiliDanmakuXml, resolveBiliShortUrl } from "./bilibili/index"
+export { setBiliLineSwitchListener, warmBiliStartLazy as warmStreamStart } from "./bilibili/hooks"
 export * from "./storage"
 export * from "./auth"
 export * from "./sponsorblock"
@@ -52,6 +51,21 @@ export { clearHlsRelays } from "./hlsRelay"
 export { prefetchedAheadBytes, prefetchWindow, releaseAllPrefetchers } from "./prefetch"
 export { clearMediaSessions, lastMediaFailure, stopMediaServer } from "./mediaServer"
 export { currentDownloadBps, lastDownloadHost } from "./netMeter"
+
+let pageMinterModule: typeof import("./youtube/pageMinter") | null = null
+
+export function warmYoutubePageMinter(seedVideoId?: string): void {
+  void import("./youtube/pageMinter")
+    .then((mod): void => {
+      pageMinterModule = mod
+      mod.warmYoutubePageMinter(seedVideoId)
+    })
+    .catch((): void => undefined)
+}
+
+export function disposeYoutubePageMinter(): void {
+  pageMinterModule?.disposeYoutubePageMinter()
+}
 
 export type FeedFilter = "all" | Provider
 

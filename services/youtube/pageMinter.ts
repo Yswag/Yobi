@@ -1,6 +1,12 @@
-import { warmThrottlingDecoder } from "./nsig"
+import { getSettings } from "../storage"
 import { setYoutubeLocale } from "./locale"
 import type { YoutubePoTokens, YoutubeWebConfig } from "./potoken"
+
+function warmDecoderLazy(jsUrl: string): void {
+  void import("./nsig")
+    .then((mod): void => mod.warmThrottlingDecoder(jsUrl))
+    .catch((): void => undefined)
+}
 
 const PAGE_ORIGIN: string = "https://m.youtube.com"
 const USER_AGENT: string =
@@ -132,7 +138,7 @@ async function openPage(seedVideoId: string): Promise<MintPage> {
       if (token) {
         tokens.set(seedVideoId, token)
         const config: YoutubeWebConfig = await readConfig(web)
-        warmThrottlingDecoder(config.jsUrl)
+        if (getSettings().youtubeStreamMode === "sabr") warmDecoderLazy(config.jsUrl)
         return { web, config, tokens }
       }
       await sleep(POLL_MS)
@@ -170,11 +176,14 @@ export function warmYoutubePageMinter(seedVideoId: string = "jNQXAC9IVRw"): void
 
 export async function getYoutubePageTokens(videoId: string): Promise<YoutubePoTokens> {
   const page: MintPage = await pageFor(videoId)
+  warmDecoderLazy(page.config.jsUrl)
   try {
     return await tokensFrom(page, videoId)
   } catch (_error) {
     retire(page)
-    return tokensFrom(await pageFor(videoId), videoId)
+    const nextPage: MintPage = await pageFor(videoId)
+    warmDecoderLazy(nextPage.config.jsUrl)
+    return tokensFrom(nextPage, videoId)
   }
 }
 

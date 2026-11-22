@@ -135,9 +135,9 @@ export const INNERTUBE_CLIENTS: Record<InnertubeClientKey, InnertubeClientConfig
 }
 
 let anonymousVisitorData: string | null = null
+let anonymousVisitorPending: Promise<string | undefined> | null = null
 
-export async function getAnonymousVisitorData(): Promise<string | undefined> {
-  if (anonymousVisitorData) return anonymousVisitorData
+async function fetchAnonymousVisitorData(): Promise<string | undefined> {
   try {
     const response = await fetch("https://www.youtube.com/youtubei/v1/visitor_id?prettyPrint=false", {
       method: "POST",
@@ -153,6 +153,16 @@ export async function getAnonymousVisitorData(): Promise<string | undefined> {
     return undefined
   }
   return anonymousVisitorData ?? undefined
+}
+
+export async function getAnonymousVisitorData(): Promise<string | undefined> {
+  if (anonymousVisitorData) return anonymousVisitorData
+  if (!anonymousVisitorPending) {
+    anonymousVisitorPending = fetchAnonymousVisitorData().finally((): void => {
+      anonymousVisitorPending = null
+    })
+  }
+  return anonymousVisitorPending
 }
 
 let cachedAuth: YoutubeAuthSnapshot | null = null

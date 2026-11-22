@@ -1,5 +1,6 @@
 import { Path, fetch } from "scripting"
 import { registerVirtualManifest } from "../localProxy"
+import { registerBiliWarmHandler } from "./hooks"
 import { registerBiliFileSource, seedBiliHead, warmBiliRange } from "./chunkSource"
 import { parseSidx, type SidxIndex } from "../sidx"
 import { reportError } from "../errors"
@@ -375,6 +376,8 @@ export function warmBiliStart(manifestUrl: string, seconds: number): void {
     warmBiliRange(track.sourceId, entries[n].offset, last.offset + last.size - 1)
   }
 }
+
+registerBiliWarmHandler(warmBiliStart)
 
 async function loadSegmentIndex(
   cdnUrl: string,
