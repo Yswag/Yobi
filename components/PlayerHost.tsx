@@ -139,8 +139,9 @@ export function PlayerHost(props: {
 
   const shortSide: number = Math.min(Device.screen.width, Device.screen.height)
   const longSide: number = Math.max(Device.screen.width, Device.screen.height)
-  const screenWidth: number = fullscreen ? longSide : shortSide
-  const screenHeight: number = fullscreen ? shortSide : longSide
+  const landscapeFullscreen: boolean = fullscreen && !store.isPortraitFullscreen
+  const screenWidth: number = landscapeFullscreen ? longSide : shortSide
+  const screenHeight: number = landscapeFullscreen ? shortSide : longSide
 
   const expanded: CardGeometry = {
     width: screenWidth,
@@ -226,7 +227,7 @@ export function PlayerHost(props: {
         allowsHitTesting={mode !== "hidden"}
         animation={{
           animation: motion.morph,
-          value: `${mode}|${fullscreen}|${drag === null ? "settled" : "drag"}`,
+          value: `${mode}|${fullscreen}|${store.isPortraitFullscreen}|${drag === null ? "settled" : "drag"}`,
         }}
         sheet={{
           isPresented: showQualitySheet,
@@ -305,6 +306,8 @@ export function PlayerHost(props: {
                     <PlayerControlsOverlay
                       width={geometry.videoWidth}
                       height={geometry.videoHeight}
+                      topSafeInset={insets.top}
+                      bottomSafeInset={insets.bottom}
                       dragSpace={PLAYER_DRAG_SPACE}
                       onOpenQualitySheet={() => setShowQualitySheet(true)}
                       onOpenDanmakuSheet={() => setShowDanmakuSheet(true)}

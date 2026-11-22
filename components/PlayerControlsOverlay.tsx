@@ -45,6 +45,8 @@ import { NetSpeedLabel, PlaybackStatsPanel } from "./PlaybackStats"
 export interface PlayerControlsOverlayProps {
   width: number
   height: number
+  topSafeInset?: number
+  bottomSafeInset?: number
   dragSpace: string
   onOpenQualitySheet?: () => void
   onOpenDanmakuSheet?: () => void
@@ -300,8 +302,13 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
     }
   }, [])
 
+  const landscapeFullscreen: boolean = store.isFullscreen && !store.isPortraitFullscreen
+  const portraitFullscreen: boolean = store.isFullscreen && store.isPortraitFullscreen
   const sideSafeInset: number = Math.max(Device.safeAreaInsets?.leading ?? 0, Device.safeAreaInsets?.trailing ?? 0)
-  const edgeInset: number = store.isFullscreen ? Math.max(24, sideSafeInset) : 12
+  const edgeInset: number = landscapeFullscreen ? Math.max(24, sideSafeInset) : portraitFullscreen ? 16 : 12
+  const topInset: number = portraitFullscreen ? Math.max(14, props.topSafeInset ?? 0) : store.isFullscreen ? 14 : 8
+  const bottomInset: number = portraitFullscreen ? Math.max(20, props.bottomSafeInset ?? 34) : store.isFullscreen ? 10 : 4
+  const floatingBottomInset: number = portraitFullscreen ? bottomInset + 84 : 56
   const trackWidth: number = Math.max(1, props.width - edgeInset * 2)
   const barWidth: number = Math.max(1, trackWidth - 4 - MIN_HIT_SIZE)
 
@@ -400,19 +407,24 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
   }
 
   function renderScrims(): VirtualNode {
-    const edge: number = Math.min(EDGE_SCRIM_HEIGHT, Math.round(props.height * 0.38))
+    const maxEdge: number = Math.round(props.height * 0.38)
+    const topEdge: number = Math.min(portraitFullscreen ? topInset + EDGE_SCRIM_HEIGHT : EDGE_SCRIM_HEIGHT, maxEdge)
+    const bottomEdge: number = Math.min(
+      portraitFullscreen ? bottomInset + EDGE_SCRIM_HEIGHT + 24 : EDGE_SCRIM_HEIGHT,
+      maxEdge,
+    )
     return (
       <ZStack frame={{ width: props.width, height: props.height }} allowsHitTesting={false}>
         <Rectangle fill="rgba(0,0,0,0.22)" frame={{ width: props.width, height: props.height }} />
         <VStack spacing={0} frame={{ width: props.width, height: props.height }}>
           <Rectangle
             fill={gradient("linear", { colors: ["rgba(0,0,0,0.6)", "rgba(0,0,0,0)"], startPoint: "top", endPoint: "bottom" })}
-            frame={{ width: props.width, height: edge }}
+            frame={{ width: props.width, height: topEdge }}
           />
           <Spacer />
           <Rectangle
             fill={gradient("linear", { colors: ["rgba(0,0,0,0)", "rgba(0,0,0,0.7)"], startPoint: "top", endPoint: "bottom" })}
-            frame={{ width: props.width, height: edge }}
+            frame={{ width: props.width, height: bottomEdge }}
           />
         </VStack>
       </ZStack>
@@ -431,14 +443,14 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
       <ZStack frame={{ width: props.width, height: props.height }}>
         {renderScrims()}
         <VStack spacing={0} frame={{ width: props.width, height: props.height }}>
-          <HStack spacing={10} padding={{ horizontal: edgeInset, top: store.isFullscreen ? 14 : 8 }}>
+          <HStack spacing={10} padding={{ horizontal: edgeInset, top: topInset }}>
             <GlassCircle
               icon={store.isFullscreen ? "chevron.left" : "chevron.down"}
               size={34}
               iconSize={14}
               onTap={handleBack}
             />
-            {store.isFullscreen ? (
+            {landscapeFullscreen ? (
               <Text
                 font={type.cardTitle + 1}
                 fontWeight="semibold"
@@ -531,7 +543,7 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
 
           <Spacer />
 
-          <HStack spacing={store.isFullscreen ? 44 : 28}>
+          <HStack spacing={landscapeFullscreen ? 44 : store.isFullscreen ? 32 : 28}>
             {store.currentItem?.isLive ? null : (
               <GlassCircle icon="gobackward.10" size={44} iconSize={18} onTap={() => void seekBy(-10)} />
             )}
@@ -555,12 +567,26 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
 
           <Spacer />
 
+          {portraitFullscreen && title ? (
+            <HStack spacing={0} padding={{ horizontal: edgeInset, bottom: 6 }} frame={{ maxWidth: "infinity", alignment: "leading" }}>
+              <Text
+                font={type.cardTitle + 1}
+                fontWeight="semibold"
+                foregroundStyle={palette.onMedia}
+                lineLimit={1}
+                shadow={{ color: "rgba(0,0,0,0.4)", radius: 4 }}
+              >
+                {title}
+              </Text>
+            </HStack>
+          ) : null}
+
           <ProgressBar
             active={controlsVisible}
             trackWidth={trackWidth}
             barWidth={barWidth}
             edgeInset={edgeInset}
-            bottomInset={store.isFullscreen ? 10 : 4}
+            bottomInset={bottomInset}
             fullscreen={store.isFullscreen}
             scrub={scrub}
             onScrub={handleScrub}
@@ -580,7 +606,7 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
       <ZStack frame={{ width: props.width, height: props.height }}>
         {store.isBoosting2x ? (
           <VStack spacing={0} frame={{ width: props.width, height: props.height }}>
-            <HStack spacing={0} padding={{ top: 14 }}>
+            <HStack spacing={0} padding={{ top: portraitFullscreen ? topInset : 14 }}>
               <OverlayCapsule>
                 <Image systemName="forward.fill" font={11} foregroundStyle={palette.onMedia} />
                 <Text font={type.meta} fontWeight="semibold" foregroundStyle={palette.onMedia}>2× 快轉</Text>
@@ -634,7 +660,7 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
             frame={{ width: props.width, height: props.height, alignment: "topLeading" }}
             allowsHitTesting={false}
           >
-            <VStack padding={{ leading: edgeInset, top: controlsVisible ? (store.isFullscreen ? 64 : 56) : 10 }}>
+            <VStack padding={{ leading: edgeInset, top: controlsVisible ? topInset + 50 : portraitFullscreen ? topInset : 10 }}>
               <PlaybackStatsPanel />
             </VStack>
           </ZStack>
@@ -674,7 +700,7 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
           <ZStack
             frame={{ width: props.width, height: props.height, alignment: "bottomLeading" }}
           >
-            <HStack spacing={0} padding={{ leading: edgeInset, bottom: 56 }}>
+            <HStack spacing={0} padding={{ leading: edgeInset, bottom: floatingBottomInset }}>
               <OverlayCapsule>
                 <Image systemName="forward.end.fill" font={11} foregroundStyle={palette.success} />
                 <Text font={type.meta} foregroundStyle={palette.onMedia} lineLimit={1}>{store.skippedToast}</Text>
@@ -687,7 +713,7 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
           <ZStack
             frame={{ width: props.width, height: props.height, alignment: "bottomTrailing" }}
           >
-            <HStack spacing={6} padding={{ trailing: edgeInset, bottom: 56 }}>
+            <HStack spacing={6} padding={{ trailing: edgeInset, bottom: floatingBottomInset }}>
               <Button action={() => skipActiveSponsorSegment()} buttonStyle="plain">
                 <HStack
                   spacing={6}

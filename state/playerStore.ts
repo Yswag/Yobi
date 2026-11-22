@@ -68,6 +68,7 @@ export interface PlayerStoreSnapshot {
   activeCid?: number
   activePage: number
   isFullscreen: boolean
+  isPortraitFullscreen: boolean
   isPiPActive: boolean
   pipAvailable: boolean
   audioUnavailable: boolean
@@ -144,6 +145,7 @@ let storeState: PlayerStoreSnapshot = {
   activeCid: undefined,
   activePage: 1,
   isFullscreen: false,
+  isPortraitFullscreen: false,
   isPiPActive: false,
   pipAvailable: false,
   audioUnavailable: false,
@@ -934,6 +936,7 @@ export async function openVideo(item: UnifiedVideoItem, options: OpenVideoOption
     storeState.selectedQualityId = picked.id
     storeState.selectedQualityLabel = picked.label
     storeState.activeCid = activeCid
+    if (storeState.isFullscreen) syncFullscreenOrientation()
     applySponsorSegmentsForCid()
     if (manifest.duration > 0) {
       progressState.duration = manifest.duration
@@ -1243,6 +1246,7 @@ export async function selectPage(pagePart: VideoPagePart): Promise<void> {
     storeState.manifest = manifest
     storeState.selectedQualityId = picked.id
     storeState.selectedQualityLabel = picked.label
+    if (storeState.isFullscreen) syncFullscreenOrientation()
     if (manifest.duration > 0) {
       progressState.duration = manifest.duration
       emitProgress()
@@ -1318,21 +1322,46 @@ export function dismissActiveSponsorSegment(): void {
   emitStore()
 }
 
-export function setFullscreen(fullscreen: boolean): void {
-  if (storeState.isFullscreen === fullscreen) return
+function isCurrentVideoPortrait(): boolean {
+  const manifest: StreamManifest | null = storeState.manifest
+  if (!manifest) return false
+  const selected: VideoQualityTrack | undefined = manifest.qualities.find(
+    (track: VideoQualityTrack): boolean => track.id === storeState.selectedQualityId,
+  )
+  const track: VideoQualityTrack | undefined =
+    selected && selected.width > 0 && selected.height > 0
+      ? selected
+      : manifest.qualities.find((entry: VideoQualityTrack): boolean => entry.width > 0 && entry.height > 0)
+  return Boolean(track && track.height > track.width)
+}
+
+function applyFullscreenOrientation(fullscreen: boolean, portrait: boolean): void {
   try {
-    if (fullscreen) {
-      savedOrientations = Device.supportedInterfaceOrientations
+    if (fullscreen && !portrait) {
+      if (savedOrientations === null) savedOrientations = Device.supportedInterfaceOrientations
       Device.supportedInterfaceOrientations = ["landscape"]
-    } else {
+    } else if (savedOrientations !== null) {
       Device.supportedInterfaceOrientations =
-        savedOrientations && savedOrientations.length > 0 ? savedOrientations : ["portrait"]
+        savedOrientations.length > 0 ? savedOrientations : ["portrait"]
       savedOrientations = null
     }
   } catch (error) {
     reportError("player", "fullscreen.orientation", error)
   }
+}
+
+function syncFullscreenOrientation(): void {
+  const portrait: boolean = storeState.isFullscreen && isCurrentVideoPortrait()
+  applyFullscreenOrientation(storeState.isFullscreen, portrait)
+  storeState.isPortraitFullscreen = portrait
+}
+
+export function setFullscreen(fullscreen: boolean): void {
+  if (storeState.isFullscreen === fullscreen) return
+  const portrait: boolean = fullscreen && isCurrentVideoPortrait()
+  applyFullscreenOrientation(fullscreen, portrait)
   storeState.isFullscreen = fullscreen
+  storeState.isPortraitFullscreen = portrait
   emitStore()
 }
 
