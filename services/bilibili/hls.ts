@@ -1,6 +1,7 @@
 import type { BiliDashMedia, PreparedTrack } from "./dashMpd"
+import { getBiliStreamAccess } from "./chunkSource"
 import { mediaPaths, registerMediaSession } from "../mediaServer"
-import type { MediaSession, MediaTrack } from "../mediaServer"
+import type { MediaSession, MediaStreamAccess, MediaTrack } from "../mediaServer"
 
 const VIDEO_ITAG: number = 1
 const AUDIO_ITAG: number = 2
@@ -27,6 +28,8 @@ function frameRateOf(media: BiliDashMedia): string {
 function toMediaTrack(track: PreparedTrack, itag: number): MediaTrack {
   const index = track.index
   if (!index) throw new Error("缺少 sidx，無法產生 HLS")
+  const access: MediaStreamAccess | null = getBiliStreamAccess(track.sourceId)
+  if (!access) throw new Error("缺少分塊來源，無法產生 HLS")
   const [start, end] = index.initRange.split("-").map(Number)
   return {
     itag,
@@ -35,6 +38,7 @@ function toMediaTrack(track: PreparedTrack, itag: number): MediaTrack {
     initStart: start,
     initEnd: end,
     entries: index.sidx.entries,
+    access,
   }
 }
 

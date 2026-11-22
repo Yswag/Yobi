@@ -1,5 +1,6 @@
 import { Path, fetch } from "scripting"
-import { registerBiliFileSource, registerVirtualManifest, seedBiliHead, warmBiliRange } from "../localProxy"
+import { registerVirtualManifest } from "../localProxy"
+import { registerBiliFileSource, seedBiliHead, warmBiliRange } from "./chunkSource"
 import { parseSidx, type SidxIndex } from "../sidx"
 import { reportError } from "../errors"
 import { BILI_REFERER, BILI_USER_AGENT } from "./wbi"

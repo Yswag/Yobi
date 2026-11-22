@@ -1,8 +1,16 @@
 import { createServer } from "node:net"
 import type { Server, Socket } from "node:net"
-import { getBiliStreamAccess } from "./localProxy"
-import type { BiliStreamAccess } from "./localProxy"
+import type { Prefetcher } from "./prefetch"
 import type { SidxEntry } from "./sidx"
+
+export interface MediaStreamAccess {
+  readonly id: string
+  readonly contentType: string
+  readonly windowBytes: number
+  readonly prefetcher: Prefetcher
+  total(): number | null
+  markWaiting(index: number): void
+}
 
 export interface MediaTrack {
   itag: number
@@ -11,6 +19,7 @@ export interface MediaTrack {
   initStart: number
   initEnd: number
   entries: readonly SidxEntry[]
+  access: MediaStreamAccess
 }
 
 export interface MediaSession {
@@ -19,17 +28,12 @@ export interface MediaSession {
   tracks: Map<number, MediaTrack>
 }
 
-interface Session {
-  session: MediaSession
-  access: Map<number, BiliStreamAccess>
-}
-
 const PIPELINE: number = 6
 const IDLE_TIMEOUT_MS: number = 60000
 const GRID_TRIES: number = 3
 const MAX_SESSIONS: number = 2
 
-const sessions: Map<string, Session> = new Map()
+const sessions: Map<string, MediaSession> = new Map()
 let currentSessionId: string | null = null
 let server: Server | null = null
 let serverPort: number = 0
@@ -76,7 +80,7 @@ export function lastMediaFailure(): string | null {
 
 const SLOW_GRID_MS: number = 1000
 
-async function fetchGrid(access: BiliStreamAccess, index: number): Promise<Uint8Array | null> {
+async function fetchGrid(access: MediaStreamAccess, index: number): Promise<Uint8Array | null> {
   const startedAt: number = Date.now()
   for (let attempt = 0; attempt < GRID_TRIES; attempt++) {
     access.markWaiting(index)
@@ -97,7 +101,7 @@ async function fetchGrid(access: BiliStreamAccess, index: number): Promise<Uint8
 async function streamRange(
   socket: Socket,
   track: MediaTrack,
-  access: BiliStreamAccess,
+  access: MediaStreamAccess,
   start: number,
   end: number,
   head: boolean,
@@ -192,19 +196,19 @@ function sendText(socket: Socket, body: string, contentType: string): void {
 function route(socket: Socket, method: string, path: string, rangeHeader: string | undefined): void {
   const master = /^\/media-hls\/([A-Za-z0-9_-]+)\/master\.m3u8$/.exec(path)
   if (master) {
-    const session: Session | undefined = sessions.get(master[1])
+    const session: MediaSession | undefined = sessions.get(master[1])
     if (!session) {
       socket.write(headerBlock("404 Not Found", { "Content-Length": "0" }))
       socket.end()
       return
     }
-    sendText(socket, session.session.master, "application/vnd.apple.mpegurl")
+    sendText(socket, session.master, "application/vnd.apple.mpegurl")
     return
   }
 
   const playlist = /^\/media-hls\/([A-Za-z0-9_-]+)\/(\d+)\.m3u8$/.exec(path)
   if (playlist) {
-    const body: string | undefined = sessions.get(playlist[1])?.session.media.get(Number(playlist[2]))
+    const body: string | undefined = sessions.get(playlist[1])?.media.get(Number(playlist[2]))
     if (body === undefined) {
       socket.write(headerBlock("404 Not Found", { "Content-Length": "0" }))
       socket.end()
@@ -223,22 +227,15 @@ function route(socket: Socket, method: string, path: string, rangeHeader: string
     socket.end()
     return
   }
-  const session: Session | undefined = sessions.get(match[1])
+  const session: MediaSession | undefined = sessions.get(match[1])
   const itag: number = Number(match[2])
-  const track: MediaTrack | undefined = session?.session.tracks.get(itag)
+  const track: MediaTrack | undefined = session?.tracks.get(itag)
   if (!session || !track) {
     socket.write(headerBlock("404 Not Found", { "Content-Length": "0" }))
     socket.end()
     return
   }
-  const access: BiliStreamAccess | undefined =
-    session.access.get(itag) ?? getBiliStreamAccess(track.sourceId) ?? undefined
-  if (!access) {
-    socket.write(headerBlock("404 Not Found", { "Content-Length": "0" }))
-    socket.end()
-    return
-  }
-  session.access.set(itag, access)
+  const access: MediaStreamAccess = track.access
   access.prefetcher.held = match[1] === currentSessionId
 
   if (init) {
@@ -329,7 +326,7 @@ export async function registerMediaSession(id: string, session: MediaSession): P
   const port: number = await start()
   lastFailure = null
   for (const old of sessions.values()) {
-    for (const access of old.access.values()) access.prefetcher.held = false
+    for (const track of old.tracks.values()) track.access.prefetcher.held = false
   }
   sessions.delete(id)
   while (sessions.size >= MAX_SESSIONS) {
@@ -338,19 +335,19 @@ export async function registerMediaSession(id: string, session: MediaSession): P
     unregisterMediaSession(oldestId)
   }
   currentSessionId = id
-  sessions.set(id, { session, access: new Map() })
+  sessions.set(id, session)
   return `http://127.0.0.1:${port}/media-hls/${id}/master.m3u8`
 }
 
 export function unregisterMediaSession(id: string): void {
-  for (const access of sessions.get(id)?.access.values() ?? []) access.prefetcher.held = false
+  for (const track of sessions.get(id)?.tracks.values() ?? []) track.access.prefetcher.held = false
   if (currentSessionId === id) currentSessionId = null
   sessions.delete(id)
 }
 
 export function clearMediaSessions(): void {
-  for (const entry of sessions.values()) {
-    for (const access of entry.access.values()) access.prefetcher.held = false
+  for (const session of sessions.values()) {
+    for (const track of session.tracks.values()) track.access.prefetcher.held = false
   }
   sessions.clear()
   currentSessionId = null
