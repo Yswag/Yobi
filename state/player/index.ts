@@ -61,6 +61,7 @@ export {
   openVideo,
   playNext,
   playPrevious,
+  retryPlayback,
   seekBy,
   seekTo,
   selectPage,

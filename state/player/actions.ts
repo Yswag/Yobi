@@ -60,7 +60,9 @@ import {
   applyOverlayVisibility,
   ensureAudioSession,
   getPlayerController,
+  recoverAfterResume,
   refreshPipAvailability,
+  setPlaybackErrorRecovery,
 } from "./controller"
 import {
   clearTrackCaches,
@@ -354,6 +356,7 @@ export async function togglePlayPause(): Promise<void> {
     await ensureAudioSession()
     await ctrl.play()
   } catch (err: unknown) {
+    if (recoverAfterResume(true, err)) return
     patchStore({ errorText: err instanceof Error ? err.message : "播放失敗" })
     emitStore()
   }
@@ -439,7 +442,7 @@ export function setTemporaryBoost2x(boosting: boolean): void {
   }
 }
 
-export async function selectQuality(qualityId: string): Promise<void> {
+export async function selectQuality(qualityId: string, options: { resume?: boolean } = {}): Promise<void> {
   const store = readDraftStore()
   const manifest: StreamManifest | null = store.manifest
   if (!manifest) return
@@ -449,7 +452,7 @@ export async function selectQuality(qualityId: string): Promise<void> {
     runtime.openRequestSeq !== expectedOpenSeq || runtime.streamActionSeq !== actionSeq
   const ctrl: VideoPlaybackController = getPlayerController()
   const currentPos: number = readDraftProgress().position
-  const wasPlaying: boolean = store.status === "playing" || store.status === "error"
+  const wasPlaying: boolean = options.resume ?? (store.status === "playing" || store.status === "error")
 
   const track: VideoQualityTrack | undefined = manifest.qualities.find(
     (entry: VideoQualityTrack): boolean => entry.id === qualityId,
@@ -662,6 +665,18 @@ export async function closePlayer(): Promise<void> {
   emitStore()
   resetCommentsState(false)
 }
+
+export async function retryPlayback(resume?: boolean): Promise<void> {
+  const store = readDraftStore()
+  if (!store.currentItem) return
+  if (store.manifest) {
+    await selectQuality(store.selectedQualityId, { resume })
+    return
+  }
+  await openVideo(store.currentItem, { cid: store.activeCid, page: store.activePage })
+}
+
+setPlaybackErrorRecovery(retryPlayback)
 
 export async function startPiP(): Promise<void> {
   const ctrl: VideoPlaybackController = getPlayerController()

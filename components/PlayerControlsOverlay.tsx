@@ -2,9 +2,8 @@ import { MagnifyGesture, Rectangle, ZStack, useEffect, useMemo, useRef, useState
 import type { DragGestureDetails, MagnifyGestureValue, Point, VirtualNode } from "scripting"
 import type { PlayerStoreSnapshot } from "../state/playerStore"
 import {
-  openVideo,
+  retryPlayback,
   seekBy,
-  selectQuality,
   setTemporaryBoost2x,
   usePlayerSelector,
 } from "../state/playerStore"
@@ -336,12 +335,7 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
   }
 
   function handleRetry(): void {
-    if (!store.currentItem) return
-    if (store.hasManifest) {
-      void selectQuality(store.selectedQualityId)
-      return
-    }
-    void openVideo(store.currentItem, { cid: store.activeCid, page: store.activePage })
+    void retryPlayback()
   }
 
   return (

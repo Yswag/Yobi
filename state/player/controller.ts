@@ -20,6 +20,30 @@ import { handleSponsorProgress } from "./sponsor"
 
 let controllerInstance: VideoPlaybackController | null = null
 let audioSessionReady: boolean = false
+let resumeRecoveryArmed: boolean = false
+let resumeArmedPosition: number = 0
+let resumeRecoveryInFlight: boolean = false
+let playbackErrorRecovery: ((resume: boolean) => Promise<void>) | null = null
+
+export function setPlaybackErrorRecovery(handler: (resume: boolean) => Promise<void>): void {
+  playbackErrorRecovery = handler
+}
+
+export function recoverAfterResume(resume: boolean, error: unknown): boolean {
+  if (resumeRecoveryInFlight) return true
+  if (!resumeRecoveryArmed || !playbackErrorRecovery) return false
+  resumeRecoveryArmed = false
+  resumeRecoveryInFlight = true
+  reportError("player", "resume.recover", error)
+  void playbackErrorRecovery(resume).finally((): void => {
+    resumeRecoveryInFlight = false
+  })
+  return true
+}
+
+function wantsPlayback(status: PlaybackStatus): boolean {
+  return status === "playing" || status === "buffering"
+}
 
 async function playbackCategorySupported(): Promise<boolean | null> {
   try {
@@ -109,6 +133,7 @@ export function getPlayerController(): VideoPlaybackController {
     if (runtime.seekPendingCount > 0 && store.status === "buffering" && (mapped === "paused" || mapped === "ready")) {
       return
     }
+    if (mapped === "error" && recoverAfterResume(wantsPlayback(store.status), snap.state)) return
     if (mapped === "paused" || mapped === "ended") saveCurrentHistory(true)
     if (store.status !== mapped) {
       patchStore({ status: mapped })
@@ -120,6 +145,10 @@ export function getPlayerController(): VideoPlaybackController {
     if (phase !== "background") return
     saveCurrentHistory(true)
     const store = readDraftStore()
+    if (store.currentItem) {
+      resumeRecoveryArmed = true
+      resumeArmedPosition = readDraftProgress().position
+    }
     if (store.status !== "playing" || !store.currentItem) return
     if (!store.pipAvailable) return
     void ctrl.startPictureInPicture().catch(() => {})
@@ -138,6 +167,9 @@ export function getPlayerController(): VideoPlaybackController {
     const store = readDraftStore()
     const progress = readDraftProgress()
     const pos: number = Number.isFinite(snap.position) ? snap.position : 0
+    if (resumeRecoveryArmed && snap.state === "playing" && Math.abs(pos - resumeArmedPosition) > 1) {
+      resumeRecoveryArmed = false
+    }
     const dur: number =
       typeof snap.duration === "number" && snap.duration > 0
         ? snap.duration
@@ -170,6 +202,7 @@ export function getPlayerController(): VideoPlaybackController {
 
   ctrl.on("error", (err: { message: string }) => {
     if (runtime.streamSwitchPending) return
+    if (recoverAfterResume(wantsPlayback(readDraftStore().status), err.message)) return
     patchStore({
       status: "error",
       errorText: err.message || "播放器發生錯誤",
