@@ -115,17 +115,25 @@ export function PlayerFloatingLayer(props: PlayerFloatingLayerProps): VirtualNod
       ) : null}
 
       {store.status === "error" ? (
-        <ZStack
-          frame={{ width: props.width, height: props.height }}
-          background="rgba(0,0,0,0.7)"
-        >
+        <ZStack frame={{ width: props.width, height: props.height }}>
+          <Rectangle
+            fill="rgba(0,0,0,0.7)"
+            frame={{ width: props.width, height: props.height }}
+            allowsHitTesting={false}
+          />
           <VStack spacing={14}>
-            <Image systemName="exclamationmark.triangle.fill" font={26} foregroundStyle={palette.onMediaDim} />
+            <Image
+              systemName="exclamationmark.triangle.fill"
+              font={26}
+              foregroundStyle={palette.onMediaDim}
+              allowsHitTesting={false}
+            />
             <Text
               font={type.body}
               foregroundStyle={palette.onMedia}
               multilineTextAlignment="center"
               padding={{ horizontal: 32 }}
+              allowsHitTesting={false}
             >
               {store.errorText ?? "播放發生錯誤"}
             </Text>
