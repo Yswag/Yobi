@@ -1,9 +1,11 @@
-import { ProgressView, Text, VStack, useCallback, useMemo, useRef, useState } from "scripting"
+import { VStack, useCallback, useRef, useState } from "scripting"
 import type { ScrollVisibilityChangeOptions, VirtualNode } from "scripting"
 import type { CommentItem, CommentSort } from "../types/index"
-import { ChipBar, EmptyState, PillButton } from "../ui/primitives"
-import { space, type } from "../ui/theme"
+import { ChipBar, EmptyState } from "../ui/primitives"
+import { prefetchIndexFor } from "../utils/paging"
 import { CommentThread, CommentsSkeleton } from "./comments/CommentThread"
+import { LoadMoreFooter } from "./paging/LoadMoreFooter"
+import { usePrefetchTrigger } from "./paging/usePrefetchTrigger"
 
 const SORT_OPTIONS: { key: CommentSort; label: string }[] = [
   { key: "top", label: "最熱" },
@@ -31,18 +33,7 @@ export function CommentsSheet(props: CommentsSheetProps): VirtualNode {
   expandedIdsRef.current = expandedIds
   const onLoadRepliesRef = useRef(props.onLoadReplies)
   onLoadRepliesRef.current = props.onLoadReplies
-  const onLoadMoreRef = useRef(props.onLoadMore)
-  onLoadMoreRef.current = props.onLoadMore
-
-  const prefetchObserver: ScrollVisibilityChangeOptions = useMemo(
-    () => ({
-      threshold: 0.01,
-      onChanged: (visible: boolean): void => {
-        if (visible) onLoadMoreRef.current()
-      },
-    }),
-    [],
-  )
+  const prefetchObserver: ScrollVisibilityChangeOptions = usePrefetchTrigger(props.onLoadMore)
 
   const handleToggle = useCallback((comment: CommentItem): void => {
     const willExpand: boolean = expandedIdsRef.current[comment.id] !== true
@@ -86,24 +77,16 @@ export function CommentsSheet(props: CommentsSheetProps): VirtualNode {
   }
 
   const footer: VirtualNode = (
-    <VStack
-      padding={{ horizontal: space.page, vertical: 14 }}
-      frame={{ maxWidth: "infinity" }}
-    >
-      {props.loadingMore ? (
-        <ProgressView />
-      ) : props.hasMore ? (
-        <PillButton label="載入更多留言" icon="chevron.down" onTap={props.onLoadMore} />
-      ) : (
-        <Text font={type.meta} foregroundStyle="tertiaryLabel">沒有更多留言</Text>
-      )}
-    </VStack>
+    <LoadMoreFooter
+      loading={props.loadingMore}
+      hasMore={props.hasMore}
+      label="載入更多留言"
+      endText="沒有更多留言"
+      onLoadMore={props.onLoadMore}
+    />
   )
 
-  const prefetchIndex: number =
-    props.hasMore && props.comments.length > 0
-      ? Math.max(0, props.comments.length - PREFETCH_LEAD_COUNT)
-      : -1
+  const prefetchIndex: number = prefetchIndexFor(props.comments.length, props.hasMore, PREFETCH_LEAD_COUNT)
 
   return (
     <VStack spacing={0} frame={{ maxWidth: "infinity" }}>

@@ -174,6 +174,11 @@ export interface ChannelDetail {
   nextPageToken?: string
 }
 
+export interface VideoPage {
+  videos: UnifiedVideoItem[]
+  nextPageToken?: string
+}
+
 export type SponsorCategory =
   | "sponsor"
   | "selfpromo"

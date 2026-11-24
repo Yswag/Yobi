@@ -119,6 +119,28 @@ export function lastItemToken(items: unknown[]): string | null {
   return continuationTokenOf(asObject(items[items.length - 1]))
 }
 
+export function findFeedContinuation(response: JsonObject): string | null {
+  let found: string | null = null
+
+  const visit = (node: unknown, depth: number): void => {
+    if (!node || typeof node !== "object" || depth > 30) return
+    if (Array.isArray(node)) {
+      for (const entry of node) visit(entry, depth + 1)
+      return
+    }
+    const object = node as JsonObject
+    if (object["continuationItemRenderer"]) {
+      const token: string | null = continuationTokenOf(object)
+      if (token) found = token
+      return
+    }
+    for (const key of Object.keys(object)) visit(object[key], depth + 1)
+  }
+
+  visit(response, 0)
+  return found
+}
+
 function collectTokens(node: unknown, out: string[], depth: number = 0): void {
   if (!node || typeof node !== "object" || depth > 30) return
   if (Array.isArray(node)) {

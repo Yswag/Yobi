@@ -10,6 +10,7 @@ export {
   extractSortChips,
   extractSortTokens,
   findContinuationToken,
+  findFeedContinuation,
   findPageCursor,
   lastItemToken,
   parseAboutChannel,

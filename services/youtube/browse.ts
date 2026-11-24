@@ -7,12 +7,14 @@ import type {
   CommentSort,
   UnifiedVideoItem,
   VideoDetail,
+  VideoPage,
 } from "../../types/index"
 import {
   fetchBrowseContinuation,
   fetchBrowseResponse,
   fetchNextResponse,
   fetchPlayerResponse,
+  fetchSearchContinuation,
   fetchSearchResponse,
   type JsonObject,
 } from "./innertube"
@@ -20,6 +22,7 @@ import {
   collectContinuationTokens,
   extractSortChips,
   extractVideoItems,
+  findFeedContinuation,
   findPageCursor,
   parseAboutChannel,
   parseChannelDetail,
@@ -40,6 +43,12 @@ const LIVE_VIEWERS_MAX_AGE_MS: number = 25_000
 const ABOUT_TTL: number = 10 * 60 * 1000
 const SORT_TOKEN_TTL: number = 10 * 60 * 1000
 const MAX_CHANNEL_CACHE: number = 32
+const TRENDING_FALLBACK_QUERIES: string[] = ["music", "news", "gaming"]
+
+interface TrendingCursor {
+  browse?: string
+  searches?: string[]
+}
 
 function dedupeItems(items: UnifiedVideoItem[]): UnifiedVideoItem[] {
   const seen: Set<string> = new Set()
@@ -68,42 +77,84 @@ function putBounded<T>(cache: Map<string, T>, key: string, value: T, limit: numb
   cache.set(key, value)
 }
 
-export async function searchYoutubeVideos(query: string): Promise<UnifiedVideoItem[]> {
-  const response: JsonObject = await fetchSearchResponse(query)
-  return extractVideoItems(response)
+function pageOf(videos: UnifiedVideoItem[], next: string | null): VideoPage {
+  return next ? { videos, nextPageToken: next } : { videos }
 }
 
-export async function getYoutubeTrending(): Promise<UnifiedVideoItem[]> {
+export async function searchYoutubeVideos(query: string, cursor?: string): Promise<VideoPage> {
+  const response: JsonObject = cursor
+    ? await fetchSearchContinuation(cursor)
+    : await fetchSearchResponse(query)
+  return pageOf(extractVideoItems(response), findFeedContinuation(response))
+}
+
+function encodeTrendingCursor(cursor: TrendingCursor): string {
+  return JSON.stringify(cursor)
+}
+
+function decodeTrendingCursor(raw: string): TrendingCursor {
   try {
-    const response: JsonObject = await fetchBrowseResponse("FEwhat_to_watch")
-    const items: UnifiedVideoItem[] = extractVideoItems(response)
-    if (items.length > 0) return items
+    const parsed: unknown = JSON.parse(raw)
+    const object: JsonObject | null = asObject(parsed)
+    if (typeof object?.["browse"] === "string") return { browse: object["browse"] }
+    const searches: unknown[] = asArray(object?.["searches"])
+    if (searches.length === TRENDING_FALLBACK_QUERIES.length) {
+      return { searches: searches.map((entry: unknown): string => (typeof entry === "string" ? entry : "")) }
+    }
   } catch (_error) {
   }
+  return {}
+}
 
-  const fallbackQueries: string[] = ["music", "news", "gaming"]
-  const batches: UnifiedVideoItem[][] = await Promise.all(
-    fallbackQueries.map(async (query: string): Promise<UnifiedVideoItem[]> => {
+async function trendingFromSearches(cursors: string[] | null): Promise<VideoPage> {
+  const pages: VideoPage[] = await Promise.all(
+    TRENDING_FALLBACK_QUERIES.map(async (query: string, index: number): Promise<VideoPage> => {
+      const cursor: string | undefined = cursors ? cursors[index] : undefined
+      if (cursors && !cursor) return { videos: [] }
       try {
-        return await searchYoutubeVideos(query)
+        return await searchYoutubeVideos(query, cursor)
       } catch (_error) {
-        return []
+        return cursor ? { videos: [], nextPageToken: cursor } : { videos: [] }
       }
     }),
   )
 
   const merged: UnifiedVideoItem[] = []
-  const longest: number = batches.reduce(
-    (max: number, batch: UnifiedVideoItem[]): number => Math.max(max, batch.length),
+  const longest: number = pages.reduce(
+    (max: number, page: VideoPage): number => Math.max(max, page.videos.length),
     0,
   )
   for (let i = 0; i < longest; i++) {
-    for (const batch of batches) {
-      const item: UnifiedVideoItem | undefined = batch[i]
+    for (const page of pages) {
+      const item: UnifiedVideoItem | undefined = page.videos[i]
       if (item) merged.push(item)
     }
   }
-  return dedupeItems(merged)
+
+  const nextCursors: string[] = pages.map((page: VideoPage): string => page.nextPageToken ?? "")
+  const hasNext: boolean = nextCursors.some((token: string): boolean => token.length > 0)
+  return pageOf(dedupeItems(merged), hasNext ? encodeTrendingCursor({ searches: nextCursors }) : null)
+}
+
+function trendingBrowsePage(response: JsonObject): VideoPage {
+  const next: string | null = findFeedContinuation(response)
+  return pageOf(extractVideoItems(response), next ? encodeTrendingCursor({ browse: next }) : null)
+}
+
+export async function getYoutubeTrending(cursor?: string): Promise<VideoPage> {
+  if (cursor) {
+    const state: TrendingCursor = decodeTrendingCursor(cursor)
+    if (state.browse) return trendingBrowsePage(await fetchBrowseContinuation(state.browse))
+    if (state.searches) return trendingFromSearches(state.searches)
+    return { videos: [] }
+  }
+
+  try {
+    const page: VideoPage = trendingBrowsePage(await fetchBrowseResponse("FEwhat_to_watch"))
+    if (page.videos.length > 0) return page
+  } catch (_error) {
+  }
+  return trendingFromSearches(null)
 }
 
 export async function getYoutubeSearchSuggestions(query: string): Promise<string[]> {

@@ -8,6 +8,7 @@ import type {
   StreamManifest,
   UnifiedVideoItem,
   VideoDetail,
+  VideoPage,
   YoutubeStreamPreference,
 } from "../types/index"
 import {
@@ -89,12 +90,56 @@ function interleave(groups: UnifiedVideoItem[][]): UnifiedVideoItem[] {
   return merged
 }
 
-async function safe<T>(task: Promise<T>, fallback: T): Promise<T> {
+type ProviderPager = (cursor?: string) => Promise<VideoPage>
+type CombinedCursor = Partial<Record<Provider, string>>
+
+interface ProviderPageResult {
+  provider: Provider
+  page: VideoPage
+  error: unknown
+}
+
+const FEED_PROVIDERS: Provider[] = ["yt", "bili"]
+
+function decodeCombinedCursor(raw: string): CombinedCursor {
   try {
-    return await task
+    const parsed: unknown = JSON.parse(raw)
+    if (!parsed || typeof parsed !== "object") return {}
+    const cursor: CombinedCursor = {}
+    for (const provider of FEED_PROVIDERS) {
+      const value: unknown = (parsed as Record<string, unknown>)[provider]
+      if (typeof value === "string" && value) cursor[provider] = value
+    }
+    return cursor
   } catch (_error) {
-    return fallback
+    return {}
   }
+}
+
+async function combinedPage(pagers: Record<Provider, ProviderPager>, cursor?: string): Promise<VideoPage> {
+  const state: CombinedCursor | null = cursor ? decodeCombinedCursor(cursor) : null
+  const active: Provider[] = FEED_PROVIDERS.filter((provider: Provider): boolean => !state || !!state[provider])
+  if (active.length === 0) return { videos: [] }
+
+  const results: ProviderPageResult[] = await Promise.all(
+    active.map(async (provider: Provider): Promise<ProviderPageResult> => {
+      const own: string | undefined = state?.[provider]
+      try {
+        return { provider, page: await pagers[provider](own), error: null }
+      } catch (error) {
+        return { provider, page: own ? { videos: [], nextPageToken: own } : { videos: [] }, error }
+      }
+    }),
+  )
+  const failed: ProviderPageResult | undefined = results.find((result: ProviderPageResult): boolean => result.error !== null)
+  if (failed && results.every((result: ProviderPageResult): boolean => result.error !== null)) throw failed.error
+
+  const next: CombinedCursor = {}
+  for (const result of results) {
+    if (result.page.nextPageToken) next[result.provider] = result.page.nextPageToken
+  }
+  const videos: UnifiedVideoItem[] = interleave(results.map((result: ProviderPageResult): UnifiedVideoItem[] => result.page.videos))
+  return Object.keys(next).length > 0 ? { videos, nextPageToken: JSON.stringify(next) } : { videos }
 }
 
 export function detectInputLink(input: string): DetectedInputLink | null {
@@ -112,28 +157,21 @@ export function detectInputLink(input: string): DetectedInputLink | null {
   return null
 }
 
-export async function getHomeFeed(filter: FeedFilter = "all"): Promise<UnifiedVideoItem[]> {
-  if (filter === "yt") return getYoutubeTrending()
-  if (filter === "bili") return getBiliTrending()
-
-  const results: UnifiedVideoItem[][] = await Promise.all([
-    safe<UnifiedVideoItem[]>(getYoutubeTrending(), []),
-    safe<UnifiedVideoItem[]>(getBiliTrending(), []),
-  ])
-  return interleave(results)
+export async function getHomeFeed(filter: FeedFilter = "all", cursor?: string): Promise<VideoPage> {
+  const pagers: Record<Provider, ProviderPager> = { yt: getYoutubeTrending, bili: getBiliTrending }
+  if (filter !== "all") return pagers[filter](cursor)
+  return combinedPage(pagers, cursor)
 }
 
-export async function searchVideos(query: string, filter: FeedFilter = "all"): Promise<UnifiedVideoItem[]> {
+export async function searchVideos(query: string, filter: FeedFilter = "all", cursor?: string): Promise<VideoPage> {
   const trimmed: string = (query ?? "").trim()
-  if (!trimmed) return []
-  if (filter === "yt") return searchYoutubeVideos(trimmed)
-  if (filter === "bili") return searchBiliVideos(trimmed)
-
-  const results: UnifiedVideoItem[][] = await Promise.all([
-    safe<UnifiedVideoItem[]>(searchYoutubeVideos(trimmed), []),
-    safe<UnifiedVideoItem[]>(searchBiliVideos(trimmed), []),
-  ])
-  return interleave(results)
+  if (!trimmed) return { videos: [] }
+  const pagers: Record<Provider, ProviderPager> = {
+    yt: (own?: string): Promise<VideoPage> => searchYoutubeVideos(trimmed, own),
+    bili: (own?: string): Promise<VideoPage> => searchBiliVideos(trimmed, own),
+  }
+  if (filter !== "all") return pagers[filter](cursor)
+  return combinedPage(pagers, cursor)
 }
 
 export async function getSearchSuggestions(query: string, provider: Provider = "yt"): Promise<string[]> {
@@ -199,11 +237,6 @@ export async function getChannel(
   return getYoutubeChannel(rawId, options)
 }
 
-export interface ChannelVideoPage {
-  videos: UnifiedVideoItem[]
-  nextPageToken?: string
-}
-
 export type ChannelSort = "latest" | "popular" | "oldest"
 
 export async function getChannelVideos(
@@ -211,7 +244,7 @@ export async function getChannelVideos(
   rawId: string,
   cursor: string | undefined,
   sort: ChannelSort = "latest",
-): Promise<ChannelVideoPage> {
+): Promise<VideoPage> {
   if (provider === "bili") {
     const detail: ChannelDetail = await getBiliChannel(rawId, Number.parseInt(cursor ?? "1", 10) || 1, sort)
     return detail.nextPageToken
@@ -226,7 +259,7 @@ export async function searchChannelVideos(
   rawId: string,
   query: string,
   cursor: string | undefined,
-): Promise<ChannelVideoPage> {
+): Promise<VideoPage> {
   if (provider === "bili") return searchBiliChannelVideos(rawId, query, cursor)
   return searchYoutubeChannelVideos(rawId, query, cursor)
 }

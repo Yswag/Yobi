@@ -2,6 +2,7 @@ import { useEffect, useState } from "scripting"
 import type { CommentItem, CommentPage, CommentSort, UnifiedVideoItem } from "../../types/index"
 import { getCommentPage, getCommentReplies } from "../../services/index"
 import { reportError } from "../../services/errors"
+import { appendUnique } from "../../utils/paging"
 import type { CommentsStoreSnapshot } from "./types"
 import { readDraftStore, runtime, shallowEqual } from "./store"
 
@@ -123,9 +124,7 @@ export async function loadMoreComments(): Promise<void> {
   try {
     const page: CommentPage = await getCommentPage(item.provider, item.rawId, { sort, cursor })
     if (readDraftStore().currentItem?.id !== item.id || commentsState.sort !== sort) return
-    const seen: Set<string> = new Set(commentsState.comments.map((comment: CommentItem): string => comment.id))
-    const fresh: CommentItem[] = page.comments.filter((comment: CommentItem): boolean => !seen.has(comment.id))
-    commentsState.comments = fresh.length > 0 ? [...commentsState.comments, ...fresh] : commentsState.comments
+    commentsState.comments = appendUnique(commentsState.comments, page.comments)
     commentsState.cursor = page.cursor
   } catch (error) {
     reportError("player", "comments.more", error)
@@ -151,10 +150,7 @@ export async function loadCommentReplies(commentId: string): Promise<void> {
     if (readDraftStore().currentItem?.id !== item.id) return
     commentsState.comments = commentsState.comments.map((comment: CommentItem): CommentItem => {
       if (comment.id !== commentId) return comment
-      const existing: CommentItem[] = comment.replies ?? []
-      const seen: Set<string> = new Set(existing.map((reply: CommentItem): string => reply.id))
-      const fresh: CommentItem[] = page.comments.filter((reply: CommentItem): boolean => !seen.has(reply.id))
-      return { ...comment, replies: [...existing, ...fresh], replyCursor: page.cursor }
+      return { ...comment, replies: appendUnique(comment.replies ?? [], page.comments), replyCursor: page.cursor }
     })
   } catch (error) {
     reportError("player", "comments.replies", error)

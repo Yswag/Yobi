@@ -4,6 +4,7 @@ import type {
   Provider,
   UnifiedVideoItem,
   VideoDetail,
+  VideoPage,
   VideoPagePart,
 } from "../../types/index"
 import { formatCount } from "../../utils/format"
@@ -24,7 +25,16 @@ import {
 } from "./meta"
 import { biliFetchJson, getBiliRequestHeaders } from "./wbi"
 
-export async function getBiliTrending(page: number = 1): Promise<UnifiedVideoItem[]> {
+function pageNumberOf(cursor: string | undefined): number {
+  return Number.parseInt(cursor ?? "1", 10) || 1
+}
+
+function pageOf(videos: UnifiedVideoItem[], page: number, hasNext: boolean): VideoPage {
+  return hasNext && videos.length > 0 ? { videos, nextPageToken: String(page + 1) } : { videos }
+}
+
+export async function getBiliTrending(cursor?: string): Promise<VideoPage> {
+  const page: number = pageNumberOf(cursor)
   try {
     const result: any = await biliFetchJson<any>(
       `${BILI_API}/x/web-interface/wbi/index/top/feed/rcmd`,
@@ -41,7 +51,7 @@ export async function getBiliTrending(page: number = 1): Promise<UnifiedVideoIte
     )
     if (result?.code === 0) {
       const items: UnifiedVideoItem[] = mapItems(result.data?.item)
-      if (items.length) return items
+      if (items.length) return pageOf(items, page, true)
     }
     raiseIfBanned(result, "trending.rcmd")
   } catch (error) {
@@ -52,16 +62,14 @@ export async function getBiliTrending(page: number = 1): Promise<UnifiedVideoIte
     ps: 20,
     pn: page,
   })
-  if (popular?.code === 0) return mapItems(popular.data?.list)
-  return []
+  if (popular?.code === 0) return pageOf(mapItems(popular.data?.list), page, popular.data?.no_more !== true)
+  return { videos: [] }
 }
 
-export async function searchBiliVideos(
-  keyword: string,
-  page: number = 1,
-): Promise<UnifiedVideoItem[]> {
+export async function searchBiliVideos(keyword: string, cursor?: string): Promise<VideoPage> {
   const trimmed: string = (keyword ?? "").trim()
-  if (!trimmed) return []
+  if (!trimmed) return { videos: [] }
+  const page: number = pageNumberOf(cursor)
 
   const result: any = await biliFetchJson<any>(
     `${BILI_API}/x/web-interface/wbi/search/type`,
@@ -77,9 +85,10 @@ export async function searchBiliVideos(
   )
   if (result?.code !== 0) {
     raiseIfBanned(result, "search.type")
-    return []
+    return { videos: [] }
   }
-  return mapItems(result.data?.result)
+  const pageCount: number = Number(result.data?.numPages) || 0
+  return pageOf(mapItems(result.data?.result), page, page < pageCount)
 }
 
 export async function getBiliSearchSuggestions(term: string): Promise<string[]> {
@@ -308,7 +317,7 @@ export async function getBiliChannel(
   let total: number = firstPage.total
 
   if (!videos.length && profile?.name) {
-    videos = await searchBiliVideos(profile.name, page)
+    videos = (await searchBiliVideos(profile.name, String(page))).videos
     total = 0
   }
 

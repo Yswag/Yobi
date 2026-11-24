@@ -1,17 +1,17 @@
 import {
   LazyVStack,
-  ProgressView,
   ScrollView,
   Text,
   VStack,
   useEffect,
-  useMemo,
   useRef,
   useState,
 } from "scripting"
-import type { Point, ScrollGeometry, ScrollPhase, ScrollPhaseChangeContext, ScrollVisibilityChangeOptions, VirtualNode } from "scripting"
-import type { ChannelDetail, LayoutMode, OpenChannel, Provider, UnifiedVideoItem } from "../types/index"
+import type { Point, VirtualNode } from "scripting"
+import type { ChannelDetail, LayoutMode, OpenChannel, Provider, UnifiedVideoItem, VideoPage } from "../types/index"
 import { VideoCard, VideoCardSkeleton } from "../components/VideoCard"
+import { LoadMoreFooter } from "../components/paging/LoadMoreFooter"
+import { usePagedVideos, type PagedVideos } from "../components/paging/usePagedVideos"
 import {
   ChannelBanner,
   ChannelHero,
@@ -27,7 +27,7 @@ import {
   subscribeStorageChanges,
 } from "../services/index"
 import { playVideoQueue, toggleChannelSubscription } from "../actions/index"
-import { EmptyState, PillButton } from "../ui/primitives"
+import { EmptyState } from "../ui/primitives"
 import { motion, space, type } from "../ui/theme"
 
 export interface ChannelViewProps {
@@ -39,16 +39,11 @@ export interface ChannelViewProps {
   onOpenChannel?: OpenChannel
 }
 
-const LOAD_MORE_DISTANCE: number = 600
-const DECEL_LOOKAHEAD_S: number = 0.4
-const MAX_LOOKAHEAD_PX: number = 900
-const PREFETCH_LEAD_COUNT: number = 5
 const TITLE_REVEAL_OFFSET: number = 140
 
 export function ChannelView(props: ChannelViewProps): VirtualNode {
   const [detail, setDetail] = useState<ChannelDetail | null>(null)
-  const [loading, setLoading] = useState<boolean>(true)
-  const [errorText, setErrorText] = useState<string | null>(null)
+  const detailRef = useRef<ChannelDetail | null>(null)
   const [subscribed, setSubscribed] = useState<boolean>(false)
   const [query, setQuery] = useState<string>("")
   const [sortMode, setSortMode] = useState<ChannelSortMode>("latest")
@@ -56,38 +51,53 @@ export function ChannelView(props: ChannelViewProps): VirtualNode {
   const [descriptionExpanded, setDescriptionExpanded] = useState<boolean>(false)
   const [titleVisible, setTitleVisible] = useState<boolean>(false)
   const titleShownRef = useRef<boolean>(false)
-  const [videos, setVideos] = useState<UnifiedVideoItem[]>([])
-  const [listLoading, setListLoading] = useState<boolean>(false)
-  const [nextToken, setNextToken] = useState<string | undefined>(undefined)
-  const [loadingMore, setLoadingMore] = useState<boolean>(false)
-  const loadingMoreRef = useRef<boolean>(false)
-  const requestSeq = useRef<number>(0)
+  const uploads: PagedVideos = usePagedVideos({ initialLoading: true })
+  const results: PagedVideos = usePagedVideos()
   const [searchedQuery, setSearchedQuery] = useState<string>("")
-  const [results, setResults] = useState<UnifiedVideoItem[]>([])
-  const [resultsToken, setResultsToken] = useState<string | undefined>(undefined)
-  const [resultsLoading, setResultsLoading] = useState<boolean>(false)
-  const [searchError, setSearchError] = useState<string | null>(null)
-  const searchSeq = useRef<number>(0)
 
   const subscriptionId: string = `${props.provider}:${props.channelId}`
+  const channelKeyRef = useRef<string>(subscriptionId)
+  channelKeyRef.current = subscriptionId
 
-  const load = async (): Promise<void> => {
-    const seq: number = ++requestSeq.current
-    setLoading(true)
-    setErrorText(null)
-    try {
+  const patchVideos = (incoming: UnifiedVideoItem[]): UnifiedVideoItem[] => {
+    const name: string = detailRef.current?.name || props.initialName || props.channelId
+    const avatar: string = detailRef.current?.avatarUrl || props.initialAvatar || ""
+    return incoming.map((video: UnifiedVideoItem): UnifiedVideoItem => {
+      if (video.authorName && video.authorId) return video
+      return {
+        ...video,
+        authorName: video.authorName || name,
+        authorId: video.authorId || props.channelId,
+        authorAvatar: video.authorAvatar || avatar || undefined,
+      }
+    })
+  }
+
+  const patchPage = (page: VideoPage): VideoPage => ({ ...page, videos: patchVideos(page.videos) })
+
+  const loadUploads = (mode: ChannelSortMode, withDetail: boolean, clear: boolean): Promise<void> => {
+    const key: string = subscriptionId
+    return uploads.reload(async (cursor?: string): Promise<VideoPage> => {
+      if (cursor || !withDetail) {
+        return patchPage(await getChannelVideos(props.provider, props.channelId, cursor, mode))
+      }
       const next: ChannelDetail = await getChannel(props.provider, props.channelId)
-      if (seq !== requestSeq.current) return
-      setDetail(next)
-      setVideos(next.videos)
-      setNextToken(next.nextPageToken)
-      setSortMode("latest")
-    } catch {
-      if (seq !== requestSeq.current) return
-      setDetail(null)
-      setErrorText("無法載入頻道資料，請確認網路連線後重試")
-    }
-    if (seq === requestSeq.current) setLoading(false)
+      if (key === channelKeyRef.current) {
+        detailRef.current = next
+        setDetail(next)
+      }
+      return patchPage({ videos: next.videos, nextPageToken: next.nextPageToken })
+    }, { clear })
+  }
+
+  const load = (): Promise<void> => {
+    setSortMode("latest")
+    return loadUploads("latest", true, false)
+  }
+
+  const retryUploads = (): void => {
+    if (detail) void loadUploads(sortMode, false, true)
+    else void load()
   }
 
   useEffect(() => {
@@ -103,71 +113,18 @@ export function ChannelView(props: ChannelViewProps): VirtualNode {
   const currentName: string = detail?.name || props.initialName || props.channelId
   const currentAvatar: string = detail?.avatarUrl || props.initialAvatar || ""
   const searching: boolean = searchedQuery.length > 0
-  const shownVideos: UnifiedVideoItem[] = searching ? results : videos
-  const shownToken: string | undefined = searching ? resultsToken : nextToken
+  const shown: PagedVideos = searching ? results : uploads
+  const shownVideos: UnifiedVideoItem[] = shown.items
 
-  const patchVideos = (incoming: UnifiedVideoItem[]): UnifiedVideoItem[] =>
-    incoming.map((video: UnifiedVideoItem): UnifiedVideoItem => {
-      if (video.authorName && video.authorId) return video
-      return {
-        ...video,
-        authorName: video.authorName || currentName,
-        authorId: video.authorId || props.channelId,
-        authorAvatar: video.authorAvatar || currentAvatar || undefined,
-      }
-    })
-
-  const loadMore = async (): Promise<void> => {
-    if (loadingMoreRef.current || !shownToken) return
-    loadingMoreRef.current = true
-    setLoadingMore(true)
-    try {
-      if (searching) {
-        const seq: number = searchSeq.current
-        const page = await searchChannelVideos(props.provider, props.channelId, searchedQuery, shownToken)
-        if (seq !== searchSeq.current) return
-        setResults((previous: UnifiedVideoItem[]): UnifiedVideoItem[] => [...previous, ...patchVideos(page.videos)])
-        setResultsToken(page.nextPageToken)
-        return
-      }
-      const page = await getChannelVideos(props.provider, props.channelId, shownToken, sortMode)
-      setVideos((previous: UnifiedVideoItem[]): UnifiedVideoItem[] => [
-        ...previous,
-        ...patchVideos(page.videos),
-      ])
-      setNextToken(page.nextPageToken)
-    } catch {
-    } finally {
-      loadingMoreRef.current = false
-      setLoadingMore(false)
-    }
-  }
-
-  const changeSort = async (mode: ChannelSortMode): Promise<void> => {
+  const changeSort = (mode: ChannelSortMode): void => {
     if (mode === sortMode) return
-    const seq: number = ++requestSeq.current
     setSortMode(mode)
-    setListLoading(true)
-    setVideos([])
-    setNextToken(undefined)
-    try {
-      const page = await getChannelVideos(props.provider, props.channelId, undefined, mode)
-      if (seq !== requestSeq.current) return
-      setVideos(patchVideos(page.videos))
-      setNextToken(page.nextPageToken)
-    } catch {
-    } finally {
-      if (seq === requestSeq.current) setListLoading(false)
-    }
+    void loadUploads(mode, false, true)
   }
 
   const clearSearch = (): void => {
-    searchSeq.current++
     setSearchedQuery("")
-    setResults([])
-    setResultsToken(undefined)
-    setResultsLoading(false)
-    setSearchError(null)
+    results.reset()
   }
 
   const submitSearch = async (): Promise<void> => {
@@ -176,24 +133,13 @@ export function ChannelView(props: ChannelViewProps): VirtualNode {
       clearSearch()
       return
     }
-    if (text === searchedQuery && !resultsLoading && !searchError) return
-    const seq: number = ++searchSeq.current
+    if (text === searchedQuery && !results.loading && !results.failed) return
     setSearchedQuery(text)
-    setResults([])
-    setResultsToken(undefined)
-    setSearchError(null)
-    setResultsLoading(true)
-    try {
-      const page = await searchChannelVideos(props.provider, props.channelId, text, undefined)
-      if (seq !== searchSeq.current) return
-      setResults(patchVideos(page.videos))
-      setResultsToken(page.nextPageToken)
-    } catch (error: unknown) {
-      if (seq !== searchSeq.current) return
-      setSearchError(error instanceof Error ? error.message : String(error))
-    } finally {
-      if (seq === searchSeq.current) setResultsLoading(false)
-    }
+    await results.reload(
+      async (cursor?: string): Promise<VideoPage> =>
+        patchPage(await searchChannelVideos(props.provider, props.channelId, text, cursor)),
+      { clear: true },
+    )
   }
 
   const handleQueryChange = (value: string): void => {
@@ -221,57 +167,36 @@ export function ChannelView(props: ChannelViewProps): VirtualNode {
     playVideoQueue(shownVideos)
   }
 
-  const loadMoreRef = useRef<() => void>(() => {})
-  loadMoreRef.current = (): void => {
-    void loadMore()
-  }
-
-  const prefetchObserver: ScrollVisibilityChangeOptions = useMemo(
-    () => ({
-      threshold: 0.01,
-      onChanged: (visible: boolean): void => {
-        if (visible) loadMoreRef.current()
-      },
-    }),
-    [],
-  )
-
-  const prefetchIndex: number =
-    shownToken && shownVideos.length > 0
-      ? Math.max(0, shownVideos.length - PREFETCH_LEAD_COUNT)
-      : -1
-
-  const footer: VirtualNode | null = shownToken && shownVideos.length > 0 ? (
-    <VStack padding={{ vertical: 18 }} frame={{ maxWidth: "infinity" }}>
-      {loadingMore ? (
-        <ProgressView />
-      ) : (
-        <PillButton label="載入更多影片" icon="chevron.down" onTap={() => void loadMore()} />
-      )}
-    </VStack>
+  const footer: VirtualNode | null = shown.hasMore ? (
+    <LoadMoreFooter
+      loading={shown.loadingMore}
+      hasMore
+      label="載入更多影片"
+      onLoadMore={() => void shown.loadMore()}
+    />
   ) : null
 
   let listContent: VirtualNode
-  if (searching ? resultsLoading : (loading || listLoading) && videos.length === 0) {
+  if (shown.loading && shownVideos.length === 0) {
     listContent = <VideoCardSkeleton layout={layoutMode} />
-  } else if (searching && searchError) {
+  } else if (searching && results.failed) {
     listContent = (
       <EmptyState
         icon="exclamationmark.magnifyingglass"
         title="搜尋失敗"
-        message={searchError}
+        message="請確認網路連線後重試"
         actionLabel="重試"
         onAction={() => void submitSearch()}
       />
     )
-  } else if (errorText && !searching) {
+  } else if (!searching && uploads.failed) {
     listContent = (
       <EmptyState
         icon="wifi.exclamationmark"
         title="連不上伺服器"
-        message={errorText}
+        message="無法載入頻道資料，請確認網路連線後重試"
         actionLabel="重試"
-        onAction={() => void load()}
+        onAction={retryUploads}
       />
     )
   } else if (shownVideos.length === 0) {
@@ -290,7 +215,7 @@ export function ChannelView(props: ChannelViewProps): VirtualNode {
             item={video}
             layout={layoutMode}
             progressSeconds={getSavedPosition(video.id, video.cid)}
-            scrollVisibility={index === prefetchIndex ? prefetchObserver : undefined}
+            scrollVisibility={index === shown.prefetchIndex ? shown.prefetchObserver : undefined}
             onSelect={handleSelect}
             onOpenChannel={props.onOpenChannel}
           />
@@ -317,22 +242,7 @@ export function ChannelView(props: ChannelViewProps): VirtualNode {
           setTitleVisible(shouldShow)
         },
       }}
-      onScrollPhaseChange={(
-        _old: ScrollPhase,
-        next: ScrollPhase,
-        context: ScrollPhaseChangeContext,
-      ): void => {
-        const phase: string = String(next)
-        if (phase !== "idle" && phase !== "decelerating") return
-        if (!shownToken || loadingMoreRef.current) return
-        const geometry: ScrollGeometry = context.geometry
-        const velocityY: number = phase === "decelerating" && context.velocity ? Math.max(0, context.velocity.dy) : 0
-        const lookahead: number = Math.min(velocityY * DECEL_LOOKAHEAD_S, MAX_LOOKAHEAD_PX)
-        const remaining: number =
-          geometry.contentSize.height - geometry.contentOffset.y - geometry.containerSize.height
-        if (remaining - lookahead > LOAD_MORE_DISTANCE) return
-        void loadMore()
-      }}
+      onScrollPhaseChange={shown.onScrollPhaseChange}
       toolbar={{
         principal: (
           <Text
@@ -359,7 +269,7 @@ export function ChannelView(props: ChannelViewProps): VirtualNode {
           description={detail?.description}
           descriptionExpanded={descriptionExpanded}
           onToggleDescription={() => setDescriptionExpanded(!descriptionExpanded)}
-          showDescriptionSkeleton={loading && !detail}
+          showDescriptionSkeleton={uploads.loading && !detail}
           subscribed={subscribed}
           onToggleSubscription={handleToggleSubscription}
           canPlayAll={shownVideos.length > 0}
@@ -372,7 +282,7 @@ export function ChannelView(props: ChannelViewProps): VirtualNode {
           onSearch={() => void submitSearch()}
           searching={searching}
           sortMode={sortMode}
-          onSortChange={(mode: ChannelSortMode) => void changeSort(mode)}
+          onSortChange={changeSort}
           layoutMode={layoutMode}
           onLayoutChange={setLayoutMode}
         />

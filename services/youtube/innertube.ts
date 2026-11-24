@@ -338,6 +338,10 @@ export async function fetchSearchResponse(query: string, params?: string): Promi
   return innertubePost("search", payload, { client: "WEB" })
 }
 
+export async function fetchSearchContinuation(continuation: string): Promise<JsonObject> {
+  return innertubePost("search", { continuation }, { client: "WEB" })
+}
+
 export async function fetchBrowseResponse(browseId: string, params?: string, query?: string): Promise<JsonObject> {
   const payload: JsonObject = { browseId }
   if (params) payload["params"] = params

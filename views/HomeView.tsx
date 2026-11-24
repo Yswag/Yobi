@@ -9,9 +9,11 @@ import {
   useState,
 } from "scripting"
 import type { VirtualNode } from "scripting"
-import type { LayoutMode, OpenChannel, UnifiedVideoItem, WatchHistoryEntry } from "../types/index"
+import type { LayoutMode, OpenChannel, UnifiedVideoItem, VideoPage, WatchHistoryEntry } from "../types/index"
 import { openLinkFromClipboardOrPrompt } from "../actions/index"
 import { VideoCard, VideoCardSkeleton } from "../components/VideoCard"
+import { LoadMoreFooter } from "../components/paging/LoadMoreFooter"
+import { usePagedVideos, type PagedVideos, type VideoPageLoader } from "../components/paging/usePagedVideos"
 import type { FeedFilter } from "../services/index"
 import {
   getHomeFeed,
@@ -96,27 +98,16 @@ function ContinueCard(props: { entry: WatchHistoryEntry; onSelect: () => void })
 export function HomeView(props: HomeViewProps): VirtualNode {
   const [filter, setFilter] = useState<FeedFilter>("all")
   const [layoutMode, setLayoutMode] = useState<LayoutMode>("grid")
-  const [items, setItems] = useState<UnifiedVideoItem[]>([])
-  const [loading, setLoading] = useState<boolean>(true)
-  const [errorText, setErrorText] = useState<string | null>(null)
+  const feed: PagedVideos = usePagedVideos({ initialLoading: true })
+  const items: UnifiedVideoItem[] = feed.items
+  const loading: boolean = feed.loading
+  const errorText: string | null = feed.failed ? "載入失敗，請檢查網路連線" : null
   const [continueEntries, setContinueEntries] = useState<WatchHistoryEntry[]>(() => continueEntriesOf(getWatchHistory()))
   const continueSigRef = useRef<string>(continueSignature(continueEntries))
-  const requestSeq = useRef<number>(0)
 
-  const loadFeed = async (target: FeedFilter): Promise<void> => {
-    const seq: number = ++requestSeq.current
-    setLoading(true)
-    setErrorText(null)
-    try {
-      const list: UnifiedVideoItem[] = await getHomeFeed(target)
-      if (seq !== requestSeq.current) return
-      setItems(list)
-    } catch {
-      if (seq !== requestSeq.current) return
-      setItems([])
-      setErrorText("載入失敗，請檢查網路連線")
-    }
-    if (seq === requestSeq.current) setLoading(false)
+  const loadFeed = (target: FeedFilter): Promise<void> => {
+    const loader: VideoPageLoader = (cursor?: string): Promise<VideoPage> => getHomeFeed(target, cursor)
+    return feed.reload(loader)
   }
 
   useEffect(() => {
@@ -199,12 +190,13 @@ export function HomeView(props: HomeViewProps): VirtualNode {
   } else {
     feedContent = (
       <LazyVStack spacing={layoutMode === "grid" ? space.cardGap : 4} frame={{ maxWidth: "infinity" }}>
-        {items.map((item: UnifiedVideoItem) => (
+        {items.map((item: UnifiedVideoItem, index: number) => (
           <VideoCard
             key={item.id}
             item={item}
             layout={layoutMode}
             progressSeconds={getSavedPosition(item.id, item.cid)}
+            scrollVisibility={index === feed.prefetchIndex ? feed.prefetchObserver : undefined}
             onSelect={handleSelect}
             onOpenChannel={props.onOpenChannel}
           />
@@ -213,12 +205,17 @@ export function HomeView(props: HomeViewProps): VirtualNode {
     )
   }
 
+  const footer: VirtualNode | null = feed.hasMore
+    ? <LoadMoreFooter loading={feed.loadingMore} hasMore label="載入更多影片" onLoadMore={() => void feed.loadMore()} />
+    : null
+
   return (
     <ScrollView
       axes="vertical"
       scrollIndicator="hidden"
       frame={{ maxWidth: "infinity", maxHeight: "infinity" }}
       refreshable={() => loadFeed(filter)}
+      onScrollPhaseChange={feed.onScrollPhaseChange}
     >
       <VStack spacing={space.section - 8} alignment="leading" frame={{ maxWidth: "infinity", alignment: "leading" }} padding={{ bottom: 16 }}>
         <VStack spacing={4} frame={{ maxWidth: "infinity" }}>
@@ -229,6 +226,7 @@ export function HomeView(props: HomeViewProps): VirtualNode {
         <VStack spacing={12} frame={{ maxWidth: "infinity" }}>
           {continueSection ? <SectionHeader title="熱門" /> : null}
           {feedContent}
+          {footer}
         </VStack>
       </VStack>
     </ScrollView>

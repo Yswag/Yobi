@@ -5,12 +5,13 @@ import {
   VStack,
   useEffect,
   useObservable,
-  useRef,
   useState,
 } from "scripting"
 import type { VirtualNode } from "scripting"
-import type { LayoutMode, OpenChannel, UnifiedVideoItem } from "../types/index"
+import type { LayoutMode, OpenChannel, UnifiedVideoItem, VideoPage } from "../types/index"
 import { VideoCard, VideoCardSkeleton } from "../components/VideoCard"
+import { LoadMoreFooter } from "../components/paging/LoadMoreFooter"
+import { usePagedVideos, type PagedVideos, type VideoPageLoader } from "../components/paging/usePagedVideos"
 import {
   DirectLinkCard,
   QueryRow,
@@ -49,8 +50,9 @@ export function SearchView(props: SearchViewProps): VirtualNode {
   const [query, setQuery] = useState<string>(props.initialQuery ?? "")
   const [submittedQuery, setSubmittedQuery] = useState<string>("")
   const [hasSearched, setHasSearched] = useState<boolean>(false)
-  const [results, setResults] = useState<UnifiedVideoItem[]>([])
-  const [loading, setLoading] = useState<boolean>(false)
+  const paged: PagedVideos = usePagedVideos()
+  const results: UnifiedVideoItem[] = paged.items
+  const loading: boolean = paged.loading
   const [filter, setFilter] = useState<FeedFilter>("all")
   const [sortBy, setSortBy] = useState<SearchSortBy>("default")
   const [layout, setLayout] = useState<LayoutMode>("row")
@@ -59,22 +61,10 @@ export function SearchView(props: SearchViewProps): VirtualNode {
   const [linkLoading, setLinkLoading] = useState<boolean>(false)
   const [linkError, setLinkError] = useState<string | null>(null)
   const searchPresented = useObservable<boolean>(false)
-  const searchSeqRef = useRef<number>(0)
 
-  const loadResults = async (keyword: string, nextFilter: FeedFilter): Promise<void> => {
-    const seq: number = ++searchSeqRef.current
-    setLoading(true)
-    setResults([])
-    try {
-      const found: UnifiedVideoItem[] = await searchVideos(keyword, nextFilter)
-      if (seq !== searchSeqRef.current) return
-      setResults(found)
-    } catch {
-      if (seq !== searchSeqRef.current) return
-      setResults([])
-    } finally {
-      if (seq === searchSeqRef.current) setLoading(false)
-    }
+  const loadResults = (keyword: string, nextFilter: FeedFilter): Promise<void> => {
+    const loader: VideoPageLoader = (cursor?: string): Promise<VideoPage> => searchVideos(keyword, nextFilter, cursor)
+    return paged.reload(loader, { clear: true })
   }
 
   const runSearch = (rawQuery: string): void => {
@@ -92,11 +82,9 @@ export function SearchView(props: SearchViewProps): VirtualNode {
   const resetSearch = (): void => {
     setSubmittedQuery("")
     setHasSearched(false)
-    setResults([])
+    paged.reset()
     setSuggestions([])
-    setLoading(false)
     setLinkError(null)
-    searchSeqRef.current++
   }
 
   const handleQueryChange = (value: string): void => {
@@ -199,12 +187,13 @@ export function SearchView(props: SearchViewProps): VirtualNode {
     } else {
       resultList = (
         <LazyVStack spacing={layout === "grid" ? space.cardGap : 4} frame={{ maxWidth: "infinity" }}>
-          {sortedResults.map((item: UnifiedVideoItem): VirtualNode => (
+          {sortedResults.map((item: UnifiedVideoItem, index: number): VirtualNode => (
             <VideoCard
               key={item.id}
               item={item}
               layout={layout}
               progressSeconds={getSavedPosition(item.id, item.cid)}
+              scrollVisibility={index === paged.prefetchIndex ? paged.prefetchObserver : undefined}
               onSelect={(selected: UnifiedVideoItem) => {
                 void openVideo(selected, { queue: sortedResults })
               }}
@@ -228,6 +217,9 @@ export function SearchView(props: SearchViewProps): VirtualNode {
           }
         />
         {resultList}
+        {!loading && paged.hasMore ? (
+          <LoadMoreFooter loading={paged.loadingMore} hasMore label="載入更多影片" onLoadMore={() => void paged.loadMore()} />
+        ) : null}
       </VStack>
     )
   } else if (query.trim().length > 0) {
@@ -265,6 +257,7 @@ export function SearchView(props: SearchViewProps): VirtualNode {
       scrollIndicator="hidden"
       scrollDismissesKeyboard="immediately"
       frame={{ maxWidth: "infinity", maxHeight: "infinity" }}
+      onScrollPhaseChange={paged.onScrollPhaseChange}
       navigationTitle="搜尋"
       navigationBarTitleDisplayMode="large"
       searchable={{
