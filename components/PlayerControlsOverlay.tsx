@@ -44,6 +44,7 @@ const PINCH_ZOOM_OUT_THRESHOLD: number = 0.88
 export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): VirtualNode {
   const store = usePlayerSelector((s: PlayerStoreSnapshot) => ({
     currentItem: s.currentItem,
+    liveSeekable: s.liveSeekable,
     hasManifest: s.manifest !== null,
     subtitles: s.manifest?.subtitles,
     status: s.status,
@@ -264,7 +265,7 @@ export function PlayerControlsOverlay(props: PlayerControlsOverlayProps): Virtua
     const now: number = Date.now()
     if (now < suppressTapUntilRef.current) return
     const lastTapAt: number | null = lastTapAtRef.current
-    if (lastTapAt !== null && now - lastTapAt < DOUBLE_TAP_MS && !store.currentItem?.isLive) {
+    if (lastTapAt !== null && now - lastTapAt < DOUBLE_TAP_MS && (!store.currentItem?.isLive || store.liveSeekable)) {
       lastTapAtRef.current = null
       if (loc.x < props.width * 0.42) {
         void seekBy(-10)

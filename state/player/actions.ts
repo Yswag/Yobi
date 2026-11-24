@@ -20,7 +20,8 @@ import {
 } from "../../services/index"
 import { reportError } from "../../services/errors"
 import { effectiveResolution, SPONSOR_CATEGORY_LABELS } from "../../utils/format"
-import type { OpenVideoOptions, PlaybackStatus } from "./types"
+import type { LiveWindow, OpenVideoOptions, PlaybackStatus } from "./types"
+import { clampToLiveWindow, readLiveWindow } from "./liveWindow"
 import {
   clearToastTimer,
   disposeActiveManifest,
@@ -161,6 +162,7 @@ export async function openVideo(item: UnifiedVideoItem, options: OpenVideoOption
     duration: item.duration || 0,
     bufferedUntil: 0,
     activeChapter: null,
+    liveWindow: null,
   })
   emitProgress()
 
@@ -175,6 +177,7 @@ export async function openVideo(item: UnifiedVideoItem, options: OpenVideoOption
     skippedToast: null,
     status: "loading",
     errorText: null,
+    liveSeekable: false,
     playbackRate: settings.defaultPlaybackRate || 1,
     isBoosting2x: false,
     selectedQualityId: "auto",
@@ -363,9 +366,13 @@ export async function togglePlayPause(): Promise<void> {
 }
 
 export async function seekTo(seconds: number): Promise<void> {
-  if (isLivePlayback()) return
   const ctrl: VideoPlaybackController = getPlayerController()
-  const target: number = Math.max(0, seconds)
+  let target: number = Math.max(0, seconds)
+  if (isLivePlayback()) {
+    const window: LiveWindow | null = readLiveWindow(ctrl)
+    if (window === null) return
+    target = clampToLiveWindow(window, seconds)
+  }
   const store = readDraftStore()
   const shouldShowBuffering: boolean = store.status === "playing" || store.status === "buffering"
   patchProgress({
@@ -400,9 +407,22 @@ export async function seekTo(seconds: number): Promise<void> {
   }
 }
 
+export async function returnToLive(): Promise<void> {
+  if (!isLivePlayback()) return
+  const ctrl: VideoPlaybackController = getPlayerController()
+  try {
+    const position: number = await ctrl.seekToLive()
+    if (!Number.isFinite(position)) return
+    patchProgress({ position })
+    emitProgress()
+  } catch (error) {
+    reportError("player", "seekToLive", error)
+  }
+}
+
 export async function seekBy(deltaSeconds: number): Promise<void> {
-  if (isLivePlayback()) return
   const progress = readDraftProgress()
+  if (isLivePlayback() && progress.liveWindow === null) return
   const dur: number = progress.duration
   const raw: number = progress.position + deltaSeconds
   const clamped: number = dur > 0 ? Math.min(dur, Math.max(0, raw)) : Math.max(0, raw)
@@ -541,6 +561,7 @@ export async function selectPage(pagePart: VideoPagePart): Promise<void> {
     duration: pagePart.duration || readDraftProgress().duration,
     bufferedUntil: 0,
     activeChapter: null,
+    liveWindow: null,
   })
   emitProgress()
   emitStore()
@@ -656,6 +677,7 @@ export async function closePlayer(): Promise<void> {
     presentationMode: "hidden",
     currentItem: null,
     pipAvailable: false,
+    liveSeekable: false,
     detail: null,
     manifest: null,
     activeSponsorPrompt: null,

@@ -202,7 +202,7 @@ export function PlayerControlsLayer(props: PlayerControlsLayerProps): VirtualNod
         <Spacer />
 
         <HStack spacing={landscapeFullscreen ? 44 : store.isFullscreen ? 32 : 28}>
-          {store.currentItem?.isLive ? null : (
+          {store.currentItem?.isLive && !store.liveSeekable ? null : (
             <GlassCircle icon="gobackward.10" size={44} iconSize={18} onTap={() => void seekBy(-10)} />
           )}
           {loading ? (
@@ -218,7 +218,7 @@ export function PlayerControlsLayer(props: PlayerControlsLayerProps): VirtualNod
               onTap={() => void togglePlayPause()}
             />
           )}
-          {store.currentItem?.isLive ? null : (
+          {store.currentItem?.isLive && !store.liveSeekable ? null : (
             <GlassCircle icon="goforward.10" size={44} iconSize={18} onTap={() => void seekBy(10)} />
           )}
         </HStack>

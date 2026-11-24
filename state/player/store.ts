@@ -13,6 +13,7 @@ import type {
   PlayerRootSnapshot,
   PlayerStoreSnapshot,
 } from "./types"
+import { sameLiveWindow } from "./liveWindow"
 
 const HISTORY_SAVE_INTERVAL_MS: number = 15_000
 
@@ -63,6 +64,7 @@ let storeState: PlayerStoreSnapshot = {
   isPiPActive: false,
   pipAvailable: false,
   audioUnavailable: false,
+  liveSeekable: false,
   danmakuEnabled: true,
   danmakuCount: 0,
   statsVisible: false,
@@ -76,6 +78,7 @@ let progressState: PlayerProgressSnapshot = {
   duration: 0,
   bufferedUntil: 0,
   activeChapter: null,
+  liveWindow: null,
 }
 
 let lastEmittedStore: PlayerStoreSnapshot | null = null
@@ -103,7 +106,8 @@ function sameProgress(next: PlayerProgressSnapshot, previous: PlayerProgressSnap
     Math.floor(next.position) === Math.floor(previous.position) &&
     Math.floor(next.duration) === Math.floor(previous.duration) &&
     Math.floor(next.bufferedUntil) === Math.floor(previous.bufferedUntil) &&
-    next.activeChapter === previous.activeChapter
+    next.activeChapter === previous.activeChapter &&
+    sameLiveWindow(next.liveWindow, previous.liveWindow)
   )
 }
 

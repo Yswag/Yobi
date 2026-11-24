@@ -2,11 +2,12 @@ import { AppEvents } from "scripting"
 import type { ScenePhase } from "scripting"
 import { setBiliLineSwitchListener } from "../../services/index"
 import { reportError } from "../../services/errors"
-import type { PlaybackStatus } from "./types"
+import type { LiveWindow, PlaybackStatus } from "./types"
 import {
   emitProgress,
   emitStore,
   findChapterAt,
+  isLivePlayback,
   mapControllerState,
   patchProgress,
   patchStore,
@@ -17,6 +18,7 @@ import {
   showSkippedToast,
 } from "./store"
 import { handleSponsorProgress } from "./sponsor"
+import { readLiveWindow } from "./liveWindow"
 
 let controllerInstance: VideoPlaybackController | null = null
 let audioSessionReady: boolean = false
@@ -174,14 +176,20 @@ export function getPlayerController(): VideoPlaybackController {
       typeof snap.duration === "number" && snap.duration > 0
         ? snap.duration
         : progress.duration || store.manifest?.duration || store.currentItem?.duration || 0
+    const liveWindow: LiveWindow | null = isLivePlayback() ? readLiveWindow(ctrl) : null
 
     patchProgress({
       position: pos,
       duration: dur,
       bufferedUntil: Number.isFinite(snap.bufferedUntil) ? snap.bufferedUntil : 0,
       activeChapter: findChapterAt(store.detail?.chapters, pos),
+      liveWindow,
     })
     emitProgress()
+    if (store.liveSeekable !== (liveWindow !== null)) {
+      patchStore({ liveSeekable: liveWindow !== null })
+      emitStore()
+    }
     saveCurrentHistory(false)
     handleSponsorProgress(ctrl, pos)
   })

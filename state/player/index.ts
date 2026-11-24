@@ -1,6 +1,7 @@
 export type {
   CommentsStoreSnapshot,
   LiveViewerSnapshot,
+  LiveWindow,
   OpenVideoOptions,
   PlaybackStatus,
   PlayerPresentationMode,
@@ -47,6 +48,8 @@ export {
 
 export { dismissActiveSponsorSegment } from "./sponsor"
 
+export { isAtLiveEdge } from "./liveWindow"
+
 export { expandFromMiniPlayer, getPlayerController } from "./controller"
 
 export {
@@ -62,6 +65,7 @@ export {
   playNext,
   playPrevious,
   retryPlayback,
+  returnToLive,
   seekBy,
   seekTo,
   selectPage,

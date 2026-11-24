@@ -12,9 +12,11 @@ import {
   useState,
 } from "scripting"
 import type { DragGestureDetails, VirtualNode } from "scripting"
-import type { PlayerProgressSnapshot, PlayerStoreSnapshot } from "../../state/playerStore"
+import type { LiveWindow, PlayerProgressSnapshot, PlayerStoreSnapshot } from "../../state/playerStore"
 import {
   getPlayerProgressSnapshot,
+  isAtLiveEdge,
+  returnToLive,
   seekTo,
   subscribePlayerProgress,
   toggleFullscreen,
@@ -55,15 +57,19 @@ export function ProgressBar(props: {
   }, [props.active])
   const duration: number = progress.duration || 0
   const live: boolean = barState.isLive
+  const liveWindow: LiveWindow | null = live ? progress.liveWindow : null
+  const rangeStart: number = liveWindow ? liveWindow.start : 0
+  const span: number = liveWindow ? liveWindow.end - liveWindow.start : duration
+  const displayedPosition: number = props.scrub ? props.scrub.seconds : progress.position
   const scrubWidthRef = useRef<number>(1)
   const scrubTargetRef = useRef<number | null>(null)
 
   function handleScrubChanged(d: DragGestureDetails): void {
-    if (duration <= 0) return
+    if (span <= 0) return
     const x: number = Math.max(0, Math.min(scrubWidthRef.current, d.location.x))
-    const value: number = (x / scrubWidthRef.current) * duration
+    const value: number = rangeStart + (x / scrubWidthRef.current) * span
     scrubTargetRef.current = value
-    props.onScrub({ seconds: value, duration })
+    props.onScrub({ seconds: value, duration: span, liveEdge: liveWindow ? liveWindow.end : null })
   }
 
   function handleScrubEnded(): void {
@@ -74,7 +80,7 @@ export function ProgressBar(props: {
   }
 
   function renderSponsorBlocks(fullWidth: number, blockHeight: number): VirtualNode[] {
-    if (duration <= 0) return []
+    if (live || duration <= 0) return []
     return barState.sponsorSegments.map((seg: SponsorSegment) => {
       const leftRatio: number = Math.max(0, Math.min(1, seg.startTime / duration))
       const widthRatio: number = Math.max(0, Math.min(1 - leftRatio, (seg.endTime - seg.startTime) / duration))
@@ -90,10 +96,9 @@ export function ProgressBar(props: {
   }
 
   function renderScrubber(width: number): VirtualNode | null {
-    if (duration <= 0) return null
+    if (span <= 0) return null
     scrubWidthRef.current = width
-    const value: number = props.scrub ? props.scrub.seconds : Math.min(progress.position, duration)
-    const ratio: number = Math.max(0, Math.min(1, value / duration))
+    const ratio: number = Math.max(0, Math.min(1, (displayedPosition - rangeStart) / span))
     const knob: number = props.scrub ? SCRUBBER_KNOB + 4 : SCRUBBER_KNOB
     const knobX: number = Math.max(knob / 2, Math.min(width - knob / 2, width * ratio)) - knob / 2
     return (
@@ -141,16 +146,7 @@ export function ProgressBar(props: {
         onTapGesture={props.onTapChrome}
       >
         {live ? (
-          <HStack spacing={5}>
-            <Rectangle
-              fill={palette.danger}
-              frame={{ width: 6, height: 6 }}
-              clipShape={{ type: "rect", cornerRadius: 3 }}
-            />
-            <Text font={type.caption} fontWeight="semibold" foregroundStyle={palette.onMedia}>
-              直播中
-            </Text>
-          </HStack>
+          <LiveLabel window={liveWindow} seconds={displayedPosition} />
         ) : (
           <HStack spacing={4}>
             <Text font={type.caption} monospacedDigit foregroundStyle={palette.onMedia}>
@@ -169,7 +165,7 @@ export function ProgressBar(props: {
         <Spacer />
       </HStack>
       <HStack spacing={4} frame={{ width: props.trackWidth }}>
-        {live ? <Spacer /> : renderScrubber(props.barWidth)}
+        {live && liveWindow === null ? <Spacer /> : renderScrubber(props.barWidth)}
         <Button action={() => toggleFullscreen()} buttonStyle="plain">
           <VStack frame={{ width: MIN_HIT_SIZE, height: 30 }} contentShape="rect">
             <Image
@@ -181,5 +177,42 @@ export function ProgressBar(props: {
         </Button>
       </HStack>
     </VStack>
+  )
+}
+
+function LiveLabel(props: { window: LiveWindow | null; seconds: number }): VirtualNode {
+  if (props.window === null || isAtLiveEdge(props.window, props.seconds)) {
+    return (
+      <HStack spacing={5}>
+        <Rectangle
+          fill={palette.danger}
+          frame={{ width: 6, height: 6 }}
+          clipShape={{ type: "rect", cornerRadius: 3 }}
+        />
+        <Text font={type.caption} fontWeight="semibold" foregroundStyle={palette.onMedia}>
+          直播中
+        </Text>
+      </HStack>
+    )
+  }
+  const behind: number = Math.max(0, props.window.end - props.seconds)
+  return (
+    <HStack spacing={8}>
+      <Text font={type.caption} monospacedDigit foregroundStyle={palette.onMedia}>
+        {`-${formatDuration(behind)}`}
+      </Text>
+      <Button action={() => void returnToLive()} buttonStyle="plain">
+        <HStack spacing={5} padding={{ vertical: 6 }} contentShape="rect">
+          <Rectangle
+            fill={palette.onMediaDim}
+            frame={{ width: 6, height: 6 }}
+            clipShape={{ type: "rect", cornerRadius: 3 }}
+          />
+          <Text font={type.caption} fontWeight="semibold" foregroundStyle={palette.onMedia}>
+            回到直播
+          </Text>
+        </HStack>
+      </Button>
+    </HStack>
   )
 }

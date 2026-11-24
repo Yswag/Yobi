@@ -83,14 +83,22 @@ export function PlayerFloatingLayer(props: PlayerFloatingLayerProps): VirtualNod
 
       {props.scrub ? (
         <ZStack frame={{ width: props.width, height: props.height }}>
-          <OverlayCapsule>
-            <Text font={type.cardTitle} fontWeight="semibold" monospacedDigit foregroundStyle={palette.onMedia}>
-              {formatDuration(props.scrub.seconds)}
-            </Text>
-            <Text font={type.cardTitle} monospacedDigit foregroundStyle={palette.onMediaDim}>
-              {`/ ${formatDuration(props.scrub.duration)}`}
-            </Text>
-          </OverlayCapsule>
+          {props.scrub.liveEdge !== null ? (
+            <OverlayCapsule>
+              <Text font={type.cardTitle} fontWeight="semibold" monospacedDigit foregroundStyle={palette.onMedia}>
+                {`-${formatDuration(Math.max(0, props.scrub.liveEdge - props.scrub.seconds))}`}
+              </Text>
+            </OverlayCapsule>
+          ) : (
+            <OverlayCapsule>
+              <Text font={type.cardTitle} fontWeight="semibold" monospacedDigit foregroundStyle={palette.onMedia}>
+                {formatDuration(props.scrub.seconds)}
+              </Text>
+              <Text font={type.cardTitle} monospacedDigit foregroundStyle={palette.onMediaDim}>
+                {`/ ${formatDuration(props.scrub.duration)}`}
+              </Text>
+            </OverlayCapsule>
+          )}
         </ZStack>
       ) : null}
 

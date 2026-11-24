@@ -16,6 +16,7 @@ export const PLAYBACK_RATES: number[] = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2]
 export interface ScrubPreview {
   seconds: number
   duration: number
+  liveEdge: number | null
 }
 
 export type TapSide = "left" | "right"
@@ -23,6 +24,7 @@ export type TapHint = TapSide | null
 
 export interface PlayerControlsSnapshot {
   currentItem: UnifiedVideoItem | null
+  liveSeekable: boolean
   hasManifest: boolean
   subtitles: SubtitleTrackInfo[] | undefined
   status: PlaybackStatus

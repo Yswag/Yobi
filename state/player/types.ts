@@ -43,6 +43,7 @@ export interface PlayerStoreSnapshot {
   isPiPActive: boolean
   pipAvailable: boolean
   audioUnavailable: boolean
+  liveSeekable: boolean
   danmakuEnabled: boolean
   danmakuCount: number
   statsVisible: boolean
@@ -65,11 +66,17 @@ export interface PlayerRootSnapshot {
   hasItem: boolean
 }
 
+export interface LiveWindow {
+  start: number
+  end: number
+}
+
 export interface PlayerProgressSnapshot {
   position: number
   duration: number
   bufferedUntil: number
   activeChapter: VideoChapter | null
+  liveWindow: LiveWindow | null
 }
 
 export interface LiveViewerSnapshot {
