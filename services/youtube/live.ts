@@ -4,6 +4,7 @@ import type { StreamManifest, VideoQualityTrack } from "../../types/index"
 import { parseHlsMasterText, qualityLabel, resolveUrl, type HlsVariant } from "./hls"
 import { fetchPlayerResponse, type InnertubeClientKey, type JsonObject } from "./innertube"
 import { asObject } from "./parsePrimitives"
+import { closestQuality } from "./quality"
 
 interface LiveClientProfile {
   key: InnertubeClientKey
@@ -126,7 +127,7 @@ function buildQualities(masterText: string, masterUrl: string): VideoQualityTrac
   return qualities
 }
 
-export async function resolveYoutubeLiveStream(videoId: string): Promise<StreamManifest> {
+export async function resolveYoutubeLiveStream(videoId: string, preferredHeight: number = 0): Promise<StreamManifest> {
   const candidates: LiveCandidate[] = await collectCandidates(videoId)
   if (candidates.length === 0) throw new Error("YouTube 直播沒有 HLS 串流")
 
@@ -144,13 +145,15 @@ export async function resolveYoutubeLiveStream(videoId: string): Promise<StreamM
 
   const qualities: VideoQualityTrack[] = buildQualities(masterText, masterUrl)
   if (qualities.length === 0) throw new Error("YouTube 直播清單沒有畫質")
+  const initial: VideoQualityTrack =
+    (preferredHeight > 0 ? closestQuality(qualities, preferredHeight) : undefined) ?? qualities[0]
 
   return {
     provider: "yt",
     rawId: videoId,
     delivery: "hls",
-    primaryUrl: masterUrl,
-    backend: "system",
+    primaryUrl: initial.url ?? masterUrl,
+    backend: "native",
     qualities,
     audioTracks: [],
     subtitles: [],
@@ -162,7 +165,7 @@ export async function resolveYoutubeLiveStream(videoId: string): Promise<StreamM
       const quality: VideoQualityTrack | undefined = qualities.find(
         (entry: VideoQualityTrack): boolean => entry.id === qualityId,
       )
-      return { url: quality?.url ?? masterUrl, backend: "system" }
+      return { url: quality?.url ?? masterUrl, backend: "native" }
     },
   }
 }

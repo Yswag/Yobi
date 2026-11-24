@@ -4,7 +4,7 @@ import type {
   VideoQualityTrack,
   YoutubeStreamPreference,
 } from "../../types/index"
-import { effectiveResolution } from "../../utils/format"
+import { closestQuality } from "./quality"
 import {
   fetchPlayerResponse,
   getAnonymousVisitorData,
@@ -146,21 +146,6 @@ async function loadSabrPlayer(videoId: string): Promise<SabrPlayerInfo | null> {
   return null
 }
 
-function closestQuality(qualities: VideoQualityTrack[], preferredHeight: number): VideoQualityTrack | undefined {
-  let best: VideoQualityTrack | undefined
-  let bestDelta: number = Number.MAX_SAFE_INTEGER
-  for (const quality of qualities) {
-    const resolution: number = effectiveResolution(quality.width, quality.height)
-    if (quality.delivery === "sabr" && resolution === 0) continue
-    const delta: number = Math.abs((resolution || preferredHeight) - preferredHeight)
-    if (delta < bestDelta) {
-      bestDelta = delta
-      best = quality
-    }
-  }
-  return best
-}
-
 interface ResolvedRoute {
   delivery: "hls" | "sabr"
   primaryUrl: string
@@ -279,7 +264,7 @@ export async function resolveYoutubeStream(
 ): Promise<StreamManifest> {
   if (isLive) {
     const liveMod = await import("./live")
-    return liveMod.resolveYoutubeLiveStream(videoId)
+    return liveMod.resolveYoutubeLiveStream(videoId, preferredHeight)
   }
 
   const routes: Array<(id: string) => Promise<ResolvedRoute>> =
@@ -310,7 +295,7 @@ export async function resolveYoutubeStream(
   if (!route) {
     try {
       const liveMod = await import("./live")
-      return await liveMod.resolveYoutubeLiveStream(videoId)
+      return await liveMod.resolveYoutubeLiveStream(videoId, preferredHeight)
     } catch {
       throw firstError instanceof Error ? firstError : new Error("找不到可播放的 YouTube 串流")
     }

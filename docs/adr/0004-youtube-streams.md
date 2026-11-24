@@ -43,8 +43,8 @@
 
 - 直播沒有時間軸，也不吃 VISIONOS／SABR：只有 app client 會回 `hlsManifestUrl`（實測 ANDROID 有，IOS 只有 adaptiveFormats，WEB／TVHTML5／VISIONOS 被風控擋）。依序問幾個 client，取第一個「master、媒體清單、第一段」都真的抓得到的。
 - 清單與片段直接給播放器，不經本機轉手：轉手會把媒體清單快取起來，直播的滑動窗格不會更新，播完一輪就停。
-- 後端用 system：native 對直播的 1 秒片段、3 秒窗格會一直轉圈。
-- 直播給 master，讓播放器跟著即時頻寬挑 variant；指定畫質再從選單換。
+- 後端用 native，才有子母畫面。現行直播清單每段 5 秒、窗格約 30 秒，native 正常；早期 1 秒片段、3 秒窗格的清單 native 會一直轉圈，若再出現要改回 system。
+- 直播開片給最接近偏好畫質的 variant 媒體清單，不給 master：native 拿到 master 會固定挑最低畫質、不會自己切換。換畫質從選單換。
 - 直播聊天室：起點游標在 `next` 的 `conversationBar.liveChatRenderer`，之後照 invalidation／timed continuation 追。伺服器常自己 long-poll 十幾秒，所以不照 `timeoutMs` 等：有訊息立刻接下一輪，沒訊息才短歇。前端只留最新幾則，游標照樣推進。
 
 ### 解析
@@ -57,6 +57,7 @@
 - 推薦清單在 `contents.twoColumnWatchNextResults.secondaryResults`，外層再包一層同名節點；其他版型直接掃整塊。
 - 排序 chip 依標籤挑（Latest／Popular／Oldest），不要看索引：語系與頻道會有差異。排序不是 browse params，用 chip 自己的 continuation token 當第一頁。
 - 頻道總數要從「關於」頁的 `videoCountText` 拿，header 那行會被縮寫成 `1K videos`。header 已經精確時就不必再打關於頁。
+- 直播可倒轉範圍讀 `liveSeekableRanges`（只有 system HLS 有，native 一律 null，目前直播不會出現倒轉），取結束最晚的一段、短於 30 秒視為不可倒轉；距最新 12 秒內算在最新位置，回到直播用 `seekToLive()`。
 - 直播的「正在觀看」人數在 `next` 的 `videoPrimaryInfoRenderer`；`videoDetails.viewCount` 恆為 0。一般影片也有同一個 renderer，要看 `isLive` 或文字。會員專屬影片完全沒有觀看數，`undefined` 不要畫成 0。
 - 介面語言／地區只能從頁面 `ytcfg` 讀（`responseContext` 只是回音），登入與 pageMinter 順手記下；讀不到沿用上次，再沒有才退回 en／US。
 - `n` 參數用 yt-dlp 的 ejs solver 解，沒有它 SABR 會 403。
